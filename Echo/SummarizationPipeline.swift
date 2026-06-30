@@ -110,10 +110,17 @@ actor SummarizationPipeline {
                 ["role": "system", "content": Self.systemPrompt],
                 ["role": "user", "content": Self.userPrompt(for: segments)],
             ],
-            "temperature": 0.1,
+            "temperature": 0.3,
             "top_p": 0.9,
-            "max_tokens": 4096,
+            "max_tokens": 3072,
             "stream": true,
+            // Discourage the degenerate repetition loops small models fall into
+            // (e.g. emitting the same open question forever). These penalize
+            // tokens by recurrence across the whole generation, so they work
+            // across NDJSON lines, not just within one.
+            "repeat_penalty": 1.1,
+            "frequency_penalty": 0.6,
+            "presence_penalty": 0.3,
             // Constrain generation to our NDJSON shape so a small local model
             // cannot emit malformed lines. Ignored by servers that don't support
             // it, in which case the prompt + tolerant parser still apply.
@@ -147,6 +154,8 @@ actor SummarizationPipeline {
     - Every decision, action, question, and risk line must include at least one
       evidence segment-id copied verbatim from the transcript.
     - If a claim cannot be supported by a transcript segment, omit it.
+    - List each distinct decision, action item, question, and risk only once.
+      Never repeat or rephrase the same point across multiple lines.
     - "You" means the current user; "Team" means teammates from system audio.
     """
 
@@ -275,16 +284,34 @@ actor SummarizationPipeline {
         }
     }
 
+    /// Normalize text for duplicate detection: lowercased, punctuation flattened
+    /// to spaces, whitespace collapsed. So "…English?" and "…English" collide.
+    private static func dedupKey(_ text: String) -> String {
+        let flattened = text.lowercased().unicodeScalars.map { scalar in
+            CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : " "
+        }
+        return String(flattened)
+            .split(separator: " ", omittingEmptySubsequences: true)
+            .joined(separator: " ")
+    }
+
     // MARK: - NDJSON accumulator
 
     /// Builds a `MeetingSummary` incrementally from streamed NDJSON lines.
     private struct SummaryAccumulator {
+        /// Safety net so a runaway model can't grow a section without bound.
+        private static let maxItemsPerSection = 20
+
         private var shortSummary = ""
         private var detailedSummary = ""
         private var decisions: [SummaryDecision] = []
         private var actionItems: [SummaryActionItem] = []
         private var openQuestions: [SummaryOpenQuestion] = []
         private var risks: [SummaryRisk] = []
+
+        /// Normalized "type + primary text" keys already added, so the common
+        /// small-model loop of repeating the same item is collapsed to one.
+        private var seenKeys: Set<String> = []
 
         var snapshot: MeetingSummary {
             MeetingSummary(
@@ -323,7 +350,7 @@ actor SummarizationPipeline {
                 return true
             case "decision":
                 let title = string("title", in: object)
-                guard !title.isEmpty else { return false }
+                guard !title.isEmpty, accept("decision", title, count: decisions.count) else { return false }
                 decisions.append(SummaryDecision(
                     title: title,
                     details: string("details", in: object),
@@ -332,7 +359,7 @@ actor SummarizationPipeline {
                 return true
             case "action":
                 let task = string("task", in: object)
-                guard !task.isEmpty else { return false }
+                guard !task.isEmpty, accept("action", task, count: actionItems.count) else { return false }
                 actionItems.append(SummaryActionItem(
                     task: task,
                     owner: optionalString("owner", in: object),
@@ -342,7 +369,7 @@ actor SummarizationPipeline {
                 return true
             case "question":
                 let question = string("question", in: object)
-                guard !question.isEmpty else { return false }
+                guard !question.isEmpty, accept("question", question, count: openQuestions.count) else { return false }
                 openQuestions.append(SummaryOpenQuestion(
                     question: question,
                     context: optionalString("context", in: object),
@@ -351,7 +378,7 @@ actor SummarizationPipeline {
                 return true
             case "risk":
                 let risk = string("risk", in: object)
-                guard !risk.isEmpty else { return false }
+                guard !risk.isEmpty, accept("risk", risk, count: risks.count) else { return false }
                 risks.append(SummaryRisk(
                     risk: risk,
                     details: optionalString("details", in: object),
@@ -361,6 +388,14 @@ actor SummarizationPipeline {
             default:
                 return false
             }
+        }
+
+        /// Gate a list item: reject it if the section is full or if an item with
+        /// the same normalized primary text was already added. Records the key.
+        private mutating func accept(_ type: String, _ primaryText: String, count: Int) -> Bool {
+            guard count < Self.maxItemsPerSection else { return false }
+            let key = type + "\u{1}" + SummarizationPipeline.dedupKey(primaryText)
+            return seenKeys.insert(key).inserted
         }
 
         /// Preview the in-progress prose line. Returns true if the visible text changed.
