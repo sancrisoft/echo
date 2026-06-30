@@ -34,6 +34,9 @@ final class RecordingState {
     /// Aligned transcript, ordered by `start`. Both channels merge into here.
     private(set) var segments: [TranscriptSegment] = []
 
+    /// Generated once from final transcript segments after recording stops.
+    private(set) var summaryState: SummaryState = .idle
+
     /// Best-effort live text for each channel. These rows are provisional UI only:
     /// they are replaced by finished `segments` and should not feed summaries.
     private(set) var partialSegments: [AudioChannel: TranscriptSegment] = [:]
@@ -60,6 +63,7 @@ final class RecordingState {
 
     func markStarted() {
         segments.removeAll()
+        summaryState = .idle
         partialSegments.removeAll()
         partialGenerations.removeAll()
         partialRequestIDs.removeAll()
@@ -75,6 +79,28 @@ final class RecordingState {
         partialSegments.removeAll()
         partialGenerations.removeAll()
         partialRequestIDs.removeAll()
+    }
+
+    // MARK: - Summary ingestion (called by RecordingController)
+
+    func markSummaryGenerating() {
+        summaryState = .generating
+        status = "Generating summary…"
+    }
+
+    func markSummaryReady(_ summary: MeetingSummary) {
+        summaryState = .ready(summary)
+        status = ""
+    }
+
+    func markSummaryUnavailable(_ message: String) {
+        summaryState = .unavailable(message)
+        status = ""
+    }
+
+    func markSummaryFailed(_ message: String) {
+        summaryState = .failed(message)
+        status = message
     }
 
     // MARK: - Level ingestion (called from the capture services)

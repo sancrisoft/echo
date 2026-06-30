@@ -11,6 +11,8 @@
 
 import SwiftUI
 import Observation
+import AppKit
+import UniformTypeIdentifiers
 
 @Observable
 @MainActor
@@ -21,6 +23,10 @@ final class RecordingController {
     private let mic = MicrophoneCapture()
     private let system = SystemAudioCapture()
     private let pipeline = TranscriptionPipeline()
+    private let summarizer = SummarizationPipeline()
+    private let llamaServer = LlamaServerManager()
+    private var sessionGeneration = 0
+    private(set) var gemmaModelPath: String? = LlamaServerConfig.storedModelPath
 
     var isRecording: Bool { state.isRecording }
 
@@ -46,6 +52,7 @@ final class RecordingController {
 
     func start() async {
         guard !state.isRecording else { return }
+        sessionGeneration += 1
         state.status = "Requesting permissions…"
 
         wireCallbacks()
@@ -58,15 +65,63 @@ final class RecordingController {
             state.status = ""
         } catch {
             state.status = error.localizedDescription
-            await stop()
+            await stop(summarize: false)
         }
     }
 
     func stop() async {
+        await stop(summarize: true)
+    }
+
+    func selectGemmaModel() {
+        let panel = NSOpenPanel()
+        panel.title = "Select Gemma GGUF model"
+        panel.prompt = "Select"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "gguf") ?? .data]
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        LlamaServerConfig.storeModelURL(url)
+        gemmaModelPath = url.path
+    }
+
+    func retrySummary() async {
+        guard !state.isRecording else { return }
+        await generateSummary(from: state.segments, sessionGeneration: sessionGeneration)
+    }
+
+    private func stop(summarize: Bool) async {
         mic.stop()
         system.stop()
         await pipeline.stop()
+        let transcript = state.segments
+        let generation = sessionGeneration
         state.markStopped()
+
+        guard summarize else { return }
+        await generateSummary(from: transcript, sessionGeneration: generation)
+    }
+
+    private func generateSummary(from transcript: [TranscriptSegment], sessionGeneration generation: Int) async {
+        guard !transcript.isEmpty else {
+            state.markSummaryUnavailable("No transcript was captured.")
+            return
+        }
+
+        state.markSummaryGenerating()
+
+        do {
+            let llamaConfig = try LlamaServerConfig.resolved()
+            try await llamaServer.ensureRunning(config: llamaConfig)
+            let summary = try await summarizer.generate(from: transcript)
+            guard generation == sessionGeneration, !state.isRecording else { return }
+            state.markSummaryReady(summary)
+        } catch {
+            guard generation == sessionGeneration, !state.isRecording else { return }
+            state.markSummaryFailed(error.localizedDescription)
+        }
     }
 
     // MARK: - Wiring
