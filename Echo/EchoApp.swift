@@ -7,11 +7,34 @@
 
 import SwiftUI
 
+enum EchoWindow {
+    static let dashboard = "dashboard"
+}
+
 @main
 struct EchoApp: App {
+    /// Single shared session controller for both the menu bar and the dashboard.
+    @State private var controller = RecordingController()
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        // Lives in the menu bar. Because the app is an LSUIElement agent, this
+        // keeps Echo running when the dashboard window is closed or minimized
+        // (only Force Quit terminates it).
+        MenuBarExtra {
+            MenuBarView()
+                .environment(controller)
+        } label: {
+            Image(systemName: controller.isRecording ? "waveform.circle.fill" : "waveform")
         }
+        .menuBarExtraStyle(.window)
+
+        // The dashboard opens on demand via "Abrir dashboard"; it must not open
+        // automatically at launch.
+        Window("Echo", id: EchoWindow.dashboard) {
+            DashboardView()
+                .environment(controller)
+        }
+        .defaultLaunchBehavior(.suppressed)
+        .windowResizability(.contentSize)
     }
 }
