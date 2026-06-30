@@ -2,8 +2,8 @@
 //  DashboardView.swift
 //  Echo
 //
-//  The full window opened from "Abrir dashboard". Shows the live, aligned
-//  transcript across both channels and the session controls.
+//  The full window opened from "Open dashboard" (and shown automatically when a
+//  recording stops). Two tabs: the live transcript and the (upcoming) summary.
 //
 
 import SwiftUI
@@ -11,11 +11,22 @@ import SwiftUI
 struct DashboardView: View {
     @Environment(RecordingController.self) private var controller
 
+    private enum Tab: Hashable { case transcript, summary }
+    @State private var selectedTab: Tab = .transcript
+
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            transcript
+            TabView(selection: $selectedTab) {
+                transcript
+                    .tabItem { Label("Transcript", systemImage: "text.bubble") }
+                    .tag(Tab.transcript)
+                summary
+                    .tabItem { Label("Summary", systemImage: "sparkles") }
+                    .tag(Tab.summary)
+            }
+            .padding(.top, 8)
         }
         .frame(minWidth: 520, minHeight: 420)
     }
@@ -75,6 +86,17 @@ struct DashboardView: View {
                 .padding()
             }
         }
+    }
+
+    // MARK: - Summary (placeholder — built in a later feature)
+
+    private var summary: some View {
+        ContentUnavailableView(
+            "Summary coming soon",
+            systemImage: "sparkles",
+            description: Text("A meeting summary — short and detailed overviews, decisions, action items, open questions and risks — will be generated here from the transcript.")
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

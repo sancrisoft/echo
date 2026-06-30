@@ -77,7 +77,12 @@ struct MenuBarView: View {
             )
 
             Button(role: .destructive) {
-                Task { await controller.toggle() }
+                Task {
+                    await controller.toggle()   // stop
+                    // Surface the dashboard so the user lands on the transcript.
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: EchoWindow.dashboard)
+                }
             } label: {
                 Label("Stop recording", systemImage: "stop.fill")
                     .frame(maxWidth: .infinity)
