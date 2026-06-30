@@ -104,15 +104,98 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: - Summary (placeholder — built in a later feature)
+    // MARK: - Summary
 
+    @ViewBuilder
     private var summary: some View {
-        ContentUnavailableView(
-            "Summary coming soon",
-            systemImage: "sparkles",
-            description: Text("A meeting summary — short and detailed overviews, decisions, action items, open questions and risks — will be generated here from the transcript.")
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        switch controller.state.summaryState {
+        case .idle:
+            VStack(spacing: 18) {
+                ContentUnavailableView(
+                    controller.state.isRecording ? "Summary after recording" : "No summary yet",
+                    systemImage: "sparkles",
+                    description: Text(controller.state.isRecording
+                        ? "Echo will generate this once the recording stops."
+                        : "Start and stop a recording to generate meeting notes.")
+                )
+                summaryModelControl
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        case .generating:
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Generating summary…")
+                    .font(.headline)
+                Text("Gemma is reading the final transcript locally.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        case .ready(let meetingSummary):
+            SummaryContentView(summary: meetingSummary, segments: controller.state.segments)
+
+        case .unavailable(let message):
+            ContentUnavailableView(
+                message,
+                systemImage: "text.badge.xmark",
+                description: Text("There is no final transcript to summarize.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+        case .failed(let message):
+            VStack(spacing: 18) {
+                ContentUnavailableView(
+                    "Summary failed",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(message)
+                )
+                summaryModelControl
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var summaryModelControl: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "cpu")
+                .foregroundStyle(.secondary)
+            Text(selectedGemmaModelName)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 260, alignment: .leading)
+            Button {
+                controller.selectGemmaModel()
+            } label: {
+                Label("Select model", systemImage: "folder")
+            }
+            .buttonStyle(.bordered)
+
+            if canRetrySummary {
+                Button {
+                    Task { await controller.retrySummary() }
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private var selectedGemmaModelName: String {
+        guard let path = controller.gemmaModelPath else {
+            return "No Gemma GGUF selected"
+        }
+        return URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    private var canRetrySummary: Bool {
+        !controller.state.isRecording && !controller.state.segments.isEmpty
     }
 }
 
@@ -161,5 +244,199 @@ private struct SegmentRow: View {
     private var timestamp: String {
         let total = Int(segment.start)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+private struct SummaryContentView: View {
+    let summary: MeetingSummary
+    let segments: [TranscriptSegment]
+
+    private var segmentByID: [String: TranscriptSegment] {
+        Dictionary(uniqueKeysWithValues: segments.map { ($0.id.uuidString.lowercased(), $0) })
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                SummaryTextBlock(
+                    title: "Short summary",
+                    systemImage: "text.line.first.and.arrowtriangle.forward",
+                    text: summary.shortSummary
+                )
+
+                SummaryTextBlock(
+                    title: "Detailed summary",
+                    systemImage: "doc.text",
+                    text: summary.detailedSummary
+                )
+
+                decisionsSection
+                actionItemsSection
+                openQuestionsSection
+                risksSection
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var decisionsSection: some View {
+        SummarySection(title: "Decisions", systemImage: "checkmark.seal") {
+            if summary.decisions.isEmpty {
+                EmptySummaryRow(text: "No decisions captured.")
+            } else {
+                ForEach(summary.decisions.indices, id: \.self) { index in
+                    let decision = summary.decisions[index]
+                    SummaryItemRow(
+                        title: decision.title,
+                        detail: decision.details,
+                        metadata: evidenceText(decision.evidenceSegmentIDs)
+                    )
+                }
+            }
+        }
+    }
+
+    private var actionItemsSection: some View {
+        SummarySection(title: "Action items", systemImage: "checklist") {
+            if summary.actionItems.isEmpty {
+                EmptySummaryRow(text: "No action items captured.")
+            } else {
+                ForEach(summary.actionItems.indices, id: \.self) { index in
+                    let item = summary.actionItems[index]
+                    SummaryItemRow(
+                        title: item.task,
+                        detail: actionItemDetail(item),
+                        metadata: evidenceText(item.evidenceSegmentIDs)
+                    )
+                }
+            }
+        }
+    }
+
+    private var openQuestionsSection: some View {
+        SummarySection(title: "Open questions", systemImage: "questionmark.circle") {
+            if summary.openQuestions.isEmpty {
+                EmptySummaryRow(text: "No open questions captured.")
+            } else {
+                ForEach(summary.openQuestions.indices, id: \.self) { index in
+                    let question = summary.openQuestions[index]
+                    SummaryItemRow(
+                        title: question.question,
+                        detail: question.context,
+                        metadata: evidenceText(question.evidenceSegmentIDs)
+                    )
+                }
+            }
+        }
+    }
+
+    private var risksSection: some View {
+        SummarySection(title: "Risks or blockers", systemImage: "exclamationmark.triangle") {
+            if summary.risks.isEmpty {
+                EmptySummaryRow(text: "No risks or blockers captured.")
+            } else {
+                ForEach(summary.risks.indices, id: \.self) { index in
+                    let risk = summary.risks[index]
+                    SummaryItemRow(
+                        title: risk.risk,
+                        detail: risk.details,
+                        metadata: evidenceText(risk.evidenceSegmentIDs)
+                    )
+                }
+            }
+        }
+    }
+
+    private func actionItemDetail(_ item: SummaryActionItem) -> String? {
+        var parts: [String] = []
+        if let owner = item.owner, !owner.isEmpty {
+            parts.append("Owner: \(owner)")
+        }
+        if let dueDate = item.dueDate, !dueDate.isEmpty {
+            parts.append("Due: \(dueDate)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private func evidenceText(_ ids: [String]) -> String? {
+        let times = ids
+            .compactMap { segmentByID[$0.lowercased()]?.start }
+            .map(Self.timestamp)
+        guard !times.isEmpty else { return nil }
+        return "Evidence: " + times.joined(separator: ", ")
+    }
+
+    nonisolated private static func timestamp(_ value: TimeInterval) -> String {
+        let total = Int(value)
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+private struct SummaryTextBlock: View {
+    let title: String
+    let systemImage: String
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+            Text(text.isEmpty ? "Not available." : text)
+                .font(.body)
+                .textSelection(.enabled)
+        }
+    }
+}
+
+private struct SummarySection<Content: View>: View {
+    let title: String
+    let systemImage: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+            VStack(alignment: .leading, spacing: 10) {
+                content
+            }
+        }
+    }
+}
+
+private struct SummaryItemRow: View {
+    let title: String
+    let detail: String?
+    let metadata: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.body.weight(.medium))
+                .textSelection(.enabled)
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            if let metadata {
+                Text(metadata)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.leading, 4)
+    }
+}
+
+private struct EmptySummaryRow: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.body)
+            .foregroundStyle(.secondary)
     }
 }
