@@ -50,6 +50,7 @@ actor TranscriptionPipeline {
     private var whisper: WhisperKit?
     private var loaded = false
     private var loadTask: Task<Void, Never>?
+    private static let allowedTranscriptionLanguages: Set<String> = ["en", "es"]
 
     private let decodeOptions: DecodingOptions = {
         var options = DecodingOptions()
@@ -60,7 +61,7 @@ actor TranscriptionPipeline {
         options.logProbThreshold = -0.75
         options.firstTokenLogProbThreshold = -1.2
         options.noSpeechThreshold = 0.45
-        options.detectLanguage = true   // meetings may not be in English
+        options.detectLanguage = false
         options.wordTimestamps = false
         options.skipSpecialTokens = true   // keep <|...|> tokens out of the text
         return options
@@ -299,7 +300,10 @@ actor TranscriptionPipeline {
         guard let whisper else { return }
         let results: [TranscriptionResult]
         do {
-            results = try await whisper.transcribe(audioArray: chunk, decodeOptions: decodeOptions)
+            guard let language = await restrictedLanguage(for: chunk, from: channel, using: whisper) else { return }
+            var options = decodeOptions
+            options.language = language
+            results = try await whisper.transcribe(audioArray: chunk, decodeOptions: options)
         } catch {
             Self.log.error("\(channel.rawValue, privacy: .public) transcribe failed: \(error.localizedDescription, privacy: .public)")
             return
@@ -316,6 +320,20 @@ actor TranscriptionPipeline {
                     end: offset + Double(segment.end)
                 ))
             }
+        }
+    }
+
+    private func restrictedLanguage(for audio: [Float], from channel: AudioChannel, using whisper: WhisperKit) async -> String? {
+        do {
+            let detection = try await whisper.detectLangauge(audioArray: audio)
+            guard Self.allowedTranscriptionLanguages.contains(detection.language) else {
+                Self.log.info("\(channel.rawValue, privacy: .public) skipped unsupported detected language: \(detection.language, privacy: .public)")
+                return nil
+            }
+            return detection.language
+        } catch {
+            Self.log.error("\(channel.rawValue, privacy: .public) language detection failed: \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 
