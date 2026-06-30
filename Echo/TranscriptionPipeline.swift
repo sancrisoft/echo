@@ -4,15 +4,15 @@
 //
 //  Turns the two 16 kHz mono Float streams into transcript segments:
 //    - microphone → WhisperKit → labeled as the user (`.me`)
-//    - system     → WhisperKit + SpeakerKit → labeled per diarized teammate
+//    - system     → WhisperKit → labeled as the teammates (`.teammates`)
 //
 //  Audio is buffered per channel and processed in fixed-length chunks so
-//  transcription runs incrementally during the meeting.
+//  transcription runs incrementally during the meeting. Per-speaker diarization
+//  was dropped for the PoC; the system stream is one generic "Equipo" speaker.
 //
 
 import Foundation
 import WhisperKit
-import SpeakerKit
 import os
 
 actor TranscriptionPipeline {
@@ -31,7 +31,6 @@ actor TranscriptionPipeline {
     // MARK: - Models
 
     private var whisper: WhisperKit?
-    private var speaker: SpeakerKit?
     private var loaded = false
     private var loadTask: Task<Void, Never>?
 
@@ -84,15 +83,6 @@ actor TranscriptionPipeline {
                 prewarm: false,
                 load: true,
                 download: true
-            )
-            speaker = try await SpeakerKit(
-                PyannoteConfig(
-                    modelRepo: "argmaxinc/speakerkit-coreml",
-                    download: true,
-                    load: true,
-                    verbose: false,
-                    logLevel: .error
-                )
             )
             loaded = true
             Self.log.info("Models loaded in \(started.duration(to: clock.now).description, privacy: .public)")
@@ -190,40 +180,18 @@ actor TranscriptionPipeline {
             Self.log.error("System transcribe failed: \(error.localizedDescription, privacy: .public)")
             return
         }
-
-        // Diarize the same chunk to attribute teammates.
-        // NOTE: speaker indices are per-chunk; cross-chunk identity is a known
-        // limitation to revisit (e.g. via centroid embeddings) — see TODO.
-        let diarization = try? await speaker?.diarize(audioArray: chunk)
-
         for result in results {
             for segment in result.segments {
                 guard let segmentText = cleaned(segment.text) else { continue }
-                let speakerLabel = speaker(for: segment, in: diarization)
                 await state?.append(TranscriptSegment(
                     channel: .system,
-                    speaker: speakerLabel,
+                    speaker: .teammates,
                     text: segmentText,
                     start: offset + Double(segment.start),
                     end: offset + Double(segment.end)
                 ))
             }
         }
-    }
-
-    /// Pick the diarized speaker whose interval contains the midpoint of the
-    /// transcription segment; falls back to the first teammate.
-    private func speaker(for segment: TranscriptionSegment, in diarization: DiarizationResult?) -> Speaker {
-        guard let diarization else { return .teammate(0) }
-        let midpoint = Float((segment.start + segment.end) / 2)
-        let match = diarization.segments.first { midpoint >= $0.startTime && midpoint <= $0.endTime }
-        if let id = match?.speaker.speakerId {
-            return .teammate(id)
-        }
-        if let id = match?.speaker.speakerIds.first {
-            return .teammate(id)
-        }
-        return .teammate(0)
     }
 
     private func cleaned(_ text: String) -> String? {

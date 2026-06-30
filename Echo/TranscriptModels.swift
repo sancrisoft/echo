@@ -17,16 +17,17 @@ enum AudioChannel: String, Codable, Hashable, Sendable {
     case system       // teammates (meeting output)
 }
 
-/// A speaker label. The microphone channel always resolves to `.me`.
-/// On the system channel, SpeakerKit diarization assigns stable speaker indices.
+/// A speaker label. The microphone is always the user (`.me`); everything on the
+/// system stream is attributed to a single generic `.teammates` for the PoC
+/// (per-speaker diarization was dropped — see notes).
 enum Speaker: Hashable, Codable, Sendable {
     case me
-    case teammate(Int)   // diarized speaker index on the system stream
+    case teammates
 
     var displayName: String {
         switch self {
         case .me: return "Tú"
-        case .teammate(let i): return "Participante \(i + 1)"
+        case .teammates: return "Equipo"
         }
     }
 }
