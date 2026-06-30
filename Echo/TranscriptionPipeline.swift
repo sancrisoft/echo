@@ -55,6 +55,11 @@ actor TranscriptionPipeline {
         var options = DecodingOptions()
         options.verbose = false
         options.task = .transcribe
+        options.temperatureFallbackCount = 0
+        options.compressionRatioThreshold = 2.2
+        options.logProbThreshold = -0.75
+        options.firstTokenLogProbThreshold = -1.2
+        options.noSpeechThreshold = 0.45
         options.detectLanguage = true   // meetings may not be in English
         options.wordTimestamps = false
         options.skipSpecialTokens = true   // keep <|...|> tokens out of the text
@@ -70,6 +75,36 @@ actor TranscriptionPipeline {
     private struct ChannelBuffer {
         var samples: [Float] = []
         var chunkStart: TimeInterval = 0
+    }
+
+    private struct AudioStats {
+        let rms: Float
+        let peak: Float
+        let activeRatio: Float
+        let speechWindowRatio: Float
+        let strongWindowRatio: Float
+        let noiseFloorRMS: Float
+        let dynamicRangeDB: Float
+        let crestFactor: Float
+
+        /// Conservative evidence that the chunk contains actual speech instead
+        /// of low-level residue/silence that Whisper may hallucinate over.
+        var hasClearSpeech: Bool {
+            rms >= 0.010
+                && peak >= 0.035
+                && speechWindowRatio >= 0.10
+                && crestFactor >= 2.0
+                && (dynamicRangeDB >= 4.0 || strongWindowRatio >= 0.06)
+        }
+
+        var hasTranscribableSpeech: Bool {
+            hasClearSpeech
+                || (rms >= 0.018 && peak >= 0.055 && speechWindowRatio >= 0.18)
+        }
+
+        var isMarginalSpeech: Bool {
+            !hasClearSpeech || rms < 0.014 || speechWindowRatio < 0.16
+        }
     }
 
     private var mic = ChannelBuffer()
@@ -259,7 +294,8 @@ actor TranscriptionPipeline {
     /// them, and appends the resulting segments. Shared by both channels.
     private func emit(_ channel: AudioChannel, count: Int) async {
         guard let (chunk, offset) = detachChunk(channel, count: count) else { return }
-        guard !isSilent(chunk) else { return }
+        let stats = audioStats(chunk)
+        guard shouldTranscribe(stats, from: channel) else { return }
         guard let whisper else { return }
         let results: [TranscriptionResult]
         do {
@@ -271,7 +307,7 @@ actor TranscriptionPipeline {
         let who = speaker(for: channel)
         for result in results {
             for segment in result.segments {
-                guard let segmentText = cleaned(segment.text) else { continue }
+                guard let segmentText = cleaned(segment.text, channel: channel, segment: segment, audio: stats) else { continue }
                 await state?.append(TranscriptSegment(
                     channel: channel,
                     speaker: who,
@@ -283,7 +319,12 @@ actor TranscriptionPipeline {
         }
     }
 
-    private func cleaned(_ text: String) -> String? {
+    private func cleaned(
+        _ text: String,
+        channel: AudioChannel,
+        segment: TranscriptionSegment,
+        audio: AudioStats
+    ) -> String? {
         // Strip any leftover Whisper special tokens (e.g. <|0.00|>, <|en|>).
         var value = text.replacingOccurrences(
             of: "<\\|[^|]*\\|>",
@@ -298,16 +339,164 @@ actor TranscriptionPipeline {
             "[blank_audio]", "[silence]", "[ silence ]", "(silence)",
             "[no speech]", "[music]", "(music)", "[inaudible]", "[ pause ]",
         ]
-        return nonSpeech.contains(value.lowercased()) ? nil : value
+        let lowercased = value.lowercased()
+        if nonSpeech.contains(lowercased) { return nil }
+        if isLikelyNoiseTranscription(value, channel: channel, segment: segment, audio: audio) { return nil }
+        if isLikelyWhisperBoilerplate(value, segment: segment, audio: audio) { return nil }
+
+        return value
     }
 
-    /// True when a chunk is essentially silence (≈ below −50 dBFS RMS), so we
-    /// skip transcribing it and avoid hallucinated text on muted audio.
-    private func isSilent(_ samples: [Float]) -> Bool {
-        guard !samples.isEmpty else { return true }
+    private func isLikelyNoiseTranscription(
+        _ text: String,
+        channel: AudioChannel,
+        segment: TranscriptionSegment,
+        audio: AudioStats
+    ) -> Bool {
+        let words = normalizedWords(text)
+        guard !words.isEmpty else { return true }
+
+        let lowConfidence = segment.avgLogprob < -0.70
+            || segment.compressionRatio > 2.2
+            || segment.noSpeechProb > 0.45
+        let short = words.count <= 5 || segment.duration <= 1.4
+        let veryShort = words.count <= 2 || segment.duration <= 0.8
+        let garbled = unsupportedLetterRatio(in: text) >= 0.12
+
+        if !shouldTranscribe(audio, from: channel) { return true }
+        if veryShort && (lowConfidence || audio.isMarginalSpeech) { return true }
+        if short && lowConfidence && audio.isMarginalSpeech { return true }
+        if garbled && (lowConfidence || audio.isMarginalSpeech || short) { return true }
+
+        return false
+    }
+
+    private func isLikelyWhisperBoilerplate(
+        _ text: String,
+        segment: TranscriptionSegment,
+        audio: AudioStats
+    ) -> Bool {
+        let normalized = normalizedWords(text).joined(separator: " ")
+        guard !normalized.isEmpty else { return true }
+
+        let commonHallucinations: Set<String> = [
+            "i know", "you know", "thank you", "thank you very much",
+            "thanks", "thanks you", "thanks for watching", "thank you for watching",
+            "ok", "okay", "yeah", "yes", "right", "all right",
+            "bye", "bye bye", "goodbye", "hello", "hi",
+            "from below", "but im not", "but i m not", "im not sure", "i m not sure",
+            "happy birthday", "gracias",
+            "you", "so", "um", "uh", "mhm", "mm hmm", "uh huh",
+        ]
+
+        guard commonHallucinations.contains(normalized) else { return false }
+
+        let short = segment.duration <= 1.6 || normalizedWords(text).count <= 4
+        let lowConfidence = segment.avgLogprob < -0.55 || segment.compressionRatio > 2.2
+        return short && (!audio.hasClearSpeech || lowConfidence)
+    }
+
+    private func normalizedWords(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    private func audioStats(_ samples: [Float]) -> AudioStats {
+        guard !samples.isEmpty else {
+            return AudioStats(
+                rms: 0,
+                peak: 0,
+                activeRatio: 0,
+                speechWindowRatio: 0,
+                strongWindowRatio: 0,
+                noiseFloorRMS: 0,
+                dynamicRangeDB: 0,
+                crestFactor: 0
+            )
+        }
+
         var sumSquares: Float = 0
-        for sample in samples { sumSquares += sample * sample }
-        let rms = (sumSquares / Float(samples.count)).squareRoot()
-        return rms < 0.003
+        var peak: Float = 0
+        for sample in samples {
+            sumSquares += sample * sample
+            peak = max(peak, abs(sample))
+        }
+
+        var windowRMS: [Float] = []
+        var activeWindows = 0
+        var totalWindows = 0
+        var start = 0
+        while start + probeSamples <= samples.count {
+            totalWindows += 1
+            let window = rms(samples, from: start, count: probeSamples)
+            windowRMS.append(window)
+            if window >= pauseRMS {
+                activeWindows += 1
+            }
+            start += probeSamples
+        }
+
+        let noiseFloor = percentile(windowRMS, fraction: 0.20)
+        let loudFloor = percentile(windowRMS, fraction: 0.90)
+        let speechThreshold = max(pauseRMS, noiseFloor * 2.4, 0.012)
+        let strongThreshold = max(noiseFloor * 3.2, 0.020)
+        let speechWindows = windowRMS.filter { $0 >= speechThreshold }.count
+        let strongWindows = windowRMS.filter { $0 >= strongThreshold }.count
+        let activeRatio = totalWindows > 0 ? Float(activeWindows) / Float(totalWindows) : 0
+        let speechRatio = totalWindows > 0 ? Float(speechWindows) / Float(totalWindows) : 0
+        let strongRatio = totalWindows > 0 ? Float(strongWindows) / Float(totalWindows) : 0
+        let dynamicRange = 20 * log10(max(loudFloor, 0.000_001) / max(noiseFloor, 0.000_001))
+        let totalRMS = (sumSquares / Float(samples.count)).squareRoot()
+        return AudioStats(
+            rms: totalRMS,
+            peak: peak,
+            activeRatio: activeRatio,
+            speechWindowRatio: speechRatio,
+            strongWindowRatio: strongRatio,
+            noiseFloorRMS: noiseFloor,
+            dynamicRangeDB: dynamicRange,
+            crestFactor: peak / max(totalRMS, 0.000_001)
+        )
+    }
+
+    /// True only when the audio has enough speech-like structure to be worth
+    /// sending to Whisper. This is intentionally stricter than a silence check:
+    /// high ambient noise can be loud, but it should not become transcript text.
+    private func shouldTranscribe(_ stats: AudioStats, from channel: AudioChannel) -> Bool {
+        if stats.rms < 0.004 || stats.peak < 0.020 { return false }
+
+        switch channel {
+        case .microphone:
+            return stats.hasTranscribableSpeech
+        case .system:
+            return stats.hasTranscribableSpeech
+                || (stats.rms >= 0.008 && stats.peak >= 0.030 && stats.speechWindowRatio >= 0.08)
+        }
+    }
+
+    private func percentile(_ values: [Float], fraction: Double) -> Float {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let clamped = min(max(fraction, 0), 1)
+        let index = Int((Double(sorted.count - 1) * clamped).rounded())
+        return sorted[index]
+    }
+
+    private func unsupportedLetterRatio(in text: String) -> Double {
+        let allowedLetters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZáéíóúüñÁÉÍÓÚÜÑ")
+        var totalLetters = 0
+        var unsupportedLetters = 0
+
+        for scalar in text.unicodeScalars {
+            guard CharacterSet.letters.contains(scalar) else { continue }
+            totalLetters += 1
+            if !allowedLetters.contains(scalar) {
+                unsupportedLetters += 1
+            }
+        }
+
+        guard totalLetters > 0 else { return 0 }
+        return Double(unsupportedLetters) / Double(totalLetters)
     }
 }
