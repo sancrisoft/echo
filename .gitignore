@@ -22,3 +22,6 @@ DerivedData/
 
 # Accidentally generated
 *.swp
+
+# local models
+.local-models
