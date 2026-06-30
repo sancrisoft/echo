@@ -6,9 +6,10 @@
 //    - microphone → WhisperKit → labeled as the user (`.me`)
 //    - system     → WhisperKit → labeled as the teammates (`.teammates`)
 //
-//  Audio is buffered per channel and processed in fixed-length chunks so
-//  transcription runs incrementally during the meeting. Per-speaker diarization
-//  was dropped for the PoC; the system stream is one generic "Team" speaker.
+//  Audio is buffered per channel and cut at natural pauses (energy-based VAD
+//  endpointing) so chunks land *between* words instead of slicing through one.
+//  Per-speaker diarization was dropped for the PoC; the system stream is one
+//  generic "Team" speaker.
 //
 
 import Foundation
@@ -21,12 +22,25 @@ actor TranscriptionPipeline {
 
     // MARK: - Tuning
 
-    /// Process audio in ~5 s windows so transcript text appears quickly. (Whisper
-    /// handles up to 30 s per window; shorter windows trade a little context for
-    /// much lower latency.)
-    private let chunkSamples = Int(AudioConstants.sampleRate) * 5
-    /// Don't bother transcribing slivers shorter than this.
-    private let minSamples = Int(AudioConstants.sampleRate) * 1
+    /// Don't cut (or transcribe) anything shorter than this — keeps chunks from
+    /// becoming a stream of one-word slivers when there are lots of short pauses.
+    private let minSamples = Int(AudioConstants.sampleRate * 1)
+    /// Hard cap: if someone talks nonstop, force a cut at the quietest point
+    /// within the last few seconds rather than waiting forever. Whisper tops out
+    /// around 30 s/window; 12 s keeps latency reasonable while leaving margin.
+    private let maxSamples = Int(AudioConstants.sampleRate * 12)
+
+    // VAD endpointing — what counts as "the speaker stopped".
+
+    /// Analysis window for the energy probe (~30 ms).
+    private let probeSamples = Int(AudioConstants.sampleRate * 0.03)
+    /// A window quieter than this (RMS) is treated as non-speech. Above the
+    /// `isSilent` floor so room tone / breaths still register as a pause.
+    private let pauseRMS: Float = 0.01
+    /// A trailing run of silence this long marks the end of an utterance, so we
+    /// cut here. 0.5 s clears normal between-word gaps (<200 ms) but catches
+    /// clause/sentence boundaries.
+    private let endpointSilence = Int(AudioConstants.sampleRate * 0.5)
 
     // MARK: - Models
 
@@ -51,10 +65,53 @@ actor TranscriptionPipeline {
 
     private weak var state: RecordingState?
 
-    private var micBuffer: [Float] = []
-    private var systemBuffer: [Float] = []
-    private var micChunkStart: TimeInterval = 0
-    private var systemChunkStart: TimeInterval = 0
+    /// Per-channel pending audio plus the recording-relative time of its first
+    /// sample, so emitted segments keep absolute timestamps as we drain it.
+    private struct ChannelBuffer {
+        var samples: [Float] = []
+        var chunkStart: TimeInterval = 0
+    }
+
+    private var mic = ChannelBuffer()
+    private var system = ChannelBuffer()
+
+    private func speaker(for channel: AudioChannel) -> Speaker {
+        channel == .microphone ? .me : .teammates
+    }
+
+    private func pendingSamples(_ channel: AudioChannel) -> [Float] {
+        switch channel {
+        case .microphone: return mic.samples
+        case .system: return system.samples
+        }
+    }
+
+    private func append(_ frames: [Float], to channel: AudioChannel) {
+        switch channel {
+        case .microphone: mic.samples.append(contentsOf: frames)
+        case .system: system.samples.append(contentsOf: frames)
+        }
+    }
+
+    /// Synchronously pulls the leading `count` samples off a channel buffer and
+    /// advances its clock. No `await` runs between the read and the mutation, so
+    /// reentrant `ingest` calls can't observe a torn buffer.
+    private func detachChunk(_ channel: AudioChannel, count: Int) -> (chunk: [Float], offset: TimeInterval)? {
+        switch channel {
+        case .microphone: return Self.detach(&mic, count)
+        case .system: return Self.detach(&system, count)
+        }
+    }
+
+    private static func detach(_ buffer: inout ChannelBuffer, _ count: Int) -> (chunk: [Float], offset: TimeInterval)? {
+        let n = min(count, buffer.samples.count)
+        guard n > 0 else { return nil }
+        let chunk = Array(buffer.samples.prefix(n))
+        buffer.samples.removeFirst(n)
+        let offset = buffer.chunkStart
+        buffer.chunkStart += Double(n) / AudioConstants.sampleRate
+        return (chunk, offset)
+    }
 
     // MARK: - Lifecycle
 
@@ -114,96 +171,110 @@ actor TranscriptionPipeline {
     /// Resets per-session state and ensures the models are loaded.
     func start(appendingTo state: RecordingState) async {
         self.state = state
-        micBuffer.removeAll(keepingCapacity: true)
-        systemBuffer.removeAll(keepingCapacity: true)
-        micChunkStart = 0
-        systemChunkStart = 0
+        mic = ChannelBuffer()
+        system = ChannelBuffer()
 
         if !loaded { await preload(updating: state) }
     }
 
     /// Flush whatever is left in both buffers at the end of the session.
     func stop() async {
-        await flushMic(force: true)
-        await flushSystem(force: true)
+        await emit(.microphone, count: mic.samples.count)
+        await emit(.system, count: system.samples.count)
     }
 
     // MARK: - Ingestion
 
     func ingest(_ frames: [Float], from channel: AudioChannel) async {
         guard loaded else { return }   // drop audio until the models are ready
-        switch channel {
-        case .microphone:
-            micBuffer.append(contentsOf: frames)
-            if micBuffer.count >= chunkSamples { await flushMic(force: false) }
-        case .system:
-            systemBuffer.append(contentsOf: frames)
-            if systemBuffer.count >= chunkSamples { await flushSystem(force: false) }
+        append(frames, to: channel)
+        // Emit every chunk whose boundary is currently exposed (a long pause may
+        // free several at once after a backlog).
+        while let cut = cutPoint(pendingSamples(channel)) {
+            await emit(channel, count: cut)
         }
     }
 
-    // MARK: - Microphone (user)
+    // MARK: - VAD endpointing
 
-    private func flushMic(force: Bool) async {
-        guard micBuffer.count >= (force ? 1 : chunkSamples), micBuffer.count >= minSamples else {
-            if force { micBuffer.removeAll(keepingCapacity: true) }
-            return
-        }
-        let chunk = micBuffer
-        micBuffer.removeAll(keepingCapacity: true)
-        let offset = micChunkStart
-        micChunkStart += Double(chunk.count) / AudioConstants.sampleRate
+    /// Decides where (if anywhere) the pending buffer should be cut right now.
+    /// Returns the number of leading samples to emit, or `nil` to keep buffering.
+    private func cutPoint(_ samples: [Float]) -> Int? {
+        guard samples.count >= minSamples else { return nil }
 
-        guard !isSilent(chunk) else { return }
-        guard let whisper else { return }
-        let results: [TranscriptionResult]
-        do {
-            results = try await whisper.transcribe(audioArray: chunk, decodeOptions: decodeOptions)
-        } catch {
-            Self.log.error("Mic transcribe failed: \(error.localizedDescription, privacy: .public)")
-            return
+        // Natural endpoint: the speaker paused. Cut at the end of the buffer so
+        // the whole utterance (plus its trailing silence) goes out together.
+        if trailingSilence(samples) >= endpointSilence { return samples.count }
+
+        // Nonstop talking: force a cut at the quietest window we can find near
+        // the end, which is the least-bad place to split mid-speech.
+        if samples.count >= maxSamples { return quietestCut(samples) }
+
+        return nil
+    }
+
+    /// Length, in samples, of the uninterrupted low-energy run at the buffer's end.
+    private func trailingSilence(_ samples: [Float]) -> Int {
+        var silent = 0
+        var end = samples.count
+        while end - probeSamples >= 0 {
+            if rms(samples, from: end - probeSamples, count: probeSamples) >= pauseRMS { break }
+            silent += probeSamples
+            end -= probeSamples
         }
-        for result in results {
-            for segment in result.segments {
-                guard let segmentText = cleaned(segment.text) else { continue }
-                await state?.append(TranscriptSegment(
-                    channel: .microphone,
-                    speaker: .me,
-                    text: segmentText,
-                    start: offset + Double(segment.start),
-                    end: offset + Double(segment.end)
-                ))
+        return silent
+    }
+
+    /// Index of the quietest probe window in the last few seconds — used as the
+    /// fallback cut when there's no real pause. Never cuts below `minSamples`.
+    private func quietestCut(_ samples: [Float]) -> Int {
+        let searchSpan = Int(AudioConstants.sampleRate * 4)
+        let lo = max(minSamples, samples.count - searchSpan)
+        let hi = samples.count - probeSamples
+        guard hi > lo else { return samples.count }
+
+        var bestRMS = Float.greatestFiniteMagnitude
+        var bestCut = samples.count
+        var i = lo
+        while i <= hi {
+            let value = rms(samples, from: i, count: probeSamples)
+            if value < bestRMS {
+                bestRMS = value
+                bestCut = i + probeSamples / 2   // cut through the middle of the gap
             }
+            i += probeSamples
         }
+        return bestCut
     }
 
-    // MARK: - System (teammates)
+    private func rms(_ samples: [Float], from start: Int, count: Int) -> Float {
+        var sumSquares: Float = 0
+        for i in start..<(start + count) { sumSquares += samples[i] * samples[i] }
+        return (sumSquares / Float(count)).squareRoot()
+    }
 
-    private func flushSystem(force: Bool) async {
-        guard systemBuffer.count >= (force ? 1 : chunkSamples), systemBuffer.count >= minSamples else {
-            if force { systemBuffer.removeAll(keepingCapacity: true) }
-            return
-        }
-        let chunk = systemBuffer
-        systemBuffer.removeAll(keepingCapacity: true)
-        let offset = systemChunkStart
-        systemChunkStart += Double(chunk.count) / AudioConstants.sampleRate
+    // MARK: - Transcription
 
+    /// Pulls the leading `count` samples off the channel buffer, transcribes
+    /// them, and appends the resulting segments. Shared by both channels.
+    private func emit(_ channel: AudioChannel, count: Int) async {
+        guard let (chunk, offset) = detachChunk(channel, count: count) else { return }
         guard !isSilent(chunk) else { return }
         guard let whisper else { return }
         let results: [TranscriptionResult]
         do {
             results = try await whisper.transcribe(audioArray: chunk, decodeOptions: decodeOptions)
         } catch {
-            Self.log.error("System transcribe failed: \(error.localizedDescription, privacy: .public)")
+            Self.log.error("\(channel.rawValue, privacy: .public) transcribe failed: \(error.localizedDescription, privacy: .public)")
             return
         }
+        let who = speaker(for: channel)
         for result in results {
             for segment in result.segments {
                 guard let segmentText = cleaned(segment.text) else { continue }
                 await state?.append(TranscriptSegment(
-                    channel: .system,
-                    speaker: .teammates,
+                    channel: channel,
+                    speaker: who,
                     text: segmentText,
                     start: offset + Double(segment.start),
                     end: offset + Double(segment.end)
