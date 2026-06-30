@@ -134,6 +134,9 @@ struct DashboardView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+        case .streaming(let meetingSummary):
+            SummaryContentView(summary: meetingSummary, segments: controller.state.segments, isStreaming: true)
+
         case .ready(let meetingSummary):
             SummaryContentView(summary: meetingSummary, segments: controller.state.segments)
 
@@ -250,6 +253,7 @@ private struct SegmentRow: View {
 private struct SummaryContentView: View {
     let summary: MeetingSummary
     let segments: [TranscriptSegment]
+    var isStreaming: Bool = false
 
     private var segmentByID: [String: TranscriptSegment] {
         Dictionary(uniqueKeysWithValues: segments.map { ($0.id.uuidString.lowercased(), $0) })
@@ -258,22 +262,38 @@ private struct SummaryContentView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                SummaryTextBlock(
-                    title: "Short summary",
-                    systemImage: "text.line.first.and.arrowtriangle.forward",
-                    text: summary.shortSummary
-                )
+                if isStreaming {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Generating summary…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
-                SummaryTextBlock(
-                    title: "Detailed summary",
-                    systemImage: "doc.text",
-                    text: summary.detailedSummary
-                )
+                // While streaming, only reveal blocks once they have content so
+                // the layout fills in instead of flashing placeholders.
+                if !isStreaming || !summary.shortSummary.isEmpty {
+                    SummaryTextBlock(
+                        title: "Short summary",
+                        systemImage: "text.line.first.and.arrowtriangle.forward",
+                        text: summary.shortSummary
+                    )
+                }
 
-                decisionsSection
-                actionItemsSection
-                openQuestionsSection
-                risksSection
+                if !isStreaming || !summary.detailedSummary.isEmpty {
+                    SummaryTextBlock(
+                        title: "Detailed summary",
+                        systemImage: "doc.text",
+                        text: summary.detailedSummary
+                    )
+                }
+
+                if !isStreaming || !summary.decisions.isEmpty { decisionsSection }
+                if !isStreaming || !summary.actionItems.isEmpty { actionItemsSection }
+                if !isStreaming || !summary.openQuestions.isEmpty { openQuestionsSection }
+                if !isStreaming || !summary.risks.isEmpty { risksSection }
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
