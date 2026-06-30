@@ -58,13 +58,13 @@ struct ChannelMeter: View {
 #Preview {
     VStack(spacing: 16) {
         ChannelMeter(
-            title: "Tú · micrófono",
+            title: "You · microphone",
             systemImage: "mic.fill",
             levels: (0..<28).map { _ in CGFloat.random(in: 0.05...1) },
             color: .blue
         )
         ChannelMeter(
-            title: "Equipo · sistema",
+            title: "Team · system",
             systemImage: "speaker.wave.2.fill",
             levels: (0..<28).map { _ in CGFloat.random(in: 0.05...1) },
             color: .purple

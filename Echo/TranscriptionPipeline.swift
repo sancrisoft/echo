@@ -8,7 +8,7 @@
 //
 //  Audio is buffered per channel and processed in fixed-length chunks so
 //  transcription runs incrementally during the meeting. Per-speaker diarization
-//  was dropped for the PoC; the system stream is one generic "Equipo" speaker.
+//  was dropped for the PoC; the system stream is one generic "Team" speaker.
 //
 
 import Foundation
@@ -72,7 +72,7 @@ actor TranscriptionPipeline {
     }
 
     private func performLoad() async {
-        await state?.updateStatus("Cargando modelos…")
+        await state?.updateStatus("Loading models…")
         let clock = ContinuousClock()
         let started = clock.now
         do {
@@ -89,7 +89,7 @@ actor TranscriptionPipeline {
             await state?.updateStatus("")
         } catch {
             Self.log.error("Model load failed: \(error.localizedDescription, privacy: .public)")
-            await state?.updateStatus("No se pudieron cargar los modelos: \(error.localizedDescription)")
+            await state?.updateStatus("Couldn't load models: \(error.localizedDescription)")
         }
     }
 

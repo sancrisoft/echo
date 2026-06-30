@@ -46,7 +46,7 @@ final class RecordingController {
 
     func start() async {
         guard !state.isRecording else { return }
-        state.status = "Pidiendo permisos…"
+        state.status = "Requesting permissions…"
 
         wireCallbacks()
         state.markStarted()

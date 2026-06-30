@@ -26,8 +26,8 @@ enum Speaker: Hashable, Codable, Sendable {
 
     var displayName: String {
         switch self {
-        case .me: return "Tú"
-        case .teammates: return "Equipo"
+        case .me: return "You"
+        case .teammates: return "Team"
         }
     }
 }

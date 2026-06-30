@@ -42,13 +42,13 @@ final class SystemAudioCapture: AudioCaptureSource {
         var errorDescription: String? {
             switch self {
             case .tapCreationFailed:
-                return "No se pudo capturar el audio del sistema."
+                return "Couldn't capture system audio."
             case .tapFormatUnavailable:
-                return "No se pudo leer el formato del audio del sistema."
+                return "Couldn't read the system audio format."
             case .aggregateCreationFailed:
-                return "No se pudo crear el dispositivo de captura del sistema."
+                return "Couldn't create the system audio capture device."
             case .ioProcFailed:
-                return "No se pudo iniciar la captura del audio del sistema."
+                return "Couldn't start system audio capture."
             }
         }
     }

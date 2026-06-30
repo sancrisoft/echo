@@ -27,8 +27,8 @@ final class MicrophoneCapture: AudioCaptureSource {
 
         var errorDescription: String? {
             switch self {
-            case .permissionDenied: return "Permiso de micrófono denegado."
-            case .resamplerUnavailable: return "No se pudo configurar el audio del micrófono."
+            case .permissionDenied: return "Microphone permission denied."
+            case .resamplerUnavailable: return "Couldn't set up microphone audio."
             }
         }
     }

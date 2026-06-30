@@ -6,6 +6,6 @@
 	     allowlist. Xcode uses this file as the base and merges the generated
 	     keys (mic usage, LSUIElement, bundle version, …) on top. -->
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Echo graba el audio del sistema para transcribir lo que dicen los demás participantes.</string>
+	<string>Echo records system audio to transcribe what other meeting participants say.</string>
 </dict>
 </plist>

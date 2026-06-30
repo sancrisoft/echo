@@ -271,7 +271,7 @@
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Echo usa el micrófono para transcribir tu voz durante la reunión.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Echo uses the microphone to transcribe your voice during the meeting.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -306,7 +306,7 @@
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Echo usa el micrófono para transcribir tu voz durante la reunión.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Echo uses the microphone to transcribe your voice during the meeting.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

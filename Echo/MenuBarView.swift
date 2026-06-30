@@ -64,13 +64,13 @@ struct MenuBarView: View {
     private var recordingBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             ChannelMeter(
-                title: "Tú · micrófono",
+                title: "You · microphone",
                 systemImage: "mic.fill",
                 levels: controller.state.inputLevels,
                 color: .blue
             )
             ChannelMeter(
-                title: "Equipo · sistema",
+                title: "Team · system",
                 systemImage: "speaker.wave.2.fill",
                 levels: controller.state.outputLevels,
                 color: .purple
@@ -79,7 +79,7 @@ struct MenuBarView: View {
             Button(role: .destructive) {
                 Task { await controller.toggle() }
             } label: {
-                Label("Detener grabación", systemImage: "stop.fill")
+                Label("Stop recording", systemImage: "stop.fill")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)
@@ -92,14 +92,14 @@ struct MenuBarView: View {
 
     private var idleBody: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(controller.state.status.isEmpty ? "Listo para grabar tu reunión." : controller.state.status)
+            Text(controller.state.status.isEmpty ? "Ready to record your meeting." : controller.state.status)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
             Button {
                 Task { await controller.toggle() }
             } label: {
-                Label("Empezar a grabar", systemImage: "record.circle")
+                Label("Start recording", systemImage: "record.circle")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)
@@ -116,7 +116,7 @@ struct MenuBarView: View {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: EchoWindow.dashboard)
             } label: {
-                Label("Abrir dashboard", systemImage: "rectangle.on.rectangle")
+                Label("Open dashboard", systemImage: "rectangle.on.rectangle")
             }
             .buttonStyle(.bordered)
         }

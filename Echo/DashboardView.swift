@@ -32,7 +32,7 @@ struct DashboardView: View {
             Spacer()
 
             if controller.state.isRecording {
-                Label("Grabando", systemImage: "circle.fill")
+                Label("Recording", systemImage: "circle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
                     .labelStyle(.titleAndIcon)
@@ -42,7 +42,7 @@ struct DashboardView: View {
                 Task { await controller.toggle() }
             } label: {
                 Label(
-                    controller.state.isRecording ? "Detener" : "Empezar a grabar",
+                    controller.state.isRecording ? "Stop" : "Start recording",
                     systemImage: controller.state.isRecording ? "stop.fill" : "record.circle"
                 )
             }
@@ -58,11 +58,11 @@ struct DashboardView: View {
     private var transcript: some View {
         if controller.state.segments.isEmpty {
             ContentUnavailableView(
-                controller.state.isRecording ? "Escuchando…" : "Sin transcripción todavía",
+                controller.state.isRecording ? "Listening…" : "No transcript yet",
                 systemImage: "text.bubble",
                 description: Text(controller.state.isRecording
-                    ? "El texto aparecerá aquí a medida que se hable."
-                    : "Empieza a grabar para generar la transcripción.")
+                    ? "Text will appear here as people speak."
+                    : "Start recording to generate the transcript.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {

@@ -34,7 +34,7 @@ final class RecordingState {
     /// Aligned transcript, ordered by `start`. Both channels merge into here.
     private(set) var segments: [TranscriptSegment] = []
 
-    /// Short human-readable status for the popover (e.g. "Pidiendo permisos…").
+    /// Short human-readable status for the popover (e.g. "Requesting permissions…").
     var status: String = ""
 
     func updateStatus(_ text: String) { status = text }
