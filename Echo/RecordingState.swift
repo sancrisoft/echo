@@ -88,6 +88,10 @@ final class RecordingState {
         status = "Generating summary…"
     }
 
+    func markSummaryStreaming(_ summary: MeetingSummary) {
+        summaryState = .streaming(summary)
+    }
+
     func markSummaryReady(_ summary: MeetingSummary) {
         summaryState = .ready(summary)
         status = ""

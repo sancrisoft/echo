@@ -115,9 +115,21 @@ final class RecordingController {
         do {
             let llamaConfig = try LlamaServerConfig.resolved()
             try await llamaServer.ensureRunning(config: llamaConfig)
-            let summary = try await summarizer.generate(from: transcript)
+
+            var latest: MeetingSummary?
+            let stream = await summarizer.generate(from: transcript)
+            for try await partial in stream {
+                guard generation == sessionGeneration, !state.isRecording else { return }
+                latest = partial
+                state.markSummaryStreaming(partial)
+            }
+
             guard generation == sessionGeneration, !state.isRecording else { return }
-            state.markSummaryReady(summary)
+            if let latest {
+                state.markSummaryReady(latest)
+            } else {
+                state.markSummaryUnavailable("Gemma returned an empty summary.")
+            }
         } catch {
             guard generation == sessionGeneration, !state.isRecording else { return }
             state.markSummaryFailed(error.localizedDescription)
