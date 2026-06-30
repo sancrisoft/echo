@@ -30,6 +30,9 @@ actor TranscriptionPipeline {
 
     // MARK: - Models
 
+    /// WhisperKit model variant (quantized large-v3 — good accuracy/size balance).
+    private let modelVariant = "large-v3-v20240930_626MB"
+
     private var whisper: WhisperKit?
     private var loaded = false
     private var loadTask: Task<Void, Never>?
@@ -72,12 +75,27 @@ actor TranscriptionPipeline {
     }
 
     private func performLoad() async {
-        await state?.updateStatus("Loading models…")
         let clock = ContinuousClock()
         let started = clock.now
+        let stateRef = state
         do {
+            // 1. Download the model with progress (first run only — cached after,
+            //    so this returns almost immediately on later launches).
+            await state?.updateStatus("Downloading model…")
+            let folder = try await WhisperKit.download(
+                variant: modelVariant,
+                useBackgroundSession: false
+            ) { progress in
+                Task { @MainActor in
+                    stateRef?.updateStatus("Downloading model… \(Int(progress.fractionCompleted * 100))%")
+                }
+            }
+
+            // 2. Compile + load from the local folder (no model re-download;
+            //    download:true only lets the tokenizer resolve if needed).
+            await state?.updateStatus("Loading model…")
             whisper = try await WhisperKit(
-                model: "large-v3-v20240930_626MB",
+                modelFolder: folder.path,
                 verbose: false,
                 logLevel: .error,
                 prewarm: false,
@@ -85,11 +103,11 @@ actor TranscriptionPipeline {
                 download: true
             )
             loaded = true
-            Self.log.info("Models loaded in \(started.duration(to: clock.now).description, privacy: .public)")
+            Self.log.info("Model loaded in \(started.duration(to: clock.now).description, privacy: .public)")
             await state?.updateStatus("")
         } catch {
             Self.log.error("Model load failed: \(error.localizedDescription, privacy: .public)")
-            await state?.updateStatus("Couldn't load models: \(error.localizedDescription)")
+            await state?.updateStatus("Couldn't load model: \(error.localizedDescription)")
         }
     }
 
