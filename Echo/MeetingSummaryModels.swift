@@ -10,6 +10,7 @@ import Foundation
 enum SummaryState: Hashable, Sendable {
     case idle
     case generating
+    case streaming(MeetingSummary)
     case ready(MeetingSummary)
     case unavailable(String)
     case failed(String)

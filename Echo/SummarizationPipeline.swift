@@ -3,7 +3,8 @@
 //  Echo
 //
 //  Generates a grounded meeting summary from final transcript segments only.
-//  The local LLM is expected to be served by llama.cpp's OpenAI-compatible API.
+//  The local LLM is served by llama.cpp's OpenAI-compatible API and streamed
+//  back as NDJSON (one JSON object per line) so the UI can fill in progressively.
 //
 
 import Foundation
@@ -17,18 +18,39 @@ actor SummarizationPipeline {
     private let model = "echo-gemma-summary"
     private let timeout: TimeInterval = 600
 
-    func generate(from segments: [TranscriptSegment]) async throws -> MeetingSummary {
+    /// Streams progressively-more-complete summaries as the model emits NDJSON
+    /// lines. Each element is a snapshot of everything parsed so far; the final
+    /// element is the complete summary. Throws on transport/protocol failures.
+    func generate(from segments: [TranscriptSegment]) -> AsyncThrowingStream<MeetingSummary, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await self.run(from: segments, into: continuation)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func run(
+        from segments: [TranscriptSegment],
+        into continuation: AsyncThrowingStream<MeetingSummary, Error>.Continuation
+    ) async throws {
         guard !segments.isEmpty else { throw SummarizationError.emptyTranscript }
 
         var request = URLRequest(url: endpoint, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.httpBody = try chatRequestBody(for: segments)
 
-        let data: Data
+        let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (data, response) = try await URLSession.shared.data(for: request)
+            (bytes, response) = try await URLSession.shared.bytes(for: request)
         } catch {
             throw SummarizationError.requestFailed(error.localizedDescription)
         }
@@ -38,25 +60,48 @@ actor SummarizationPipeline {
         }
 
         guard 200..<300 ~= http.statusCode else {
-            let body = String(data: data, encoding: .utf8) ?? "No response body"
+            var body = ""
+            for try await line in bytes.lines {
+                body += line
+                if body.count > 2000 { break }
+            }
             Self.log.error("Summary request failed: HTTP \(http.statusCode, privacy: .public) \(body, privacy: .public)")
             throw SummarizationError.serverRejected(status: http.statusCode, body: body)
         }
 
-        do {
-            let content = try Self.modelContent(from: data)
-            guard !content.isEmpty else {
-                throw SummarizationError.emptyModelResponse
+        var accumulator = SummaryAccumulator()
+        var buffer = ""
+
+        for try await rawLine in bytes.lines {
+            try Task.checkCancellation()
+            guard let payload = Self.ssePayload(rawLine) else { continue }
+            if payload == "[DONE]" { break }
+            guard let delta = Self.deltaContent(payload), !delta.isEmpty else { continue }
+
+            buffer += delta
+
+            var changed = false
+            while let newline = buffer.firstIndex(of: "\n") {
+                let line = String(buffer[buffer.startIndex..<newline])
+                buffer.removeSubrange(buffer.startIndex...newline)
+                if accumulator.applyLine(line) { changed = true }
             }
-            return try Self.decodeSummary(from: content)
-        } catch let error as SummarizationError {
-            throw error
-        } catch {
-            let body = String(data: data, encoding: .utf8) ?? "Unreadable response"
-            Self.log.error("Could not decode summary response: \(error.localizedDescription, privacy: .public) \(body, privacy: .public)")
-            throw SummarizationError.invalidModelJSON
+            // Preview the in-progress prose line (short/detailed) char-by-char.
+            if accumulator.applyPartialProse(buffer) { changed = true }
+
+            if changed { continuation.yield(accumulator.snapshot) }
         }
+
+        // The grammar terminates every entry with a newline, but flush a trailing
+        // object just in case the stream ends without one.
+        let tail = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty { _ = accumulator.applyLine(tail) }
+
+        guard accumulator.hasContent else { throw SummarizationError.emptyModelResponse }
+        continuation.yield(accumulator.snapshot)
     }
+
+    // MARK: - Request
 
     private func chatRequestBody(for segments: [TranscriptSegment]) throws -> Data {
         let payload: [String: Any] = [
@@ -68,8 +113,11 @@ actor SummarizationPipeline {
             "temperature": 0.1,
             "top_p": 0.9,
             "max_tokens": 4096,
-            "stream": false,
-            "response_format": ["type": "json_object"],
+            "stream": true,
+            // Constrain generation to our NDJSON shape so a small local model
+            // cannot emit malformed lines. Ignored by servers that don't support
+            // it, in which case the prompt + tolerant parser still apply.
+            "grammar": Self.grammar,
         ]
         return try JSONSerialization.data(withJSONObject: payload)
     }
@@ -78,57 +126,37 @@ actor SummarizationPipeline {
     You summarize meeting transcripts for a local-first macOS app.
     Use only the transcript provided by the user.
     Do not invent decisions, action item owners, due dates, risks, or blockers.
-    If an owner or due date is unclear, return null for that field.
+    If an owner or due date is unclear, use null.
     Do not infer calendar dates from relative wording.
     Keep the summary in the dominant language of the transcript.
-    Return only valid JSON. Do not wrap it in Markdown.
+
+    Output format: NDJSON. Emit ONE JSON object per line and nothing else —
+    no prose, no Markdown, no code fences. Each line is one complete JSON object.
+
+    Allowed line shapes:
+    {"type":"short","text":"one or two sentences"}
+    {"type":"detailed","text":"a thorough paragraph"}
+    {"type":"decision","title":"...","details":"...","evidence":["segment-id"]}
+    {"type":"action","task":"...","owner":"... or null","due":"... or null","evidence":["segment-id"]}
+    {"type":"question","question":"...","context":"... or null","evidence":["segment-id"]}
+    {"type":"risk","risk":"...","details":"... or null","evidence":["segment-id"]}
+
+    Rules:
+    - Emit exactly one "short" line, then one "detailed" line, first.
+    - Then emit zero or more decision, action, question, and risk lines.
+    - Every decision, action, question, and risk line must include at least one
+      evidence segment-id copied verbatim from the transcript.
+    - If a claim cannot be supported by a transcript segment, omit it.
+    - "You" means the current user; "Team" means teammates from system audio.
     """
 
     private static func userPrompt(for segments: [TranscriptSegment]) -> String {
         """
-        Create a grounded meeting summary from this final transcript.
+        Summarize this final meeting transcript as NDJSON.
 
-        Required JSON shape:
-        {
-          "shortSummary": "string",
-          "detailedSummary": "string",
-          "decisions": [
-            {
-              "title": "string",
-              "details": "string",
-              "evidenceSegmentIDs": ["segment-id"]
-            }
-          ],
-          "actionItems": [
-            {
-              "task": "string",
-              "owner": "string or null",
-              "dueDate": "string or null",
-              "evidenceSegmentIDs": ["segment-id"]
-            }
-          ],
-          "openQuestions": [
-            {
-              "question": "string",
-              "context": "string or null",
-              "evidenceSegmentIDs": ["segment-id"]
-            }
-          ],
-          "risks": [
-            {
-              "risk": "string",
-              "details": "string or null",
-              "evidenceSegmentIDs": ["segment-id"]
-            }
-          ]
-        }
-
-        Rules:
-        - Include all six top-level keys.
-        - Use empty arrays when there are no decisions, action items, open questions, or risks.
-        - Every decision, action item, open question, and risk must include evidenceSegmentIDs from the transcript.
-        - If a claim cannot be supported by a transcript segment, omit it.
-        - Preserve speaker roles: You means the current user; Team means teammates from system audio.
+        Each transcript line is formatted as:
+        [start-end][speaker][channel][id=SEGMENT_ID]: text
+        Copy the SEGMENT_ID values into "evidence".
 
         Transcript:
         \(transcriptText(from: segments))
@@ -164,95 +192,64 @@ actor SummarizationPipeline {
         return String(format: "%d:%02d", minutes, seconds)
     }
 
-    private static func modelContent(from data: Data) throws -> String {
+    // MARK: - SSE parsing
+
+    /// Returns the payload of an SSE `data:` line, or nil for other lines.
+    private static func ssePayload(_ line: String) -> String? {
+        guard line.hasPrefix("data:") else { return nil }
+        return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Extracts `choices[0].delta.content` from one streamed chunk.
+    private static func deltaContent(_ payload: String) -> String? {
         guard
-            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let data = payload.data(using: .utf8),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let choices = object["choices"] as? [[String: Any]],
             let first = choices.first,
-            let message = first["message"] as? [String: Any],
-            let content = message["content"] as? String
+            let delta = first["delta"] as? [String: Any],
+            let content = delta["content"] as? String
         else {
-            throw SummarizationError.invalidResponse
+            return nil
         }
         return content
     }
 
-    private static func decodeSummary(from content: String) throws -> MeetingSummary {
-        let candidates = [
-            content,
-            strippedMarkdownFence(content),
-            firstJSONObject(in: content),
-        ].compactMap { $0 }
+    /// Best-effort decode of the in-progress prose line so short/detailed text
+    /// can grow on screen before the line is terminated. Returns nil for line
+    /// types whose partial content we don't preview (lists) or unparseable heads.
+    private static func partialProse(_ fragment: String) -> (type: String, text: String)? {
+        guard let typeMarker = fragment.range(of: "\"type\":\"") else { return nil }
+        let afterType = fragment[typeMarker.upperBound...]
+        guard let typeEnd = afterType.firstIndex(of: "\"") else { return nil }
+        let type = String(afterType[..<typeEnd])
+        guard type == "short" || type == "detailed" else { return nil }
 
-        for candidate in candidates {
-            guard let data = candidate.data(using: .utf8) else { continue }
-            if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                return MeetingSummary(
-                    shortSummary: string("shortSummary", in: object),
-                    detailedSummary: string("detailedSummary", in: object),
-                    decisions: decisions(from: object["decisions"]),
-                    actionItems: actionItems(from: object["actionItems"]),
-                    openQuestions: openQuestions(from: object["openQuestions"]),
-                    risks: risks(from: object["risks"])
-                )
+        guard let textMarker = fragment.range(of: "\"text\":\"") else { return nil }
+
+        var text = ""
+        var escaped = false
+        for character in fragment[textMarker.upperBound...] {
+            if escaped {
+                switch character {
+                case "n": text.append("\n")
+                case "t": text.append("\t")
+                case "r": text.append("\r")
+                default: text.append(character)
+                }
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "\"" {
+                break // unescaped quote → end of the value
+            } else {
+                text.append(character)
             }
         }
-
-        throw SummarizationError.invalidModelJSON
+        return (type, text)
     }
 
-    private static func decisions(from value: Any?) -> [SummaryDecision] {
-        objects(from: value).compactMap { object in
-            let title = string("title", in: object)
-            guard !title.isEmpty else { return nil }
-            return SummaryDecision(
-                title: title,
-                details: string("details", in: object),
-                evidenceSegmentIDs: stringArray("evidenceSegmentIDs", in: object)
-            )
-        }
-    }
-
-    private static func actionItems(from value: Any?) -> [SummaryActionItem] {
-        objects(from: value).compactMap { object in
-            let task = string("task", in: object)
-            guard !task.isEmpty else { return nil }
-            return SummaryActionItem(
-                task: task,
-                owner: optionalString("owner", in: object),
-                dueDate: optionalString("dueDate", in: object),
-                evidenceSegmentIDs: stringArray("evidenceSegmentIDs", in: object)
-            )
-        }
-    }
-
-    private static func openQuestions(from value: Any?) -> [SummaryOpenQuestion] {
-        objects(from: value).compactMap { object in
-            let question = string("question", in: object)
-            guard !question.isEmpty else { return nil }
-            return SummaryOpenQuestion(
-                question: question,
-                context: optionalString("context", in: object),
-                evidenceSegmentIDs: stringArray("evidenceSegmentIDs", in: object)
-            )
-        }
-    }
-
-    private static func risks(from value: Any?) -> [SummaryRisk] {
-        objects(from: value).compactMap { object in
-            let risk = string("risk", in: object)
-            guard !risk.isEmpty else { return nil }
-            return SummaryRisk(
-                risk: risk,
-                details: optionalString("details", in: object),
-                evidenceSegmentIDs: stringArray("evidenceSegmentIDs", in: object)
-            )
-        }
-    }
-
-    private static func objects(from value: Any?) -> [[String: Any]] {
-        value as? [[String: Any]] ?? []
-    }
+    // MARK: - Field helpers
 
     private static func string(_ key: String, in object: [String: Any]) -> String {
         optionalString(key, in: object) ?? ""
@@ -262,7 +259,10 @@ actor SummarizationPipeline {
         guard let value = object[key], !(value is NSNull) else { return nil }
         let string = value as? String ?? "\(value)"
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        // The grammar allows a real `null` or a quoted string; a constrained model
+        // often picks the string and writes "null". Treat that as absent.
+        guard !trimmed.isEmpty, trimmed.lowercased() != "null" else { return nil }
+        return trimmed
     }
 
     private static func stringArray(_ key: String, in object: [String: Any]) -> [String] {
@@ -275,54 +275,131 @@ actor SummarizationPipeline {
         }
     }
 
-    private static func strippedMarkdownFence(_ text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("```") else { return nil }
+    // MARK: - NDJSON accumulator
 
-        var lines = trimmed.components(separatedBy: .newlines)
-        guard !lines.isEmpty else { return nil }
-        lines.removeFirst()
-        if lines.last?.trimmingCharacters(in: .whitespacesAndNewlines) == "```" {
-            lines.removeLast()
+    /// Builds a `MeetingSummary` incrementally from streamed NDJSON lines.
+    private struct SummaryAccumulator {
+        private var shortSummary = ""
+        private var detailedSummary = ""
+        private var decisions: [SummaryDecision] = []
+        private var actionItems: [SummaryActionItem] = []
+        private var openQuestions: [SummaryOpenQuestion] = []
+        private var risks: [SummaryRisk] = []
+
+        var snapshot: MeetingSummary {
+            MeetingSummary(
+                shortSummary: shortSummary,
+                detailedSummary: detailedSummary,
+                decisions: decisions,
+                actionItems: actionItems,
+                openQuestions: openQuestions,
+                risks: risks
+            )
         }
-        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-    }
 
-    private static func firstJSONObject(in text: String) -> String? {
-        var start: String.Index?
-        var depth = 0
-        var inString = false
-        var escaping = false
+        var hasContent: Bool {
+            !shortSummary.isEmpty || !detailedSummary.isEmpty || !decisions.isEmpty
+                || !actionItems.isEmpty || !openQuestions.isEmpty || !risks.isEmpty
+        }
 
-        var index = text.startIndex
-        while index < text.endIndex {
-            let character = text[index]
-
-            if inString {
-                if escaping {
-                    escaping = false
-                } else if character == "\\" {
-                    escaping = true
-                } else if character == "\"" {
-                    inString = false
-                }
-            } else if character == "\"" {
-                inString = true
-            } else if character == "{" {
-                if depth == 0 { start = index }
-                depth += 1
-            } else if character == "}" {
-                depth -= 1
-                if depth == 0, let start {
-                    return String(text[start...index])
-                }
+        /// Apply one complete NDJSON line. Returns true if it changed the summary.
+        mutating func applyLine(_ line: String) -> Bool {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard
+                !trimmed.isEmpty,
+                let data = trimmed.data(using: .utf8),
+                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let type = object["type"] as? String
+            else {
+                return false
             }
 
-            index = text.index(after: index)
+            switch type {
+            case "short":
+                shortSummary = string("text", in: object)
+                return true
+            case "detailed":
+                detailedSummary = string("text", in: object)
+                return true
+            case "decision":
+                let title = string("title", in: object)
+                guard !title.isEmpty else { return false }
+                decisions.append(SummaryDecision(
+                    title: title,
+                    details: string("details", in: object),
+                    evidenceSegmentIDs: stringArray("evidence", in: object)
+                ))
+                return true
+            case "action":
+                let task = string("task", in: object)
+                guard !task.isEmpty else { return false }
+                actionItems.append(SummaryActionItem(
+                    task: task,
+                    owner: optionalString("owner", in: object),
+                    dueDate: optionalString("due", in: object),
+                    evidenceSegmentIDs: stringArray("evidence", in: object)
+                ))
+                return true
+            case "question":
+                let question = string("question", in: object)
+                guard !question.isEmpty else { return false }
+                openQuestions.append(SummaryOpenQuestion(
+                    question: question,
+                    context: optionalString("context", in: object),
+                    evidenceSegmentIDs: stringArray("evidence", in: object)
+                ))
+                return true
+            case "risk":
+                let risk = string("risk", in: object)
+                guard !risk.isEmpty else { return false }
+                risks.append(SummaryRisk(
+                    risk: risk,
+                    details: optionalString("details", in: object),
+                    evidenceSegmentIDs: stringArray("evidence", in: object)
+                ))
+                return true
+            default:
+                return false
+            }
         }
 
-        return nil
+        /// Preview the in-progress prose line. Returns true if the visible text changed.
+        mutating func applyPartialProse(_ fragment: String) -> Bool {
+            guard let (type, text) = partialProse(fragment) else { return false }
+            switch type {
+            case "short":
+                guard text != shortSummary else { return false }
+                shortSummary = text
+                return true
+            case "detailed":
+                guard text != detailedSummary else { return false }
+                detailedSummary = text
+                return true
+            default:
+                return false
+            }
+        }
     }
+
+    // MARK: - Grammar
+
+    /// GBNF constraining the model to our NDJSON protocol: a sequence of
+    /// newline-terminated, single-line JSON objects. String contents exclude
+    /// raw control characters so newlines only ever delimit lines.
+    private static let grammar = #"""
+    root ::= entry+
+    entry ::= ( short | detailed | decision | action | question | risk ) "\n"
+    short ::= "{\"type\":\"short\",\"text\":" string "}"
+    detailed ::= "{\"type\":\"detailed\",\"text\":" string "}"
+    decision ::= "{\"type\":\"decision\",\"title\":" string ",\"details\":" nstring ",\"evidence\":" idarray "}"
+    action ::= "{\"type\":\"action\",\"task\":" string ",\"owner\":" nstring ",\"due\":" nstring ",\"evidence\":" idarray "}"
+    question ::= "{\"type\":\"question\",\"question\":" string ",\"context\":" nstring ",\"evidence\":" idarray "}"
+    risk ::= "{\"type\":\"risk\",\"risk\":" string ",\"details\":" nstring ",\"evidence\":" idarray "}"
+    idarray ::= "[" ( string ( "," string )* )? "]"
+    nstring ::= string | "null"
+    string ::= "\"" char* "\""
+    char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
+    """#
 }
 
 enum SummarizationError: LocalizedError {
@@ -331,7 +408,6 @@ enum SummarizationError: LocalizedError {
     case invalidResponse
     case serverRejected(status: Int, body: String)
     case emptyModelResponse
-    case invalidModelJSON
 
     var errorDescription: String? {
         switch self {
@@ -345,8 +421,6 @@ enum SummarizationError: LocalizedError {
             return "The local Gemma server rejected the request (HTTP \(status)): \(body)"
         case .emptyModelResponse:
             return "Gemma returned an empty summary."
-        case .invalidModelJSON:
-            return "Gemma did not return valid summary JSON."
         }
     }
 }
