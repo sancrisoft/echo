@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Custom keys not supported by GENERATE_INFOPLIST_FILE's INFOPLIST_KEY_*
+	     allowlist. Xcode uses this file as the base and merges the generated
+	     keys (mic usage, LSUIElement, bundle version, …) on top. -->
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Echo graba el audio del sistema para transcribir lo que dicen los demás participantes.</string>
+</dict>
+</plist>
