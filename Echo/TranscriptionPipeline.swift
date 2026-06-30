@@ -41,6 +41,11 @@ actor TranscriptionPipeline {
     /// cut here. 0.5 s clears normal between-word gaps (<200 ms) but catches
     /// clause/sentence boundaries.
     private let endpointSilence = Int(AudioConstants.sampleRate * 0.5)
+    /// Live transcript previews are re-run on a rolling window while we wait for
+    /// a clean endpoint. They are UI-only and get replaced by final segments.
+    private let partialMinSamples = Int(AudioConstants.sampleRate * 1.25)
+    private let partialWindowSamples = Int(AudioConstants.sampleRate * 5)
+    private let partialUpdateSamples = Int(AudioConstants.sampleRate * 1.25)
 
     // MARK: - Models
 
@@ -50,6 +55,7 @@ actor TranscriptionPipeline {
     private var whisper: WhisperKit?
     private var loaded = false
     private var loadTask: Task<Void, Never>?
+    private var detectedLanguages: [AudioChannel: String] = [:]
     private static let allowedTranscriptionLanguages: Set<String> = ["en", "es"]
 
     private let decodeOptions: DecodingOptions = {
@@ -76,6 +82,10 @@ actor TranscriptionPipeline {
     private struct ChannelBuffer {
         var samples: [Float] = []
         var chunkStart: TimeInterval = 0
+        var lastPartialSampleCount = 0
+        var partialGeneration = 0
+        var partialInFlight = false
+        var partialRequestID = 0
     }
 
     private struct AudioStats {
@@ -108,8 +118,19 @@ actor TranscriptionPipeline {
         }
     }
 
+    private struct PartialSnapshot {
+        let audio: [Float]
+        let stats: AudioStats
+        let offset: TimeInterval
+        let sessionGeneration: Int
+        let bufferGeneration: Int
+        let requestID: Int
+    }
+
     private var mic = ChannelBuffer()
     private var system = ChannelBuffer()
+    private var sessionGeneration = 0
+    private var nextPartialRequestID = 0
 
     private func speaker(for channel: AudioChannel) -> Speaker {
         channel == .microphone ? .me : .teammates
@@ -147,6 +168,101 @@ actor TranscriptionPipeline {
         let offset = buffer.chunkStart
         buffer.chunkStart += Double(n) / AudioConstants.sampleRate
         return (chunk, offset)
+    }
+
+    private func invalidatePartial(for channel: AudioChannel) -> Int {
+        switch channel {
+        case .microphone:
+            return Self.invalidatePartial(&mic)
+        case .system:
+            return Self.invalidatePartial(&system)
+        }
+    }
+
+    private static func invalidatePartial(_ buffer: inout ChannelBuffer) -> Int {
+        buffer.partialGeneration += 1
+        buffer.lastPartialSampleCount = 0
+        return buffer.partialGeneration
+    }
+
+    private func preparePartialSnapshot(for channel: AudioChannel) -> PartialSnapshot? {
+        let buffer: ChannelBuffer
+        switch channel {
+        case .microphone:
+            buffer = mic
+        case .system:
+            buffer = system
+        }
+
+        let sampleCount = buffer.samples.count
+        guard sampleCount >= partialMinSamples else { return nil }
+        guard !buffer.partialInFlight else { return nil }
+        guard sampleCount - buffer.lastPartialSampleCount >= partialUpdateSamples else { return nil }
+
+        let windowCount = min(sampleCount, partialWindowSamples)
+        let windowStart = sampleCount - windowCount
+        let audio = Array(buffer.samples[windowStart..<sampleCount])
+        let stats = audioStats(audio)
+        guard shouldTranscribe(stats, from: channel) else { return nil }
+
+        nextPartialRequestID += 1
+        let requestID = nextPartialRequestID
+        switch channel {
+        case .microphone:
+            mic.partialInFlight = true
+            mic.partialRequestID = requestID
+            mic.lastPartialSampleCount = sampleCount
+        case .system:
+            system.partialInFlight = true
+            system.partialRequestID = requestID
+            system.lastPartialSampleCount = sampleCount
+        }
+
+        return PartialSnapshot(
+            audio: audio,
+            stats: stats,
+            offset: buffer.chunkStart + Double(windowStart) / AudioConstants.sampleRate,
+            sessionGeneration: sessionGeneration,
+            bufferGeneration: buffer.partialGeneration,
+            requestID: requestID
+        )
+    }
+
+    private func finishPartial(
+        for channel: AudioChannel,
+        snapshot: PartialSnapshot,
+        segment: TranscriptSegment?
+    ) async {
+        let isCurrent: Bool
+        switch channel {
+        case .microphone:
+            guard mic.partialRequestID == snapshot.requestID else { return }
+            mic.partialInFlight = false
+            isCurrent = sessionGeneration == snapshot.sessionGeneration
+                && mic.partialGeneration == snapshot.bufferGeneration
+        case .system:
+            guard system.partialRequestID == snapshot.requestID else { return }
+            system.partialInFlight = false
+            isCurrent = sessionGeneration == snapshot.sessionGeneration
+                && system.partialGeneration == snapshot.bufferGeneration
+        }
+
+        guard isCurrent else { return }
+        if let segment {
+            await state?.updatePartial(
+                segment,
+                sessionGeneration: snapshot.sessionGeneration,
+                generation: snapshot.bufferGeneration,
+                requestID: snapshot.requestID
+            )
+        } else {
+            await state?.clearPartial(
+                for: channel,
+                sessionGeneration: snapshot.sessionGeneration,
+                generation: snapshot.bufferGeneration,
+                requestID: snapshot.requestID
+            )
+        }
     }
 
     // MARK: - Lifecycle
@@ -207,16 +323,23 @@ actor TranscriptionPipeline {
     /// Resets per-session state and ensures the models are loaded.
     func start(appendingTo state: RecordingState) async {
         self.state = state
+        sessionGeneration += 1
+        detectedLanguages.removeAll()
         mic = ChannelBuffer()
         system = ChannelBuffer()
+        await state.beginPartialSession(sessionGeneration)
 
         if !loaded { await preload(updating: state) }
     }
 
     /// Flush whatever is left in both buffers at the end of the session.
     func stop() async {
+        sessionGeneration += 1
+        await state?.clearPartials(sessionGeneration: sessionGeneration)
         await emit(.microphone, count: mic.samples.count)
         await emit(.system, count: system.samples.count)
+        detectedLanguages.removeAll()
+        await state?.clearPartials(sessionGeneration: sessionGeneration)
     }
 
     // MARK: - Ingestion
@@ -229,6 +352,7 @@ actor TranscriptionPipeline {
         while let cut = cutPoint(pendingSamples(channel)) {
             await emit(channel, count: cut)
         }
+        await maybeEmitPartial(channel)
     }
 
     // MARK: - VAD endpointing
@@ -291,10 +415,39 @@ actor TranscriptionPipeline {
 
     // MARK: - Transcription
 
+    private func maybeEmitPartial(_ channel: AudioChannel) async {
+        guard let whisper else { return }
+        guard let snapshot = preparePartialSnapshot(for: channel) else { return }
+
+        let segment: TranscriptSegment?
+        do {
+            guard let language = await cachedOrRestrictedLanguage(for: snapshot.audio, from: channel, using: whisper) else {
+                await finishPartial(for: channel, snapshot: snapshot, segment: nil)
+                return
+            }
+            var options = decodeOptions
+            options.language = language
+            let results = try await whisper.transcribe(audioArray: snapshot.audio, decodeOptions: options)
+            segment = partialSegment(from: results, channel: channel, offset: snapshot.offset, stats: snapshot.stats)
+        } catch {
+            Self.log.error("\(channel.rawValue, privacy: .public) partial transcribe failed: \(error.localizedDescription, privacy: .public)")
+            segment = nil
+        }
+
+        await finishPartial(for: channel, snapshot: snapshot, segment: segment)
+    }
+
     /// Pulls the leading `count` samples off the channel buffer, transcribes
     /// them, and appends the resulting segments. Shared by both channels.
     private func emit(_ channel: AudioChannel, count: Int) async {
         guard let (chunk, offset) = detachChunk(channel, count: count) else { return }
+        let partialGeneration = invalidatePartial(for: channel)
+        await state?.clearPartial(
+            for: channel,
+            sessionGeneration: sessionGeneration,
+            generation: partialGeneration
+        )
+
         let stats = audioStats(chunk)
         guard shouldTranscribe(stats, from: channel) else { return }
         guard let whisper else { return }
@@ -308,11 +461,41 @@ actor TranscriptionPipeline {
             Self.log.error("\(channel.rawValue, privacy: .public) transcribe failed: \(error.localizedDescription, privacy: .public)")
             return
         }
+        for segment in transcriptSegments(from: results, channel: channel, offset: offset, stats: stats) {
+            await state?.append(segment)
+        }
+    }
+
+    private func partialSegment(
+        from results: [TranscriptionResult],
+        channel: AudioChannel,
+        offset: TimeInterval,
+        stats: AudioStats
+    ) -> TranscriptSegment? {
+        let segments = transcriptSegments(from: results, channel: channel, offset: offset, stats: stats)
+        guard let first = segments.first, let last = segments.last else { return nil }
+
+        return TranscriptSegment(
+            channel: channel,
+            speaker: speaker(for: channel),
+            text: segments.map(\.text).joined(separator: " "),
+            start: first.start,
+            end: last.end
+        )
+    }
+
+    private func transcriptSegments(
+        from results: [TranscriptionResult],
+        channel: AudioChannel,
+        offset: TimeInterval,
+        stats: AudioStats
+    ) -> [TranscriptSegment] {
         let who = speaker(for: channel)
+        var segments: [TranscriptSegment] = []
         for result in results {
             for segment in result.segments {
                 guard let segmentText = cleaned(segment.text, channel: channel, segment: segment, audio: stats) else { continue }
-                await state?.append(TranscriptSegment(
+                segments.append(TranscriptSegment(
                     channel: channel,
                     speaker: who,
                     text: segmentText,
@@ -321,15 +504,23 @@ actor TranscriptionPipeline {
                 ))
             }
         }
+        return segments
+    }
+
+    private func cachedOrRestrictedLanguage(for audio: [Float], from channel: AudioChannel, using whisper: WhisperKit) async -> String? {
+        if let language = detectedLanguages[channel] { return language }
+        return await restrictedLanguage(for: audio, from: channel, using: whisper)
     }
 
     private func restrictedLanguage(for audio: [Float], from channel: AudioChannel, using whisper: WhisperKit) async -> String? {
         do {
             let detection = try await whisper.detectLangauge(audioArray: audio)
             guard Self.allowedTranscriptionLanguages.contains(detection.language) else {
+                detectedLanguages[channel] = nil
                 Self.log.info("\(channel.rawValue, privacy: .public) skipped unsupported detected language: \(detection.language, privacy: .public)")
                 return nil
             }
+            detectedLanguages[channel] = detection.language
             return detection.language
         } catch {
             Self.log.error("\(channel.rawValue, privacy: .public) language detection failed: \(error.localizedDescription, privacy: .public)")

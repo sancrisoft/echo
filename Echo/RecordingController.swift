@@ -52,9 +52,9 @@ final class RecordingController {
         state.markStarted()
 
         do {
+            await pipeline.start(appendingTo: state)
             try await mic.start()
             try await system.start()
-            await pipeline.start(appendingTo: state)
             state.status = ""
         } catch {
             state.status = error.localizedDescription

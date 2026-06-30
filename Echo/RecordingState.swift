@@ -34,6 +34,13 @@ final class RecordingState {
     /// Aligned transcript, ordered by `start`. Both channels merge into here.
     private(set) var segments: [TranscriptSegment] = []
 
+    /// Best-effort live text for each channel. These rows are provisional UI only:
+    /// they are replaced by finished `segments` and should not feed summaries.
+    private(set) var partialSegments: [AudioChannel: TranscriptSegment] = [:]
+    private var partialSessionGeneration = 0
+    private var partialGenerations: [AudioChannel: Int] = [:]
+    private var partialRequestIDs: [AudioChannel: Int] = [:]
+
     /// Short human-readable status for the popover (e.g. "Requesting permissions…").
     var status: String = ""
 
@@ -53,6 +60,9 @@ final class RecordingState {
 
     func markStarted() {
         segments.removeAll()
+        partialSegments.removeAll()
+        partialGenerations.removeAll()
+        partialRequestIDs.removeAll()
         startedAt = Date()
         isRecording = true
     }
@@ -62,6 +72,9 @@ final class RecordingState {
         startedAt = nil
         inputLevels = Array(repeating: Self.idleLevel, count: barCount)
         outputLevels = Array(repeating: Self.idleLevel, count: barCount)
+        partialSegments.removeAll()
+        partialGenerations.removeAll()
+        partialRequestIDs.removeAll()
     }
 
     // MARK: - Level ingestion (called from the capture services)
@@ -87,5 +100,67 @@ final class RecordingState {
     func append(_ segment: TranscriptSegment) {
         let index = segments.firstIndex { $0.start > segment.start } ?? segments.count
         segments.insert(segment, at: index)
+    }
+
+    func beginPartialSession(_ sessionGeneration: Int) {
+        partialSessionGeneration = sessionGeneration
+        partialSegments.removeAll()
+        partialGenerations.removeAll()
+        partialRequestIDs.removeAll()
+    }
+
+    /// Replace the live provisional row for one channel.
+    func updatePartial(
+        _ segment: TranscriptSegment,
+        sessionGeneration: Int,
+        generation: Int,
+        requestID: Int
+    ) {
+        guard sessionGeneration == partialSessionGeneration else { return }
+        guard acceptsPartialUpdate(for: segment.channel, generation: generation, requestID: requestID) else { return }
+        partialGenerations[segment.channel] = generation
+        partialRequestIDs[segment.channel] = requestID
+        partialSegments[segment.channel] = segment
+    }
+
+    /// Drop the provisional row for one channel, usually once its final segment
+    /// is being committed.
+    func clearPartial(
+        for channel: AudioChannel,
+        sessionGeneration: Int? = nil,
+        generation: Int? = nil,
+        requestID: Int? = nil
+    ) {
+        if let sessionGeneration {
+            guard sessionGeneration == partialSessionGeneration else { return }
+        }
+        if let generation {
+            if let requestID {
+                guard acceptsPartialUpdate(for: channel, generation: generation, requestID: requestID) else { return }
+                partialRequestIDs[channel] = requestID
+            } else {
+                let current = partialGenerations[channel] ?? 0
+                guard generation >= current else { return }
+                partialRequestIDs[channel] = 0
+            }
+            partialGenerations[channel] = generation
+        }
+        partialSegments[channel] = nil
+    }
+
+    func clearPartials(sessionGeneration: Int? = nil) {
+        if let sessionGeneration {
+            partialSessionGeneration = sessionGeneration
+        }
+        partialSegments.removeAll()
+        partialGenerations.removeAll()
+        partialRequestIDs.removeAll()
+    }
+
+    private func acceptsPartialUpdate(for channel: AudioChannel, generation: Int, requestID: Int) -> Bool {
+        let currentGeneration = partialGenerations[channel] ?? 0
+        let currentRequestID = partialRequestIDs[channel] ?? 0
+        return generation > currentGeneration
+            || (generation == currentGeneration && requestID >= currentRequestID)
     }
 }

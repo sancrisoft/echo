@@ -44,7 +44,7 @@ struct TranscriptSegment: Identifiable, Hashable, Codable, Sendable {
     var start: TimeInterval
     var end: TimeInterval
 
-    init(
+    nonisolated init(
         id: UUID = UUID(),
         channel: AudioChannel,
         speaker: Speaker,

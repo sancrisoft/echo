@@ -67,7 +67,7 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var transcript: some View {
-        if controller.state.segments.isEmpty {
+        if transcriptRows.isEmpty {
             ContentUnavailableView(
                 controller.state.isRecording ? "Listening…" : "No transcript yet",
                 systemImage: "text.bubble",
@@ -79,12 +79,28 @@ struct DashboardView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(controller.state.segments) { segment in
-                        SegmentRow(segment: segment)
+                    ForEach(transcriptRows) { row in
+                        SegmentRow(segment: row.segment, isPartial: row.isPartial)
                     }
                 }
                 .padding()
             }
+        }
+    }
+
+    private var transcriptRows: [TranscriptDisplayRow] {
+        let finalRows = controller.state.segments.map {
+            TranscriptDisplayRow(segment: $0, isPartial: false)
+        }
+        let partialRows = controller.state.partialSegments.values.map {
+            TranscriptDisplayRow(segment: $0, isPartial: true)
+        }
+
+        return (finalRows + partialRows).sorted {
+            if $0.segment.start == $1.segment.start {
+                return !$0.isPartial && $1.isPartial
+            }
+            return $0.segment.start < $1.segment.start
         }
     }
 
@@ -100,13 +116,23 @@ struct DashboardView: View {
     }
 }
 
+private struct TranscriptDisplayRow: Identifiable {
+    let segment: TranscriptSegment
+    let isPartial: Bool
+
+    var id: String {
+        isPartial ? "partial-\(segment.channel.rawValue)" : segment.id.uuidString
+    }
+}
+
 private struct SegmentRow: View {
     let segment: TranscriptSegment
+    var isPartial = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Circle()
-                .fill(accent)
+                .fill(isPartial ? accent.opacity(0.45) : accent)
                 .frame(width: 8, height: 8)
                 .padding(.top, 6)
 
@@ -115,12 +141,14 @@ private struct SegmentRow: View {
                     Text(segment.speaker.displayName)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(accent)
-                    Text(timestamp)
+                    Text(isPartial ? "Live" : timestamp)
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
                 Text(segment.text)
                     .font(.body)
+                    .foregroundStyle(isPartial ? .secondary : .primary)
+                    .opacity(isPartial ? 0.78 : 1)
                     .textSelection(.enabled)
             }
         }
