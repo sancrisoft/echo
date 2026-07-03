@@ -97,7 +97,13 @@ final class RecordingController {
 
     private let mic = MicrophoneCapture()
     private let system = SystemAudioCapture()
-    private let pipeline = TranscriptionPipeline()
+    private let pipeline: TranscriptionPipeline
+    // Controller-long, reset per session via begin/endSession: consumes the
+    // gate-decision record stream and the input-device signals to drive the
+    // input-health notices (SP-002 "no silent dropout"). Observational by
+    // decision (ADR-006): its effects are notice-only, so nothing here can
+    // ever switch the audio path.
+    private let inputHealth: InputHealthTracker
     private let routeMonitor = OutputRouteMonitor()
     private var echoMode: EchoModeMachine?
     private let inputMonitor = InputDeviceMonitor()
@@ -123,6 +129,29 @@ final class RecordingController {
     var isRecording: Bool { state.isRecording }
 
     init() {
+        // Every finalized-chunk gate decision fans out to the permanent
+        // OSLog diagnostic (SP-002 US-12, previously the pipeline's default)
+        // and to the input-health classifier (ADR-006) — one stream, two
+        // observational consumers, neither able to influence the decision.
+        let inputHealth = InputHealthTracker()
+        self.inputHealth = inputHealth
+        self.pipeline = TranscriptionPipeline(
+            gateDiagnostics: FanOutGateDiagnosticsSink([OSLogGateDiagnosticsSink(), inputHealth])
+        )
+        inputHealth.onEffect = { [weak self] generation, effect in
+            // Arrives on the pipeline's executor (gate decisions) or the
+            // main actor (device signals); notice state lives on the main
+            // actor. The generation + isRecording guards drop teardown
+            // stragglers — e.g. effects from the end-of-session flush — so
+            // a health notice can never appear while idle or leak into a
+            // later session (the `onEngineEvent` discipline).
+            Task { @MainActor [weak self] in
+                guard let self, self.sessionGeneration == generation,
+                      self.state.isRecording else { return }
+                self.state.applyInputHealthEffect(effect)
+            }
+        }
+
         // Warm up the (large) models at launch so pressing record is instant.
         Task { await prepare() }
     }
@@ -194,6 +223,11 @@ final class RecordingController {
         system.stop()
         stopEchoHandling()
         await pipeline.stop()
+        // After the pipeline flush: the end-of-session chunks still classify
+        // (their effects are dropped by the isRecording guard once
+        // `markStopped` runs), and from here the tracker is inert until the
+        // next session begins.
+        inputHealth.endSession()
         let transcript = state.segments
         let generation = sessionGeneration
         state.markStopped()
@@ -242,6 +276,10 @@ final class RecordingController {
         // reference.
         let gapTracker = MicCaptureGapTracker()   // fresh per session: no stale episodes
         micGapTracker = gapTracker
+        // Fresh input-health evidence per session, tagged with this
+        // session's generation: no sustained-discard episode (or notice
+        // bookkeeping) ever crosses a session boundary.
+        inputHealth.beginSession(generation: sessionGeneration)
         mic.onLevel = { [state] level in
             Task { @MainActor in state.pushInput(level) }
         }
@@ -427,6 +465,11 @@ final class RecordingController {
         for action in actions {
             switch action {
             case .restartMicCapture:
+                // New device, new input-health evidence: the lifecycle
+                // machine emits this only on a real identity change, so the
+                // classifier resets its mic episode (ADR-006 — a signal
+                // *into* the observational classifier, never back out).
+                inputHealth.noteMicDeviceChanged()
                 scheduleMicRestart()
             case .resetEchoProcessing:
                 // SP-002 inherits SP-001's discipline: on every input-device
@@ -434,6 +477,12 @@ final class RecordingController {
                 // re-converges on the new device.
                 switchingStage?.reset()
             case .stopMicCapture:
+                // Losing the device is a device change for input health too:
+                // stale sustained-discard evidence must not outlive the
+                // device it was gathered against, and S4's mic-unavailable
+                // notice (raised below) must not sit above a stale mic
+                // health notice.
+                inputHealth.noteMicDeviceChanged()
                 // The mic goes down for an unbounded episode (device lost /
                 // capture failed) while Team keeps running: open the gap
                 // episode so the eventual recovery reports the full outage

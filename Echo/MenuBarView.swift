@@ -97,6 +97,20 @@ struct MenuBarView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Input-health notices (SP-002 "no silent dropout"), rendered
+            // below the device-lost notice so they never mask it.
+            if let notice = controller.state.micHealthNotice {
+                Label(notice, systemImage: "waveform.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let notice = controller.state.systemHealthNotice {
+                Label(notice, systemImage: "speaker.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Button(role: .destructive) {
                 Task {
                     await controller.toggle()   // stop

@@ -57,6 +57,19 @@ final class RecordingState {
     /// capture is healthy.
     private(set) var inputNotice: String?
 
+    /// Per-channel input-health notices (SP-002 "no silent dropout";
+    /// ADR-006 — raised/cleared by the observational classifier, never by
+    /// anything that touches the audio path). Deliberately NOT `inputNotice`:
+    /// that is S4's device-lost surface with its own episode discipline, and
+    /// "the device is gone" and "the device delivers untranscribable signal"
+    /// are different problems. Coexistence rule: each notice renders on its
+    /// own row (device-lost above input health), so a health notice can
+    /// never mask an active device-lost notice — and the classifier clears
+    /// mic health state on every device change, so the two mic notices
+    /// don't stack in practice.
+    private(set) var micHealthNotice: String?
+    private(set) var systemHealthNotice: String?
+
     func updateStatus(_ text: String) { status = text }
 
     init() {
@@ -86,6 +99,8 @@ final class RecordingState {
         startedAt = nil
         echoNotice = nil
         inputNotice = nil
+        micHealthNotice = nil
+        systemHealthNotice = nil
         inputLevels = Array(repeating: Self.idleLevel, count: barCount)
         outputLevels = Array(repeating: Self.idleLevel, count: barCount)
         partialSegments.removeAll()
@@ -104,6 +119,24 @@ final class RecordingState {
     /// Raise (`String`) or clear (`nil`) the mic-unavailable notice (SP-002).
     func applyInputDeviceNotice(_ notice: String?) {
         inputNotice = notice
+    }
+
+    // MARK: - Input health (called by RecordingController)
+
+    /// Applies one input-health classifier effect (SP-002 "no silent
+    /// dropout"). The effect type is notice-only by construction (ADR-006),
+    /// so this mapping is exhaustively just notice text in, notice text out.
+    func applyInputHealthEffect(_ effect: InputHealthClassifier.Effect) {
+        switch effect {
+        case .showMicHealthNotice:
+            micHealthNotice = InputHealthNotice.micMessage
+        case .showSystemHealthNotice:
+            systemHealthNotice = InputHealthNotice.systemMessage
+        case .clearHealthNotice(.microphone):
+            micHealthNotice = nil
+        case .clearHealthNotice(.system):
+            systemHealthNotice = nil
+        }
     }
 
     // MARK: - Summary ingestion (called by RecordingController)

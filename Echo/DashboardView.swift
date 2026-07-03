@@ -54,6 +54,20 @@ struct DashboardView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // Input-health notices (SP-002 "no silent dropout"), rendered
+            // alongside — never replacing — the device-lost notice.
+            if let notice = controller.state.micHealthNotice {
+                Label(notice, systemImage: "waveform.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let notice = controller.state.systemHealthNotice {
+                Label(notice, systemImage: "speaker.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if controller.state.isRecording {
                 Label("Recording", systemImage: "circle.fill")
                     .font(.caption)
