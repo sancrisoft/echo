@@ -14,6 +14,10 @@ struct MenuBarView: View {
     @Environment(RecordingController.self) private var controller
     @Environment(\.openWindow) private var openWindow
 
+    #if DEBUG
+    @State private var fixtureRecorder = FixtureRecorder()
+    #endif
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -26,6 +30,11 @@ struct MenuBarView: View {
 
             Divider()
             footer
+
+            #if DEBUG
+            Divider()
+            fixtureRecorderSection
+            #endif
         }
         .padding(16)
         .frame(width: 320)
@@ -132,6 +141,58 @@ struct MenuBarView: View {
             .buttonStyle(.bordered)
         }
     }
+
+    #if DEBUG
+    // MARK: - AEC fixture recording (SP-001 fixture suite, DEBUG builds only)
+
+    private var fixtureRecorderSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Menu {
+                ForEach(FixtureScenario.allCases) { scenario in
+                    Button(scenario.rawValue) { recordFixture(scenario) }
+                }
+            } label: {
+                Label("Record AEC Fixture…", systemImage: "record.circle.dashed")
+            }
+            .disabled(controller.state.isRecording || fixtureRecorder.isBusy)
+
+            if let status = fixtureStatus {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var fixtureStatus: String? {
+        switch fixtureRecorder.phase {
+        case .idle:
+            return nil
+        case .countingDown(let seconds):
+            return "Recording starts in \(seconds)…"
+        case .recording(let remaining):
+            return "Recording fixture… \(remaining)s left"
+        case .finished(let folder):
+            return "Fixture saved to \(folder.path)"
+        case .failed(let message):
+            return "Fixture recording failed: \(message)"
+        }
+    }
+
+    private func recordFixture(_ scenario: FixtureScenario) {
+        let panel = NSOpenPanel()
+        panel.title = "Choose the fixtures folder"
+        panel.message = "The take is written to {folder}/\(scenario.rawValue)/ — pick EchoTests/Fixtures to install it directly."
+        panel.prompt = "Record"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { await fixtureRecorder.record(scenario: scenario, into: url) }
+    }
+    #endif
 
     private static let elapsedFormatter: DateComponentsFormatter = {
         let f = DateComponentsFormatter()
