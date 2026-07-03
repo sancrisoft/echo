@@ -1,0 +1,23 @@
+webrtc-audio-processing (standalone WebRTC Audio Processing Module, AEC3)
+
+Source:   https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing.git
+Tag:      v2.1
+Commit:   846fe90a289f58b7c9303a635142aa2c7caa93e5
+Subproject: abseil-cpp 20240722.0 (meson wrap, statically bundled into the archive)
+
+Build (macOS arm64, static, release):
+  export MACOSX_DEPLOYMENT_TARGET=15.6
+  meson setup build -Ddefault_library=static --buildtype=release
+  ninja -C build
+  meson install -C build --destdir=<staging>
+
+Vendored artifacts:
+  lib/libwebrtc-audio-processing-2.a  — self-contained (APM + rtc_base + common_audio + abseil)
+  include/webrtc-audio-processing-2/  — public headers (installed set)
+  include/absl/                       — abseil headers referenced by the public headers
+  licenses/                           — upstream BSD-3 (WebRTC) and Apache-2.0 (abseil)
+
+Consumer cflags (per upstream pkg-config): -DWEBRTC_POSIX
+Both include roots are needed on the header search path:
+  Vendor/webrtc-apm/include
+  Vendor/webrtc-apm/include/webrtc-audio-processing-2
