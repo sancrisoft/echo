@@ -12,6 +12,7 @@
 
 import SwiftUI
 import Observation
+import os
 
 @Observable
 @MainActor
@@ -126,8 +127,23 @@ final class RecordingState {
 
     // MARK: - Transcript ingestion (called from the transcription pipeline)
 
+    private static let dedupLog = Logger(subsystem: "com.sancrisoft.Echo", category: "EchoDedup")
+    private let echoDedup = EchoDedupPolicy()
+
     /// Insert a finished segment, keeping `segments` sorted by start time.
+    /// Mic-channel segments that are speaker bleed (echo duplicates of a Team
+    /// segment, per ADR-003) are suppressed instead of inserted; every
+    /// suppression is logged so a wrongly deleted line stays diagnosable.
     func append(_ segment: TranscriptSegment) {
+        if let match = echoDedup.suppressionMatch(for: segment, against: segments) {
+            Self.dedupLog.info("""
+            Suppressed echo segment "\(segment.text, privacy: .public)" \
+            [\(segment.start, format: .fixed(precision: 2))s–\(segment.end, format: .fixed(precision: 2))s] \
+            duplicating Team segment "\(match.text, privacy: .public)" \
+            [\(match.start, format: .fixed(precision: 2))s–\(match.end, format: .fixed(precision: 2))s]
+            """)
+            return
+        }
         let index = segments.firstIndex { $0.start > segment.start } ?? segments.count
         segments.insert(segment, at: index)
     }
