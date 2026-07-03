@@ -48,6 +48,10 @@ final class RecordingState {
     /// Short human-readable status for the popover (e.g. "Requesting permissions…").
     var status: String = ""
 
+    /// Subtle degradation notice while echo cancellation is reduced
+    /// (SP-001 US-7); `nil` whenever echo handling is healthy.
+    private(set) var echoNotice: String?
+
     func updateStatus(_ text: String) { status = text }
 
     init() {
@@ -75,11 +79,18 @@ final class RecordingState {
     func markStopped() {
         isRecording = false
         startedAt = nil
+        echoNotice = nil
         inputLevels = Array(repeating: Self.idleLevel, count: barCount)
         outputLevels = Array(repeating: Self.idleLevel, count: barCount)
         partialSegments.removeAll()
         partialGenerations.removeAll()
         partialRequestIDs.removeAll()
+    }
+
+    // MARK: - Echo handling (called by RecordingController)
+
+    func applyEchoHandlingEffect(_ effect: EchoModeMachine.Effect) {
+        echoNotice = EchoDegradationNotice.notice(after: effect)
     }
 
     // MARK: - Summary ingestion (called by RecordingController)

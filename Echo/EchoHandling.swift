@@ -98,3 +98,17 @@ nonisolated struct EchoModeMachine {
         }
     }
 }
+
+/// Maps mode-machine effects to the subtle user-facing degradation notice
+/// (SP-001 US-7). Pure so the glue is unit-testable without the controller.
+nonisolated enum EchoDegradationNotice {
+
+    static let message = "Echo cancellation reduced — headphones recommended"
+
+    static func notice(after effect: EchoModeMachine.Effect) -> String? {
+        switch effect {
+        case .showDegradationNotice: return message
+        case .clearDegradationNotice: return nil
+        }
+    }
+}

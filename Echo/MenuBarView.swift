@@ -76,6 +76,12 @@ struct MenuBarView: View {
                 color: .purple
             )
 
+            if let notice = controller.state.echoNotice {
+                Label(notice, systemImage: "waveform.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Button(role: .destructive) {
                 Task {
                     await controller.toggle()   // stop

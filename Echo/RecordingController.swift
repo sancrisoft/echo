@@ -26,10 +26,11 @@ final class RecordingController {
     private let mic = MicrophoneCapture()
     private let system = SystemAudioCapture()
     private let pipeline = TranscriptionPipeline()
-    // Pass-through until S2 lands the real engine (ADR-002 seam).
-    private let aecStage: any AECStage = PassthroughAECStage()
     private let routeMonitor = OutputRouteMonitor()
     private var echoMode: EchoModeMachine?
+    // Per-session (built in `startEchoHandling`): wraps a fresh engine stage
+    // and applies the mode machine's current mode to the audio path.
+    private var switchingStage: SwitchingAECStage?
     private let summarizer = SummarizationPipeline()
     private let llamaServer = LlamaServerManager()
     private var sessionGeneration = 0
@@ -62,8 +63,8 @@ final class RecordingController {
         sessionGeneration += 1
         state.status = "Requesting permissions…"
 
-        wireCallbacks()
-        startEchoHandling()
+        let aecStage = startEchoHandling()
+        wireCallbacks(aecStage: aecStage)
         state.markStarted()
 
         do {
@@ -147,20 +148,21 @@ final class RecordingController {
 
     // MARK: - Wiring
 
-    private func wireCallbacks() {
-        // Capture `state`/`pipeline` directly (not `self`) so these real-time
-        // audio callbacks don't race on the controller's `self` reference.
+    private func wireCallbacks(aecStage: any AECStage) {
+        // Capture `state`/`pipeline`/`aecStage` directly (not `self`) so these
+        // real-time audio callbacks don't race on the controller's `self`
+        // reference.
         mic.onLevel = { [state] level in
             Task { @MainActor in state.pushInput(level) }
         }
-        mic.onSamples = { [pipeline, aecStage] frames in
+        mic.onSamples = { [pipeline] frames in
             let cleaned = aecStage.processMicSamples(frames)
             Task { await pipeline.ingest(cleaned, from: .microphone) }
         }
         system.onLevel = { [state] level in
             Task { @MainActor in state.pushOutput(level) }
         }
-        system.onSamples = { [pipeline, aecStage] frames in
+        system.onSamples = { [pipeline] frames in
             // Read-only fan-out (ADR-002): the far end gets a value copy; the
             // Team ingest path below must stay byte-identical to today.
             aecStage.feedFarEnd(frames)
@@ -170,20 +172,48 @@ final class RecordingController {
 
     // MARK: - Echo handling (SP-001)
 
-    private func startEchoHandling() {
+    /// Builds the session's mode machine and AEC stage and returns the stage
+    /// for the capture callbacks to run.
+    private func startEchoHandling() -> any AECStage {
         var machine = EchoModeMachine(initialRoute: routeMonitor.currentRoute())
+
+        // A fresh engine per session: no adaptation state leaks across
+        // recordings, and an init failure only degrades this session.
+        let engine = WebRTCAECStage()
+        let generation = sessionGeneration
+        engine.onEngineEvent = { [weak self] healthy in
+            // May arrive on either capture thread; the machine and the notice
+            // live on the main actor. The generation guard drops any late
+            // event from an engine of a previous session.
+            Task { @MainActor [weak self] in
+                guard let self, self.sessionGeneration == generation else { return }
+                self.handleEngineEvent(healthy: healthy)
+            }
+        }
+
+        // SP-001 US-8: an engine that never comes up must not block the
+        // session — it starts on the degraded path (raw mic + dedup) instead.
+        if machine.mode == .cancelling, !engine.isHealthy,
+           let effect = machine.handle(.engineFailed) {
+            state.applyEchoHandlingEffect(effect)
+        }
+
         Self.log.info("Echo-handling mode: \(machine.mode.rawValue, privacy: .public)")
+        let stage = SwitchingAECStage(engineStage: engine, mode: machine.mode)
         echoMode = machine
+        switchingStage = stage
         routeMonitor.onRouteChange = { [weak self] route in
             self?.handleRouteChange(route)
         }
         routeMonitor.start()
+        return stage
     }
 
     private func stopEchoHandling() {
         routeMonitor.stop()
         routeMonitor.onRouteChange = nil
-        aecStage.reset()
+        switchingStage?.reset()
+        switchingStage = nil
         echoMode = nil
     }
 
@@ -198,12 +228,33 @@ final class RecordingController {
             Echo-handling mode: \(previous.rawValue, privacy: .public) → \
             \(machine.mode.rawValue, privacy: .public)
             """)
+            switchingStage?.setMode(machine.mode)
             // SP-001: on any route change the canceller resets and re-converges.
-            aecStage.reset()
+            switchingStage?.reset()
         }
         if let effect {
-            // S4 binds the degradation notice to UI; until then it's log-only.
-            Self.log.info("Echo-handling effect: \(String(describing: effect), privacy: .public)")
+            state.applyEchoHandlingEffect(effect)
+        }
+    }
+
+    private func handleEngineEvent(healthy: Bool) {
+        guard var machine = echoMode else { return }
+        let previous = machine.mode
+        let effect = machine.handle(healthy ? .engineRecovered : .engineFailed)
+        echoMode = machine
+
+        if machine.mode != previous {
+            Self.log.info("""
+            Echo-handling mode: \(previous.rawValue, privacy: .public) → \
+            \(machine.mode.rawValue, privacy: .public) (engine \
+            \(healthy ? "recovered" : "failed", privacy: .public))
+            """)
+            // No reset here: Cancelling ↔ Degraded keeps the engine fed, and
+            // recovery means it is already processing frames successfully.
+            switchingStage?.setMode(machine.mode)
+        }
+        if let effect {
+            state.applyEchoHandlingEffect(effect)
         }
     }
 }

@@ -42,6 +42,12 @@ struct DashboardView: View {
 
             Spacer()
 
+            if let notice = controller.state.echoNotice {
+                Label(notice, systemImage: "waveform.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if controller.state.isRecording {
                 Label("Recording", systemImage: "circle.fill")
                     .font(.caption)
