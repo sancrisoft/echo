@@ -149,16 +149,18 @@ struct MenuBarView: View {
     }
 
     #if DEBUG
-    // MARK: - AEC fixture recording (SP-001 fixture suite, DEBUG builds only)
+    // MARK: - Fixture recording (SP-001 + SP-002 fixture suites, DEBUG builds only)
 
     private var fixtureRecorderSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Menu {
+                // allCases keeps the menu complete by construction: new
+                // scenarios appear here the moment they are declared.
                 ForEach(FixtureScenario.allCases) { scenario in
                     Button(scenario.rawValue) { recordFixture(scenario) }
                 }
             } label: {
-                Label("Record AEC Fixture…", systemImage: "record.circle.dashed")
+                Label("Record Fixture…", systemImage: "record.circle.dashed")
             }
             .disabled(controller.state.isRecording || fixtureRecorder.isBusy)
 

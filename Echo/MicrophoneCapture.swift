@@ -22,6 +22,16 @@ final class MicrophoneCapture: AudioCaptureSource {
     var onSamples: (@Sendable ([Float]) -> Void)?
     var onLevel: (@Sendable (CGFloat) -> Void)?
 
+    /// The untouched native-format tap buffer, delivered BEFORE the
+    /// downmix/resample below ever see it — the mic exactly as the device
+    /// handed it over. Exists for the DEBUG fixture recorder: SP-002
+    /// preserves multi-channel takes pre-downmix (mic-native.wav) so
+    /// ADR-004's downmix stays offline-testable against real device audio.
+    /// Invoked on the audio render thread; the engine reuses tap buffers, so
+    /// consumers must copy out synchronously. Nil (the normal case) costs a
+    /// single optional check per buffer.
+    var onRawBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
+
     /// Built per `start()`: a device change invalidates the old engine's
     /// input format, so restart = tear down + fresh engine on the new device.
     private var engine: AVAudioEngine?
@@ -83,6 +93,10 @@ final class MicrophoneCapture: AudioCaptureSource {
 
         input.installTap(onBus: 0, bufferSize: tapBufferSize, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
+
+            // Native-form hook first: the raw device buffer, before any
+            // downmix or resample (SP-002 fixture preservation).
+            self.onRawBuffer?(buffer)
 
             // Downmix to mono so every microphone on a multi-channel receiver
             // (e.g. both DJI transmitters) is captured, not just channel 0.
