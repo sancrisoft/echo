@@ -57,22 +57,36 @@ enum AudioLevelMeter {
 }
 
 enum AudioDownmixer {
-    /// Sums every channel of a non-interleaved Float buffer into a single mono
-    /// channel (averaged). Returns the buffer unchanged if it's already mono.
+    /// Downmixes a non-interleaved Float buffer to mono by per-sample
+    /// max-magnitude selection: each output frame is the channel sample with
+    /// the largest magnitude, sign preserved (ADR-004). Returns the buffer
+    /// unchanged if it's already mono.
     ///
     /// We do this manually instead of letting AVAudioConverter reduce channels,
     /// because multi-mic USB receivers (e.g. a DJI Mic Mini, with TX1 on channel
     /// 0 and TX2 on channel 1) often report no standard channel layout — and in
     /// that case AVAudioConverter keeps only channel 0, silently dropping the
-    /// other microphone(s). Averaging guarantees every transmitter is captured.
+    /// other microphone(s). Reading every channel ourselves guarantees no
+    /// transmitter is structurally dropped.
+    ///
+    /// Selection replaced the original channel averaging because averaging
+    /// attenuates a single active transmitter by 1/N — a 6 dB loss on a
+    /// two-channel receiver with one clip-on mic, SP-002's US-2 dropout
+    /// penalty. Max-magnitude passes a lone transmitter through at full
+    /// strength, keeps duplicated-stereo devices bit-identical (no boost, no
+    /// clip risk, unlike equal-weight summing), never destructively cancels,
+    /// and no output sample is quieter than the old average (ADR-004).
     static func toMono(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
         let channelCount = Int(buffer.format.channelCount)
         guard channelCount > 1 else { return buffer }
 
         // Requires a non-interleaved Float layout (the standard AVAudioEngine tap
-        // format). If it isn't, bail and let the caller fall back.
+        // format). If it isn't, bail and let the caller fall back — interleaved
+        // buffers expose stride-spaced channel pointers that the per-frame
+        // indexing below would misread.
         guard
             buffer.format.commonFormat == .pcmFormatFloat32,
+            !buffer.format.isInterleaved,
             let source = buffer.floatChannelData,
             let monoFormat = AVAudioFormat(
                 commonFormat: .pcmFormatFloat32,
@@ -86,14 +100,18 @@ enum AudioDownmixer {
         output.frameLength = buffer.frameLength
         let frameCount = Int(buffer.frameLength)
         let destination = output.floatChannelData![0]
-        let scale = 1 / Float(channelCount)
 
         for frame in 0..<frameCount {
-            var sum: Float = 0
+            // Largest-|value| sample wins the frame; ties keep the earliest
+            // channel, which is what makes duplicated stereo bit-identical.
+            var selected: Float = 0
             for channel in 0..<channelCount {
-                sum += source[channel][frame]
+                let sample = source[channel][frame]
+                if abs(sample) > abs(selected) {
+                    selected = sample
+                }
             }
-            destination[frame] = sum * scale
+            destination[frame] = selected
         }
         return output
     }
