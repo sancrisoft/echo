@@ -11,6 +11,16 @@
 		5CA2501A2FF3399500E2563C /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5CA250192FF3399500E2563C /* WhisperKit */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		5C1957642FF7494300B1AB7D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5CDE08D52FEA41D600DFAFA7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5CDE08DC2FEA41D600DFAFA7;
+			remoteInfo = Echo;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		5CDE08DD2FEA41D600DFAFA7 /* Echo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Echo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5CE570022FF5000000000002 /* EchoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EchoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -24,25 +34,53 @@
 		};
 		5CE570032FF5000000000003 /* EchoTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				5CE5700B2FF500000000000B /* Exceptions for "EchoTests" folder in "EchoTests" target */,
+			);
 			path = EchoTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
-/* Begin PBXFrameworksBuildPhase section */
-		5CE570062FF5000000000006 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		5CE5700B2FF500000000000B /* Exceptions for "EchoTests" folder in "EchoTests" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Fixtures/README.md,
+				"Fixtures/bleed-only/info.json",
+				"Fixtures/bleed-only/mic.wav",
+				"Fixtures/bleed-only/system.wav",
+				"Fixtures/double-talk/info.json",
+				"Fixtures/double-talk/mic.wav",
+				"Fixtures/double-talk/system.wav",
+				"Fixtures/double-talk-baseline/info.json",
+				"Fixtures/double-talk-baseline/mic.wav",
+				"Fixtures/double-talk-baseline/system.wav",
+				"Fixtures/monologue/info.json",
+				"Fixtures/monologue/mic.wav",
+				"Fixtures/monologue/system.wav",
+				"Fixtures/route-change/info.json",
+				"Fixtures/route-change/mic.wav",
+				"Fixtures/route-change/system.wav",
 			);
-			runOnlyForDeploymentPostprocessing = 0;
+			target = 5CE570012FF5000000000001 /* EchoTests */;
 		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFrameworksBuildPhase section */
 		5CDE08DA2FEA41D600DFAFA7 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				5CA2501A2FF3399500E2563C /* WhisperKit in Frameworks */,
 				5CA250182FF3399500E2563C /* SpeakerKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5CE570062FF5000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -160,14 +198,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		5CE570072FF5000000000007 /* Resources */ = {
+		5CDE08DB2FEA41D600DFAFA7 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		5CDE08DB2FEA41D600DFAFA7 /* Resources */ = {
+		5CE570072FF5000000000007 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -177,14 +215,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		5CE570052FF5000000000005 /* Sources */ = {
+		5CDE08D92FEA41D600DFAFA7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		5CDE08D92FEA41D600DFAFA7 /* Sources */ = {
+		5CE570052FF5000000000005 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -197,6 +235,7 @@
 		5CE570042FF5000000000004 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 5CDE08DC2FEA41D600DFAFA7 /* Echo */;
+			targetProxy = 5C1957642FF7494300B1AB7D /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
