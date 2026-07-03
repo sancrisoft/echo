@@ -16,6 +16,124 @@ import Foundation
 import WhisperKit
 import os
 
+/// Derived per-chunk audio metrics that the speech gates evaluate. A pure
+/// value of numbers — it never carries samples, which is what lets the gate
+/// diagnostics record (SP-002 NFR Privacy) embed it wholesale.
+nonisolated struct AudioStats: Sendable {
+
+    let rms: Float
+    let peak: Float
+    let activeRatio: Float
+    let speechWindowRatio: Float
+    let strongWindowRatio: Float
+    let noiseFloorRMS: Float
+    let dynamicRangeDB: Float
+    let crestFactor: Float
+
+    /// Conservative evidence that the chunk contains actual speech instead
+    /// of low-level residue/silence that Whisper may hallucinate over.
+    /// The individual thresholds live on `GateTerm` so the SP-002 gate
+    /// diagnostics report exactly the terms this decision runs on.
+    var hasClearSpeech: Bool {
+        GateTerm.clearSpeech.allSatisfy { $0.passes(self) }
+    }
+
+    var hasTranscribableSpeech: Bool {
+        hasClearSpeech || GateTerm.loudFallback.allSatisfy { $0.passes(self) }
+    }
+
+    var isMarginalSpeech: Bool {
+        !hasClearSpeech || rms < 0.014 || speechWindowRatio < 0.16
+    }
+
+    // MARK: - Computation
+
+    /// Analysis window for the energy probe (~30 ms). Shared with the
+    /// pipeline's VAD endpointing so gating and pause detection agree on
+    /// what a window is.
+    static let probeSamples = Int(AudioConstants.sampleRate * 0.03)
+
+    /// A window quieter than this (RMS) is treated as non-speech. Above the
+    /// `isSilent` floor so room tone / breaths still register as a pause.
+    static let pauseRMS: Float = 0.01
+
+    /// The production gate-metric computation, exposed as a pure function so
+    /// the SP-002 gate-diagnostics tests can replay audio through the exact
+    /// arithmetic the pipeline uses.
+    static func compute(from samples: [Float]) -> AudioStats {
+        guard !samples.isEmpty else {
+            return AudioStats(
+                rms: 0,
+                peak: 0,
+                activeRatio: 0,
+                speechWindowRatio: 0,
+                strongWindowRatio: 0,
+                noiseFloorRMS: 0,
+                dynamicRangeDB: 0,
+                crestFactor: 0
+            )
+        }
+
+        var sumSquares: Float = 0
+        var peak: Float = 0
+        for sample in samples {
+            sumSquares += sample * sample
+            peak = max(peak, abs(sample))
+        }
+
+        var windowRMS: [Float] = []
+        var activeWindows = 0
+        var totalWindows = 0
+        var start = 0
+        while start + probeSamples <= samples.count {
+            totalWindows += 1
+            let window = rms(samples, from: start, count: probeSamples)
+            windowRMS.append(window)
+            if window >= pauseRMS {
+                activeWindows += 1
+            }
+            start += probeSamples
+        }
+
+        let noiseFloor = percentile(windowRMS, fraction: 0.20)
+        let loudFloor = percentile(windowRMS, fraction: 0.90)
+        let speechThreshold = max(pauseRMS, noiseFloor * 2.4, 0.012)
+        let strongThreshold = max(noiseFloor * 3.2, 0.020)
+        let speechWindows = windowRMS.filter { $0 >= speechThreshold }.count
+        let strongWindows = windowRMS.filter { $0 >= strongThreshold }.count
+        let activeRatio = totalWindows > 0 ? Float(activeWindows) / Float(totalWindows) : 0
+        let speechRatio = totalWindows > 0 ? Float(speechWindows) / Float(totalWindows) : 0
+        let strongRatio = totalWindows > 0 ? Float(strongWindows) / Float(totalWindows) : 0
+        let dynamicRange = 20 * log10(max(loudFloor, 0.000_001) / max(noiseFloor, 0.000_001))
+        let totalRMS = (sumSquares / Float(samples.count)).squareRoot()
+        return AudioStats(
+            rms: totalRMS,
+            peak: peak,
+            activeRatio: activeRatio,
+            speechWindowRatio: speechRatio,
+            strongWindowRatio: strongRatio,
+            noiseFloorRMS: noiseFloor,
+            dynamicRangeDB: dynamicRange,
+            crestFactor: peak / max(totalRMS, 0.000_001)
+        )
+    }
+
+    /// RMS of the `count` samples starting at `start`.
+    static func rms(_ samples: [Float], from start: Int, count: Int) -> Float {
+        var sumSquares: Float = 0
+        for i in start..<(start + count) { sumSquares += samples[i] * samples[i] }
+        return (sumSquares / Float(count)).squareRoot()
+    }
+
+    private static func percentile(_ values: [Float], fraction: Double) -> Float {
+        guard !values.isEmpty else { return 0 }
+        let sorted = values.sorted()
+        let clamped = min(max(fraction, 0), 1)
+        let index = Int((Double(sorted.count - 1) * clamped).rounded())
+        return sorted[index]
+    }
+}
+
 actor TranscriptionPipeline {
 
     static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "TranscriptionPipeline")
@@ -32,11 +150,11 @@ actor TranscriptionPipeline {
 
     // VAD endpointing — what counts as "the speaker stopped".
 
-    /// Analysis window for the energy probe (~30 ms).
-    private let probeSamples = Int(AudioConstants.sampleRate * 0.03)
-    /// A window quieter than this (RMS) is treated as non-speech. Above the
-    /// `isSilent` floor so room tone / breaths still register as a pause.
-    private let pauseRMS: Float = 0.01
+    /// Endpointing shares its probe window and non-speech floor with the
+    /// gate-metric computation (`AudioStats`), so pauses and speech windows
+    /// are measured identically.
+    private let probeSamples = AudioStats.probeSamples
+    private let pauseRMS = AudioStats.pauseRMS
     /// A trailing run of silence this long marks the end of an utterance, so we
     /// cut here. 0.5 s clears normal between-word gaps (<200 ms) but catches
     /// clause/sentence boundaries.
@@ -88,36 +206,6 @@ actor TranscriptionPipeline {
         var partialRequestID = 0
     }
 
-    private struct AudioStats {
-        let rms: Float
-        let peak: Float
-        let activeRatio: Float
-        let speechWindowRatio: Float
-        let strongWindowRatio: Float
-        let noiseFloorRMS: Float
-        let dynamicRangeDB: Float
-        let crestFactor: Float
-
-        /// Conservative evidence that the chunk contains actual speech instead
-        /// of low-level residue/silence that Whisper may hallucinate over.
-        var hasClearSpeech: Bool {
-            rms >= 0.010
-                && peak >= 0.035
-                && speechWindowRatio >= 0.10
-                && crestFactor >= 2.0
-                && (dynamicRangeDB >= 4.0 || strongWindowRatio >= 0.06)
-        }
-
-        var hasTranscribableSpeech: Bool {
-            hasClearSpeech
-                || (rms >= 0.018 && peak >= 0.055 && speechWindowRatio >= 0.18)
-        }
-
-        var isMarginalSpeech: Bool {
-            !hasClearSpeech || rms < 0.014 || speechWindowRatio < 0.16
-        }
-    }
-
     private struct PartialSnapshot {
         let audio: [Float]
         let stats: AudioStats
@@ -131,6 +219,16 @@ actor TranscriptionPipeline {
     private var system = ChannelBuffer()
     private var sessionGeneration = 0
     private var nextPartialRequestID = 0
+
+    /// Receives one record per finalized-chunk gate decision (SP-002 US-12).
+    private let gateDiagnostics: any GateDiagnosticsSink
+
+    /// The sink defaults to the permanent os.Logger diagnostic; tests and the
+    /// input-health classifier (ADR-006) inject their own to observe gate
+    /// decisions in-process.
+    init(gateDiagnostics: any GateDiagnosticsSink = OSLogGateDiagnosticsSink()) {
+        self.gateDiagnostics = gateDiagnostics
+    }
 
     private func speaker(for channel: AudioChannel) -> Speaker {
         channel == .microphone ? .me : .teammates
@@ -202,7 +300,7 @@ actor TranscriptionPipeline {
         let windowCount = min(sampleCount, partialWindowSamples)
         let windowStart = sampleCount - windowCount
         let audio = Array(buffer.samples[windowStart..<sampleCount])
-        let stats = audioStats(audio)
+        let stats = AudioStats.compute(from: audio)
         guard shouldTranscribe(stats, from: channel) else { return nil }
 
         nextPartialRequestID += 1
@@ -332,6 +430,18 @@ actor TranscriptionPipeline {
         if !loaded { await preload(updating: state) }
     }
 
+    #if DEBUG
+    /// Test seam (SP-002 S1): marks the pipeline ready to ingest without a
+    /// Whisper model, so gate-diagnostics tests can drive the real
+    /// ingest → endpoint → gate path. Chunks the gate drops never reach the
+    /// transcriber, and `emit`/`maybeEmitPartial` already tolerate a nil
+    /// `whisper`, so nothing is mocked. Production readiness only ever comes
+    /// from `preload`.
+    func prepareForGateTestingWithoutTranscriber() {
+        loaded = true
+    }
+    #endif
+
     /// Flush whatever is left in both buffers at the end of the session.
     func stop() async {
         sessionGeneration += 1
@@ -378,7 +488,7 @@ actor TranscriptionPipeline {
         var silent = 0
         var end = samples.count
         while end - probeSamples >= 0 {
-            if rms(samples, from: end - probeSamples, count: probeSamples) >= pauseRMS { break }
+            if AudioStats.rms(samples, from: end - probeSamples, count: probeSamples) >= pauseRMS { break }
             silent += probeSamples
             end -= probeSamples
         }
@@ -397,7 +507,7 @@ actor TranscriptionPipeline {
         var bestCut = samples.count
         var i = lo
         while i <= hi {
-            let value = rms(samples, from: i, count: probeSamples)
+            let value = AudioStats.rms(samples, from: i, count: probeSamples)
             if value < bestRMS {
                 bestRMS = value
                 bestCut = i + probeSamples / 2   // cut through the middle of the gap
@@ -405,12 +515,6 @@ actor TranscriptionPipeline {
             i += probeSamples
         }
         return bestCut
-    }
-
-    private func rms(_ samples: [Float], from start: Int, count: Int) -> Float {
-        var sumSquares: Float = 0
-        for i in start..<(start + count) { sumSquares += samples[i] * samples[i] }
-        return (sumSquares / Float(count)).squareRoot()
     }
 
     // MARK: - Transcription
@@ -448,8 +552,18 @@ actor TranscriptionPipeline {
             generation: partialGeneration
         )
 
-        let stats = audioStats(chunk)
-        guard shouldTranscribe(stats, from: channel) else { return }
+        let stats = AudioStats.compute(from: chunk)
+        // One diagnostic record per finalized-chunk gate decision, for both
+        // verdicts (SP-002 US-12). Partial-preview gate checks are deliberately
+        // not recorded: they re-measure rolling windows of this same audio and
+        // would double-count it for the input-health classifier (ADR-006).
+        let decision = GateDecisionRecord(
+            channel: channel,
+            chunkDuration: Double(chunk.count) / AudioConstants.sampleRate,
+            stats: stats
+        )
+        gateDiagnostics.record(decision)
+        guard decision.verdict == .transcribe else { return }
         guard let whisper else { return }
         let results: [TranscriptionResult]
         do {
@@ -611,85 +725,13 @@ actor TranscriptionPipeline {
             .filter { !$0.isEmpty }
     }
 
-    private func audioStats(_ samples: [Float]) -> AudioStats {
-        guard !samples.isEmpty else {
-            return AudioStats(
-                rms: 0,
-                peak: 0,
-                activeRatio: 0,
-                speechWindowRatio: 0,
-                strongWindowRatio: 0,
-                noiseFloorRMS: 0,
-                dynamicRangeDB: 0,
-                crestFactor: 0
-            )
-        }
-
-        var sumSquares: Float = 0
-        var peak: Float = 0
-        for sample in samples {
-            sumSquares += sample * sample
-            peak = max(peak, abs(sample))
-        }
-
-        var windowRMS: [Float] = []
-        var activeWindows = 0
-        var totalWindows = 0
-        var start = 0
-        while start + probeSamples <= samples.count {
-            totalWindows += 1
-            let window = rms(samples, from: start, count: probeSamples)
-            windowRMS.append(window)
-            if window >= pauseRMS {
-                activeWindows += 1
-            }
-            start += probeSamples
-        }
-
-        let noiseFloor = percentile(windowRMS, fraction: 0.20)
-        let loudFloor = percentile(windowRMS, fraction: 0.90)
-        let speechThreshold = max(pauseRMS, noiseFloor * 2.4, 0.012)
-        let strongThreshold = max(noiseFloor * 3.2, 0.020)
-        let speechWindows = windowRMS.filter { $0 >= speechThreshold }.count
-        let strongWindows = windowRMS.filter { $0 >= strongThreshold }.count
-        let activeRatio = totalWindows > 0 ? Float(activeWindows) / Float(totalWindows) : 0
-        let speechRatio = totalWindows > 0 ? Float(speechWindows) / Float(totalWindows) : 0
-        let strongRatio = totalWindows > 0 ? Float(strongWindows) / Float(totalWindows) : 0
-        let dynamicRange = 20 * log10(max(loudFloor, 0.000_001) / max(noiseFloor, 0.000_001))
-        let totalRMS = (sumSquares / Float(samples.count)).squareRoot()
-        return AudioStats(
-            rms: totalRMS,
-            peak: peak,
-            activeRatio: activeRatio,
-            speechWindowRatio: speechRatio,
-            strongWindowRatio: strongRatio,
-            noiseFloorRMS: noiseFloor,
-            dynamicRangeDB: dynamicRange,
-            crestFactor: peak / max(totalRMS, 0.000_001)
-        )
-    }
-
     /// True only when the audio has enough speech-like structure to be worth
     /// sending to Whisper. This is intentionally stricter than a silence check:
     /// high ambient noise can be loud, but it should not become transcript text.
+    /// Delegates to the term-level evaluation in `GateDiagnostics.swift` so the
+    /// per-chunk diagnostics (SP-002 US-12) describe this exact decision.
     private func shouldTranscribe(_ stats: AudioStats, from channel: AudioChannel) -> Bool {
-        if stats.rms < 0.004 || stats.peak < 0.020 { return false }
-
-        switch channel {
-        case .microphone:
-            return stats.hasTranscribableSpeech
-        case .system:
-            return stats.hasTranscribableSpeech
-                || (stats.rms >= 0.008 && stats.peak >= 0.030 && stats.speechWindowRatio >= 0.08)
-        }
-    }
-
-    private func percentile(_ values: [Float], fraction: Double) -> Float {
-        guard !values.isEmpty else { return 0 }
-        let sorted = values.sorted()
-        let clamped = min(max(fraction, 0), 1)
-        let index = Int((Double(sorted.count - 1) * clamped).rounded())
-        return sorted[index]
+        GateDecisionRecord.verdict(for: stats, on: channel) == .transcribe
     }
 
     private func unsupportedLetterRatio(in text: String) -> Double {
