@@ -15,6 +15,78 @@ import AppKit
 import UniformTypeIdentifiers
 import os
 
+/// Measures real mic-capture gaps for SP-002's "input switch mid-recording"
+/// criterion: wall time in which the mic channel captured nothing while the
+/// Team channel kept running. `RecordingController` opens an episode when it
+/// takes the mic down (device-switch rebuild, lost-device degradation, or a
+/// session that starts with no input device), and the first delivered batch
+/// afterwards closes it; the measured gap is reported to
+/// `TranscriptionPipeline.noteCaptureGap` so the mic clock stays wall-aligned
+/// with the Team channel (SP-001's 100 ms skew budget, ADR-003's timing gate).
+///
+/// `ContinuousClock` on purpose: the gap feeds a clock *correction*, so the
+/// measurement must be monotonic — wall-clock `Date` drifts and jumps with
+/// NTP/user changes.
+///
+/// Thread-safety: `noteDelivery` runs on the mic capture callback while
+/// `beginEpisode` runs on the main actor, so state is lock-guarded (the same
+/// pattern as the diagnostics sinks); the per-batch cost is one uncontended
+/// lock acquisition.
+nonisolated final class MicCaptureGapTracker: @unchecked Sendable {
+
+    private let lock = NSLock()
+    /// Instant of the most recent delivered batch ≈ the end of the last
+    /// audio that actually reached the pipeline (a tap delivers a buffer as
+    /// soon as its last sample is captured).
+    private var lastDeliveryEnd: ContinuousClock.Instant?
+    /// Set while the mic is (about to be) down; cleared by the delivery
+    /// that closes the episode.
+    private var episodeStart: ContinuousClock.Instant?
+
+    /// Marks the mic as going down (engine teardown, device lost, or a
+    /// degraded no-device session start). Idempotent within an episode: with
+    /// no delivery in between, chained teardowns (a failed restart followed
+    /// by another under device churn) keep the earliest instant, so one
+    /// continuous outage measures as one gap.
+    func beginEpisode(now: ContinuousClock.Instant = .now) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard episodeStart == nil else { return }
+        episodeStart = now
+    }
+
+    /// Records one delivered mic batch (`batchDuration` seconds of audio
+    /// ending at `now`). Returns the measured capture gap when this batch is
+    /// the first after a pending episode, `nil` on the steady-state path.
+    ///
+    /// The gap is the ingest-timeline hole: from the end of the last
+    /// *delivered* audio (a torn-down tap drops its partially filled buffer,
+    /// so captured-but-undelivered audio is honestly part of the hole — and
+    /// a device that died before its loss was noticed stopped delivering at
+    /// death, not at the notice) to the start of this batch's audio, which
+    /// began `batchDuration` before its delivery.
+    func noteDelivery(batchDuration: TimeInterval, now: ContinuousClock.Instant = .now) -> TimeInterval? {
+        lock.lock()
+        defer { lock.unlock() }
+        let previousEnd = lastDeliveryEnd
+        let episode = episodeStart
+        lastDeliveryEnd = now
+        episodeStart = nil
+        guard let episode else { return nil }
+
+        let holeStart = previousEnd ?? episode
+        let gap = Self.seconds(holeStart.duration(to: now)) - batchDuration
+        // An episode resolved within one batch left no positive hole in the
+        // ingest timeline — nothing to declare.
+        return gap > 0 ? gap : nil
+    }
+
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        let parts = duration.components
+        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+    }
+}
+
 @Observable
 @MainActor
 final class RecordingController {
@@ -35,6 +107,11 @@ final class RecordingController {
     // Serializes engine rebuilds under device churn: each restart awaits the
     // previous one, so two rebuilds can never interleave.
     private var micRestartTask: Task<Void, Never>?
+    // Per-session (built in `wireCallbacks`): measures how long the mic
+    // channel captured nothing across device-change rebuilds and lost-device
+    // episodes, so the pipeline's mic clock can be realigned (SP-002 "input
+    // switch mid-recording"; SP-001 100 ms skew budget).
+    private var micGapTracker: MicCaptureGapTracker?
     // Per-session (built in `startEchoHandling`): wraps a fresh engine stage
     // and applies the mode machine's current mode to the audio path.
     private var switchingStage: SwitchingAECStage?
@@ -163,12 +240,26 @@ final class RecordingController {
         // Capture `state`/`pipeline`/`aecStage` directly (not `self`) so these
         // real-time audio callbacks don't race on the controller's `self`
         // reference.
+        let gapTracker = MicCaptureGapTracker()   // fresh per session: no stale episodes
+        micGapTracker = gapTracker
         mic.onLevel = { [state] level in
             Task { @MainActor in state.pushInput(level) }
         }
         mic.onSamples = { [pipeline] frames in
+            // Every batch feeds the gap tracker at arrival; the first one
+            // after a mic outage closes the episode and carries the measured
+            // gap.
+            let gap = gapTracker.noteDelivery(
+                batchDuration: Double(frames.count) / AudioConstants.sampleRate
+            )
             let cleaned = aecStage.processMicSamples(frames)
-            Task { await pipeline.ingest(cleaned, from: .microphone) }
+            // Gap and audio go to the pipeline in one task so the clock
+            // realignment always lands immediately before the first post-gap
+            // samples, never after them.
+            Task {
+                if let gap { await pipeline.noteCaptureGap(seconds: gap, on: .microphone) }
+                await pipeline.ingest(cleaned, from: .microphone)
+            }
         }
         system.onLevel = { [state] level in
             Task { @MainActor in state.pushOutput(level) }
@@ -304,7 +395,13 @@ final class RecordingController {
     /// instead of ending it (SP-002 Reliability); permission denial still
     /// aborts the session exactly as before.
     private func startMicIfExpected() async throws {
-        guard inputLifecycle?.expectsMicCapture == true else { return }
+        guard inputLifecycle?.expectsMicCapture == true else {
+            // Team-only start: the mic channel is silent from the session's
+            // first moment. Open the gap episode now so a device appearing
+            // later realigns the mic clock over the whole silent stretch.
+            micGapTracker?.beginEpisode()
+            return
+        }
         do {
             try await mic.start()
         } catch MicrophoneCapture.CaptureError.noInputDevice {
@@ -337,6 +434,11 @@ final class RecordingController {
                 // re-converges on the new device.
                 switchingStage?.reset()
             case .stopMicCapture:
+                // The mic goes down for an unbounded episode (device lost /
+                // capture failed) while Team keeps running: open the gap
+                // episode so the eventual recovery reports the full outage
+                // to the pipeline clock.
+                micGapTracker?.beginEpisode()
                 mic.stop()
             case .showMicUnavailableNotice:
                 state.applyInputDeviceNotice(InputDeviceNotice.micUnavailableMessage)
@@ -362,6 +464,10 @@ final class RecordingController {
                   self.inputLifecycle?.expectsMicCapture == true
             else { return }
 
+            // Teardown begins here — not at the device event: the old
+            // engine keeps delivering until this stop, and the tracker's
+            // last-delivery edge must stay fresh up to the real teardown.
+            self.micGapTracker?.beginEpisode()
             self.mic.stop()
             do {
                 try await self.mic.start()

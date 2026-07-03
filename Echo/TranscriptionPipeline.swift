@@ -465,6 +465,63 @@ actor TranscriptionPipeline {
         await maybeEmitPartial(channel)
     }
 
+    // MARK: - Capture-gap clock realignment (SP-002 "input switch mid-recording")
+
+    /// Advances `channel`'s clock past a measured capture gap — wall time in
+    /// which the channel captured nothing (a device-switch engine rebuild, a
+    /// lost-device episode). The clock otherwise advances purely by ingested
+    /// sample count, so an unreported gap would lag every later timestamp on
+    /// this channel by the gap duration, cumulatively across switches —
+    /// breaking SP-001's 100 ms cross-channel skew budget and the cross-channel
+    /// alignment ADR-003's 2.5 s dedup timing gate depends on.
+    ///
+    /// Samples pending when the gap is declared (the mic died mid-utterance)
+    /// are force-finalized as their own pre-gap chunk rather than left to
+    /// merge with post-gap audio: a merged chunk would hand Whisper one
+    /// splice whose within-chunk timestamps place every post-gap word up to
+    /// the full gap too early and whose recorded duration misstates its wall
+    /// span — exactly the mis-attributed segment starts ADR-003's timing
+    /// gate cannot survive. The device was dead in between, so the two spans
+    /// are separate utterances anyway. The flush takes the normal
+    /// gate → transcribe path (like the end-of-session flush in `stop()`,
+    /// which already emits sub-`minSamples` chunks), so declared gaps never
+    /// lose pre-gap audio.
+    ///
+    /// Channel-scoped and additive: the other channel is never touched, and a
+    /// session that never declares a gap behaves exactly as before.
+    func noteCaptureGap(seconds: TimeInterval, on channel: AudioChannel) async {
+        // Mirrors `ingest`: audio is dropped until the models are ready, and
+        // while both channels drop audio their clocks are frozen together, so
+        // a pre-load gap must be dropped too or it would *introduce* skew.
+        guard loaded else { return }
+        // Only real dead time may move a clock, and never backward: monotonic
+        // segment timestamps are part of the SP-002 switch criterion. Also
+        // rejects NaN/infinity from a broken measurement.
+        guard seconds > 0, seconds.isFinite else { return }
+
+        // Detach the pre-gap audio and advance the clock with no `await` in
+        // between (same discipline as `detachChunk`): a reentrant `ingest`
+        // can only ever observe the clock fully pre-gap or fully post-gap,
+        // never a pending buffer straddling a half-applied gap.
+        let pending = detachChunk(channel, count: pendingSamples(channel).count)
+        advanceClock(by: seconds, on: channel)
+        Self.log.info("""
+        \(channel.rawValue, privacy: .public) capture gap: clock advanced by \
+        \(String(format: "%.3f", seconds), privacy: .public)s\
+        \(pending == nil ? "" : ", pending pre-gap audio finalized", privacy: .public)
+        """)
+        if let pending {
+            await finalize(pending.chunk, at: pending.offset, on: channel)
+        }
+    }
+
+    private func advanceClock(by seconds: TimeInterval, on channel: AudioChannel) {
+        switch channel {
+        case .microphone: mic.chunkStart += seconds
+        case .system: system.chunkStart += seconds
+        }
+    }
+
     // MARK: - VAD endpointing
 
     /// Decides where (if anywhere) the pending buffer should be cut right now.
@@ -545,6 +602,14 @@ actor TranscriptionPipeline {
     /// them, and appends the resulting segments. Shared by both channels.
     private func emit(_ channel: AudioChannel, count: Int) async {
         guard let (chunk, offset) = detachChunk(channel, count: count) else { return }
+        await finalize(chunk, at: offset, on: channel)
+    }
+
+    /// Runs an already-detached chunk through partial invalidation, the gate
+    /// decision (recording it — SP-002 US-12), and transcription. Split from
+    /// `emit` so the capture-gap path can detach pre-gap audio and advance
+    /// the clock synchronously before this suspends.
+    private func finalize(_ chunk: [Float], at offset: TimeInterval, on channel: AudioChannel) async {
         let partialGeneration = invalidatePartial(for: channel)
         await state?.clearPartial(
             for: channel,
@@ -560,6 +625,7 @@ actor TranscriptionPipeline {
         let decision = GateDecisionRecord(
             channel: channel,
             chunkDuration: Double(chunk.count) / AudioConstants.sampleRate,
+            chunkStartOffset: offset,
             stats: stats
         )
         gateDiagnostics.record(decision)

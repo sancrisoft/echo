@@ -109,8 +109,16 @@ nonisolated struct GateDecisionRecord: Sendable {
 
     let channel: AudioChannel
     /// Seconds of audio in the finalized chunk (1–12 s by pipeline tuning,
-    /// shorter only for the end-of-session flush).
+    /// shorter only for the end-of-session and capture-gap flushes).
     let chunkDuration: TimeInterval
+    /// Where the chunk starts on its channel's session timeline — seconds
+    /// since the channel's first ingested sample, capture-gap realignment
+    /// included (SP-002 "input switch mid-recording"). With `chunkDuration`
+    /// this makes every chunk's position reconstructable from the log alone,
+    /// and it exposes the channel clock to the gate tests as a public
+    /// observable. Defaults to 0 for directly-constructed records in
+    /// decision-only contexts where timeline position is irrelevant.
+    let chunkStartOffset: TimeInterval
     /// The full derived-metric set the gates evaluated.
     let stats: AudioStats
     let verdict: GateVerdict
@@ -119,9 +127,15 @@ nonisolated struct GateDecisionRecord: Sendable {
     /// so per-chunk level-vs-shape failure profiles stay readable (SP-002 OQ1).
     let failedTerms: [GateTerm]
 
-    init(channel: AudioChannel, chunkDuration: TimeInterval, stats: AudioStats) {
+    init(
+        channel: AudioChannel,
+        chunkDuration: TimeInterval,
+        chunkStartOffset: TimeInterval = 0,
+        stats: AudioStats
+    ) {
         self.channel = channel
         self.chunkDuration = chunkDuration
+        self.chunkStartOffset = chunkStartOffset
         self.stats = stats
         self.verdict = Self.verdict(for: stats, on: channel)
         self.failedTerms = GateTerm.applicableTerms(for: channel).filter { !$0.passes(stats) }
@@ -179,9 +193,10 @@ nonisolated struct OSLogGateDiagnosticsSink: GateDiagnosticsSink {
             ? "none"
             : record.failedTerms.map(\.rawValue).joined(separator: "+")
         return String(
-            format: "gate %@ %@ dur=%.2fs rms=%.4f peak=%.4f crest=%.1f speech=%.2f strong=%.2f active=%.2f floor=%.4f dyn=%.1fdB failed=%@",
+            format: "gate %@ %@ t=%.2fs dur=%.2fs rms=%.4f peak=%.4f crest=%.1f speech=%.2f strong=%.2f active=%.2f floor=%.4f dyn=%.1fdB failed=%@",
             record.channel.rawValue,
             record.verdict.rawValue,
+            record.chunkStartOffset,
             record.chunkDuration,
             stats.rms,
             stats.peak,
