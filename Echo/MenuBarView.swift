@@ -91,6 +91,12 @@ struct MenuBarView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let notice = controller.state.inputNotice {
+                Label(notice, systemImage: "mic.slash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Button(role: .destructive) {
                 Task {
                     await controller.toggle()   // stop

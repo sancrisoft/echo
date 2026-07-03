@@ -52,6 +52,11 @@ final class RecordingState {
     /// (SP-001 US-7); `nil` whenever echo handling is healthy.
     private(set) var echoNotice: String?
 
+    /// Notice while the microphone is unavailable and the session continues
+    /// with meeting audio only (SP-002 Reliability); `nil` whenever mic
+    /// capture is healthy.
+    private(set) var inputNotice: String?
+
     func updateStatus(_ text: String) { status = text }
 
     init() {
@@ -80,6 +85,7 @@ final class RecordingState {
         isRecording = false
         startedAt = nil
         echoNotice = nil
+        inputNotice = nil
         inputLevels = Array(repeating: Self.idleLevel, count: barCount)
         outputLevels = Array(repeating: Self.idleLevel, count: barCount)
         partialSegments.removeAll()
@@ -91,6 +97,13 @@ final class RecordingState {
 
     func applyEchoHandlingEffect(_ effect: EchoModeMachine.Effect) {
         echoNotice = EchoDegradationNotice.notice(after: effect)
+    }
+
+    // MARK: - Input-device handling (called by RecordingController)
+
+    /// Raise (`String`) or clear (`nil`) the mic-unavailable notice (SP-002).
+    func applyInputDeviceNotice(_ notice: String?) {
+        inputNotice = notice
     }
 
     // MARK: - Summary ingestion (called by RecordingController)

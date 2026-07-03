@@ -28,6 +28,13 @@ final class RecordingController {
     private let pipeline = TranscriptionPipeline()
     private let routeMonitor = OutputRouteMonitor()
     private var echoMode: EchoModeMachine?
+    private let inputMonitor = InputDeviceMonitor()
+    // Per-session (built in `startInputDeviceHandling`): maps default-input
+    // device events to mic restart / Team-only degradation actions (SP-002).
+    private var inputLifecycle: InputDeviceLifecycleMachine?
+    // Serializes engine rebuilds under device churn: each restart awaits the
+    // previous one, so two rebuilds can never interleave.
+    private var micRestartTask: Task<Void, Never>?
     // Per-session (built in `startEchoHandling`): wraps a fresh engine stage
     // and applies the mode machine's current mode to the audio path.
     private var switchingStage: SwitchingAECStage?
@@ -66,10 +73,11 @@ final class RecordingController {
         let aecStage = startEchoHandling()
         wireCallbacks(aecStage: aecStage)
         state.markStarted()
+        startInputDeviceHandling()
 
         do {
             await pipeline.start(appendingTo: state)
-            try await mic.start()
+            try await startMicIfExpected()
             try await system.start()
             state.status = ""
         } catch {
@@ -102,6 +110,9 @@ final class RecordingController {
     }
 
     private func stop(summarize: Bool) async {
+        // First: no input-device event or in-flight restart may revive the
+        // mic once teardown begins.
+        await stopInputDeviceHandling()
         mic.stop()
         system.stop()
         stopEchoHandling()
@@ -255,6 +266,112 @@ final class RecordingController {
         }
         if let effect {
             state.applyEchoHandlingEffect(effect)
+        }
+    }
+
+    // MARK: - Input-device handling (SP-002)
+
+    /// Builds the session's input-device machine and starts following the
+    /// default input. Never touches the system/Team capture path: the
+    /// machine's actions can only restart/stop the mic, reset echo
+    /// processing, and drive the mic-unavailable notice.
+    private func startInputDeviceHandling() {
+        var machine = InputDeviceLifecycleMachine()
+        let actions = machine.handle(.recordingStarted(device: inputMonitor.currentDefaultInputDevice()))
+        inputLifecycle = machine
+        inputMonitor.onDefaultInputChange = { [weak self] device in
+            self?.handleInputLifecycleEvent(.defaultInputChanged(device))
+        }
+        inputMonitor.start()
+        apply(inputActions: actions)
+    }
+
+    private func stopInputDeviceHandling() async {
+        inputMonitor.stop()
+        inputMonitor.onDefaultInputChange = nil
+        micRestartTask?.cancel()
+        // Wait out any in-flight rebuild so nothing races the session teardown.
+        _ = await micRestartTask?.value
+        micRestartTask = nil
+        if var machine = inputLifecycle {
+            apply(inputActions: machine.handle(.recordingStopped))
+        }
+        inputLifecycle = nil
+    }
+
+    /// Starts mic capture unless the session already degraded to Team-only
+    /// (no input device at start). A no-device failure degrades the session
+    /// instead of ending it (SP-002 Reliability); permission denial still
+    /// aborts the session exactly as before.
+    private func startMicIfExpected() async throws {
+        guard inputLifecycle?.expectsMicCapture == true else { return }
+        do {
+            try await mic.start()
+        } catch MicrophoneCapture.CaptureError.noInputDevice {
+            // The device vanished between the monitor read and engine start.
+            handleInputLifecycleEvent(.micCaptureFailed)
+        }
+    }
+
+    private func handleInputLifecycleEvent(_ event: InputDeviceLifecycleMachine.Event) {
+        guard var machine = inputLifecycle else { return }
+        let actions = machine.handle(event)
+        inputLifecycle = machine
+        guard !actions.isEmpty else { return }
+
+        Self.log.info("""
+        Input-device event: \(String(describing: event), privacy: .public) → \
+        \(String(describing: actions), privacy: .public)
+        """)
+        apply(inputActions: actions)
+    }
+
+    private func apply(inputActions actions: [InputDeviceLifecycleMachine.Action]) {
+        for action in actions {
+            switch action {
+            case .restartMicCapture:
+                scheduleMicRestart()
+            case .resetEchoProcessing:
+                // SP-002 inherits SP-001's discipline: on every input-device
+                // change the canceller drops its adaptation state and
+                // re-converges on the new device.
+                switchingStage?.reset()
+            case .stopMicCapture:
+                mic.stop()
+            case .showMicUnavailableNotice:
+                state.applyInputDeviceNotice(InputDeviceNotice.micUnavailableMessage)
+            case .clearMicUnavailableNotice:
+                state.applyInputDeviceNotice(nil)
+            }
+        }
+    }
+
+    /// Rebuilds mic capture on the current default device. Runs as a task
+    /// because the handler is synchronous; the synchronous `reset` in
+    /// `apply(inputActions:)` therefore always lands before the new device's
+    /// first frames. Restarts are chained so rapid device churn can never
+    /// interleave two engine rebuilds.
+    private func scheduleMicRestart() {
+        let generation = sessionGeneration
+        let previous = micRestartTask
+        micRestartTask = Task { @MainActor [weak self] in
+            _ = await previous?.value
+            guard let self, !Task.isCancelled,
+                  self.sessionGeneration == generation,
+                  self.state.isRecording,
+                  self.inputLifecycle?.expectsMicCapture == true
+            else { return }
+
+            self.mic.stop()
+            do {
+                try await self.mic.start()
+                Self.log.info("Mic capture restarted on the new input device")
+            } catch {
+                Self.log.error("""
+                Mic restart failed: \(error.localizedDescription, privacy: .public)
+                """)
+                self.handleInputLifecycleEvent(.micCaptureFailed)
+            }
         }
     }
 }
