@@ -26,53 +26,6 @@
 		5CE570022FF5000000000002 /* EchoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EchoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		5CE5700B2FF500000000000B /* Exceptions for "EchoTests" folder in "EchoTests" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				"Fixtures/bleed-only/info.json",
-				"Fixtures/bleed-only/mic.wav",
-				"Fixtures/bleed-only/system.wav",
-				"Fixtures/double-talk-baseline/info.json",
-				"Fixtures/double-talk-baseline/mic.wav",
-				"Fixtures/double-talk-baseline/system.wav",
-				"Fixtures/double-talk/info.json",
-				"Fixtures/double-talk/mic.wav",
-				"Fixtures/double-talk/system.wav",
-				Fixtures/monologue/info.json,
-				Fixtures/monologue/mic.wav,
-				Fixtures/monologue/system.wav,
-				Fixtures/README.md,
-				"Fixtures/route-change/info.json",
-				"Fixtures/route-change/mic.wav",
-				"Fixtures/route-change/system.wav",
-				"Fixtures/parity-baseline-builtin/info.json",
-				"Fixtures/parity-baseline-builtin/mic.wav",
-				"Fixtures/parity-baseline-builtin/system.wav",
-				"Fixtures/parity-dji-2cm/info.json",
-				"Fixtures/parity-dji-2cm/mic.wav",
-				"Fixtures/parity-dji-2cm/mic-native.wav",
-				"Fixtures/parity-dji-2cm/system.wav",
-				"Fixtures/parity-dji-20cm/info.json",
-				"Fixtures/parity-dji-20cm/mic.wav",
-				"Fixtures/parity-dji-20cm/mic-native.wav",
-				"Fixtures/parity-dji-20cm/system.wav",
-				"Fixtures/parity-dji-50cm/info.json",
-				"Fixtures/parity-dji-50cm/mic.wav",
-				"Fixtures/parity-dji-50cm/mic-native.wav",
-				"Fixtures/parity-dji-50cm/system.wav",
-				"Fixtures/earbuds-in-out/info.json",
-				"Fixtures/earbuds-in-out/mic.wav",
-				"Fixtures/earbuds-in-out/system.wav",
-				"Fixtures/external-ambient/info.json",
-				"Fixtures/external-ambient/mic.wav",
-				"Fixtures/external-ambient/mic-native.wav",
-				"Fixtures/external-ambient/system.wav",
-			);
-			target = 5CE570012FF5000000000001 /* EchoTests */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		5CDE08DF2FEA41D600DFAFA7 /* Echo */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
@@ -81,9 +34,6 @@
 		};
 		5CE570032FF5000000000003 /* EchoTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				5CE5700B2FF500000000000B /* Exceptions for "EchoTests" folder in "EchoTests" target */,
-			);
 			path = EchoTests;
 			sourceTree = "<group>";
 		};
