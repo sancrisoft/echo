@@ -26,6 +26,8 @@ DerivedData/
 # local models
 .local-models
 
-# Test target — local-only, intentionally not tracked (run tests locally;
-# not shipped in the repo or the app bundle).
-EchoTests/
+# Test fixtures — real recorded audio, local-only (never shipped in the repo).
+# Test sources ARE tracked as of 2026-07-13; only fixtures and generated
+# reports stay local.
+EchoTests/Fixtures/
+EchoTests/sp002-measure-report.txt
