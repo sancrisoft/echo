@@ -3,8 +3,11 @@
 //  Echo
 //
 //  Generates a grounded meeting summary from final transcript segments only.
-//  The local LLM is served by llama.cpp's OpenAI-compatible API and streamed
-//  back as NDJSON (one JSON object per line) so the UI can fill in progressively.
+//  The local LLM runs in-process (MLX, behind the TextGenerating seam) and
+//  streams NDJSON (one JSON object per line) so the UI can fill in
+//  progressively. Every completed line passes NDJSONLineValidator before
+//  touching the accumulator — the structured-output guarantee the retired
+//  GBNF grammar used to provide at the sampler.
 //
 
 import Foundation
@@ -14,18 +17,24 @@ actor SummarizationPipeline {
 
     static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "SummarizationPipeline")
 
-    private let endpoint = URL(string: "http://127.0.0.1:8080/v1/chat/completions")!
-    private let model = "echo-gemma-summary"
-    private let timeout: TimeInterval = 600
+    /// Single-pass context parity with the retired server runtime (ctx 32768):
+    /// past this estimate we log and continue — Gemma 4 holds 256K, and real
+    /// scaling (chunking/map-reduce) is SPEC-05.
+    private static let promptTokenBudget = 28_000
 
     /// Streams progressively-more-complete summaries as the model emits NDJSON
     /// lines. Each element is a snapshot of everything parsed so far; the final
-    /// element is the complete summary. Throws on transport/protocol failures.
-    func generate(from segments: [TranscriptSegment]) -> AsyncThrowingStream<MeetingSummary, Error> {
+    /// element is the complete summary. Throws on engine/protocol failures.
+    /// The engine is injected per call so tests can drive the full streaming
+    /// path with a scripted TextGenerating fake.
+    func generate(
+        from segments: [TranscriptSegment],
+        using engine: any TextGenerating
+    ) -> AsyncThrowingStream<MeetingSummary, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    try await self.run(from: segments, into: continuation)
+                    try await self.run(from: segments, using: engine, into: continuation)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -37,96 +46,88 @@ actor SummarizationPipeline {
 
     private func run(
         from segments: [TranscriptSegment],
+        using engine: any TextGenerating,
         into continuation: AsyncThrowingStream<MeetingSummary, Error>.Continuation
     ) async throws {
         guard !segments.isEmpty else { throw SummarizationError.emptyTranscript }
 
-        var request = URLRequest(url: endpoint, timeoutInterval: timeout)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.httpBody = try chatRequestBody(for: segments)
+        let system = Self.systemPrompt
+        let user = Self.userPrompt(for: segments)
 
-        let bytes: URLSession.AsyncBytes
-        let response: URLResponse
-        do {
-            (bytes, response) = try await URLSession.shared.bytes(for: request)
-        } catch {
-            throw SummarizationError.requestFailed(error.localizedDescription)
+        let estimatedTokens = (system.count + user.count) / 4
+        if estimatedTokens > Self.promptTokenBudget {
+            Self.log.warning("""
+            Prompt estimate \(estimatedTokens, privacy: .public) tokens exceeds the \
+            \(Self.promptTokenBudget, privacy: .public) single-pass budget; continuing \
+            (chunking arrives with SPEC-05)
+            """)
         }
 
-        guard let http = response as? HTTPURLResponse else {
-            throw SummarizationError.invalidResponse
-        }
+        // One full-generation retry: with constrained decoding gone, a stream
+        // that ends without a single valid short/detailed line is a failed
+        // generation, not a summary.
+        for attempt in 0..<2 {
+            var accumulator = SummaryAccumulator()
+            var buffer = ""
 
-        guard 200..<300 ~= http.statusCode else {
-            var body = ""
-            for try await line in bytes.lines {
-                body += line
-                if body.count > 2000 { break }
+            do {
+                for try await delta in engine.stream(system: system, user: user, params: GenerationParams()) {
+                    try Task.checkCancellation()
+                    guard !delta.isEmpty else { continue }
+
+                    buffer += delta
+
+                    var changed = false
+                    while let newline = buffer.firstIndex(of: "\n") {
+                        let line = String(buffer[buffer.startIndex..<newline])
+                        buffer.removeSubrange(buffer.startIndex...newline)
+                        if Self.applyValidated(line, to: &accumulator) { changed = true }
+                    }
+                    // Preview the in-progress prose line (short/detailed) char-by-char.
+                    if accumulator.applyPartialProse(buffer) { changed = true }
+
+                    if changed { continuation.yield(accumulator.snapshot) }
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw SummarizationError.modelUnavailable(error.localizedDescription)
             }
-            Self.log.error("Summary request failed: HTTP \(http.statusCode, privacy: .public) \(body, privacy: .public)")
-            throw SummarizationError.serverRejected(status: http.statusCode, body: body)
-        }
 
-        var accumulator = SummaryAccumulator()
-        var buffer = ""
+            // Every entry is newline-terminated by protocol, but flush a
+            // trailing object in case the stream ends without one.
+            let tail = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tail.isEmpty { _ = Self.applyValidated(tail, to: &accumulator) }
 
-        for try await rawLine in bytes.lines {
-            try Task.checkCancellation()
-            guard let payload = Self.ssePayload(rawLine) else { continue }
-            if payload == "[DONE]" { break }
-            guard let delta = Self.deltaContent(payload), !delta.isEmpty else { continue }
-
-            buffer += delta
-
-            var changed = false
-            while let newline = buffer.firstIndex(of: "\n") {
-                let line = String(buffer[buffer.startIndex..<newline])
-                buffer.removeSubrange(buffer.startIndex...newline)
-                if accumulator.applyLine(line) { changed = true }
+            let snapshot = accumulator.snapshot
+            if !snapshot.shortSummary.isEmpty || !snapshot.detailedSummary.isEmpty {
+                continuation.yield(snapshot)
+                return
             }
-            // Preview the in-progress prose line (short/detailed) char-by-char.
-            if accumulator.applyPartialProse(buffer) { changed = true }
-
-            if changed { continuation.yield(accumulator.snapshot) }
+            if attempt == 0 {
+                Self.log.warning("Generation produced no valid short/detailed line; retrying once")
+            } else if accumulator.hasContent {
+                // Items without prose after the retry: unusual, but grounded
+                // content beats an error.
+                continuation.yield(snapshot)
+                return
+            }
         }
 
-        // The grammar terminates every entry with a newline, but flush a trailing
-        // object just in case the stream ends without one.
-        let tail = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !tail.isEmpty { _ = accumulator.applyLine(tail) }
-
-        guard accumulator.hasContent else { throw SummarizationError.emptyModelResponse }
-        continuation.yield(accumulator.snapshot)
+        throw SummarizationError.emptyModelResponse
     }
 
-    // MARK: - Request
-
-    private func chatRequestBody(for segments: [TranscriptSegment]) throws -> Data {
-        let payload: [String: Any] = [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": Self.systemPrompt],
-                ["role": "user", "content": Self.userPrompt(for: segments)],
-            ],
-            "temperature": 0.3,
-            "top_p": 0.9,
-            "max_tokens": 3072,
-            "stream": true,
-            // Discourage the degenerate repetition loops small models fall into
-            // (e.g. emitting the same open question forever). These penalize
-            // tokens by recurrence across the whole generation, so they work
-            // across NDJSON lines, not just within one.
-            "repeat_penalty": 1.1,
-            "frequency_penalty": 0.6,
-            "presence_penalty": 0.3,
-            // Constrain generation to our NDJSON shape so a small local model
-            // cannot emit malformed lines. Ignored by servers that don't support
-            // it, in which case the prompt + tolerant parser still apply.
-            "grammar": Self.grammar,
-        ]
-        return try JSONSerialization.data(withJSONObject: payload)
+    /// Gate + apply one completed NDJSON line. Invalid lines are dropped and
+    /// logged, never shown — the UI-observable behavior matches the old
+    /// grammar-constrained runtime.
+    private static func applyValidated(_ line: String, to accumulator: inout SummaryAccumulator) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard NDJSONLineValidator.isValid(trimmed) else {
+            log.warning("Dropping malformed NDJSON line: \(String(trimmed.prefix(200)), privacy: .public)")
+            return false
+        }
+        return accumulator.applyLine(trimmed)
     }
 
     private static let systemPrompt = """
@@ -201,28 +202,7 @@ actor SummarizationPipeline {
         return String(format: "%d:%02d", minutes, seconds)
     }
 
-    // MARK: - SSE parsing
-
-    /// Returns the payload of an SSE `data:` line, or nil for other lines.
-    private static func ssePayload(_ line: String) -> String? {
-        guard line.hasPrefix("data:") else { return nil }
-        return line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)
-    }
-
-    /// Extracts `choices[0].delta.content` from one streamed chunk.
-    private static func deltaContent(_ payload: String) -> String? {
-        guard
-            let data = payload.data(using: .utf8),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let choices = object["choices"] as? [[String: Any]],
-            let first = choices.first,
-            let delta = first["delta"] as? [String: Any],
-            let content = delta["content"] as? String
-        else {
-            return nil
-        }
-        return content
-    }
+    // MARK: - Partial-line preview
 
     /// Best-effort decode of the in-progress prose line so short/detailed text
     /// can grow on screen before the line is terminated. Returns nil for line
@@ -268,7 +248,7 @@ actor SummarizationPipeline {
         guard let value = object[key], !(value is NSNull) else { return nil }
         let string = value as? String ?? "\(value)"
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        // The grammar allows a real `null` or a quoted string; a constrained model
+        // The protocol allows a real `null` or a quoted string; a small model
         // often picks the string and writes "null". Treat that as absent.
         guard !trimmed.isEmpty, trimmed.lowercased() != "null" else { return nil }
         return trimmed
@@ -416,44 +396,19 @@ actor SummarizationPipeline {
         }
     }
 
-    // MARK: - Grammar
-
-    /// GBNF constraining the model to our NDJSON protocol: a sequence of
-    /// newline-terminated, single-line JSON objects. String contents exclude
-    /// raw control characters so newlines only ever delimit lines.
-    private static let grammar = #"""
-    root ::= entry+
-    entry ::= ( short | detailed | decision | action | question | risk ) "\n"
-    short ::= "{\"type\":\"short\",\"text\":" string "}"
-    detailed ::= "{\"type\":\"detailed\",\"text\":" string "}"
-    decision ::= "{\"type\":\"decision\",\"title\":" string ",\"details\":" nstring ",\"evidence\":" idarray "}"
-    action ::= "{\"type\":\"action\",\"task\":" string ",\"owner\":" nstring ",\"due\":" nstring ",\"evidence\":" idarray "}"
-    question ::= "{\"type\":\"question\",\"question\":" string ",\"context\":" nstring ",\"evidence\":" idarray "}"
-    risk ::= "{\"type\":\"risk\",\"risk\":" string ",\"details\":" nstring ",\"evidence\":" idarray "}"
-    idarray ::= "[" ( string ( "," string )* )? "]"
-    nstring ::= string | "null"
-    string ::= "\"" char* "\""
-    char ::= [^"\\\x7F\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
-    """#
 }
 
 enum SummarizationError: LocalizedError {
     case emptyTranscript
-    case requestFailed(String)
-    case invalidResponse
-    case serverRejected(status: Int, body: String)
+    case modelUnavailable(String)
     case emptyModelResponse
 
     var errorDescription: String? {
         switch self {
         case .emptyTranscript:
             return "No transcript was captured."
-        case .requestFailed(let message):
-            return "Could not reach local Gemma server: \(message)"
-        case .invalidResponse:
-            return "The local Gemma server returned an invalid response."
-        case .serverRejected(let status, let body):
-            return "The local Gemma server rejected the request (HTTP \(status)): \(body)"
+        case .modelUnavailable(let message):
+            return "The summary model is unavailable: \(message)"
         case .emptyModelResponse:
             return "Gemma returned an empty summary."
         }

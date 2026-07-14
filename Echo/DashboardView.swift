@@ -191,18 +191,22 @@ struct DashboardView: View {
         HStack(spacing: 10) {
             Image(systemName: "cpu")
                 .foregroundStyle(.secondary)
-            Text(selectedGemmaModelName)
+            Text(summaryModelDescription)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .frame(maxWidth: 260, alignment: .leading)
-            Button {
-                controller.selectGemmaModel()
-            } label: {
-                Label("Select model", systemImage: "folder")
+                .frame(maxWidth: 300, alignment: .leading)
+
+            if showsDownloadButton {
+                Button {
+                    Task { await controller.downloadSummaryModel() }
+                } label: {
+                    Label("Download model", systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(.bordered)
+                .disabled(controller.summaryModelState.isBusy)
             }
-            .buttonStyle(.bordered)
 
             if canRetrySummary {
                 Button {
@@ -211,16 +215,34 @@ struct DashboardView: View {
                     Label("Retry", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(controller.summaryModelState.isBusy)
             }
         }
         .padding(.horizontal)
     }
 
-    private var selectedGemmaModelName: String {
-        guard let path = controller.gemmaModelPath else {
-            return "No Gemma GGUF selected"
+    private var summaryModelDescription: String {
+        switch controller.summaryModelState {
+        case .notDownloaded:
+            return "Summary model not downloaded"
+        case .downloading(let fraction):
+            return "Downloading summary model… \(Int(fraction * 100))%"
+        case .loading:
+            return "Loading summary model…"
+        case .ready:
+            return "Summary model ready · \(SummaryModelManager.modelDisplaySize)"
+        case .failed(let message):
+            return message
         }
-        return URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    private var showsDownloadButton: Bool {
+        switch controller.summaryModelState {
+        case .notDownloaded, .failed, .downloading:
+            return true
+        case .loading, .ready:
+            return false
+        }
     }
 
     private var canRetrySummary: Bool {
