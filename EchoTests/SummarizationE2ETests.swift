@@ -14,7 +14,11 @@ import Testing
 
 private let acceptanceEnabled = ProcessInfo.processInfo.environment["ECHO_ACCEPTANCE"] == "1"
 
-@Suite("Summarization E2E", .enabled(if: acceptanceEnabled))
+// .serialized: this suite now has two model-driven tests. Swift Testing
+// parallelizes tests within a process by default (even with
+// -parallel-testing-enabled NO), and two generations sharing the Metal device
+// contend; run them one at a time.
+@Suite("Summarization E2E", .enabled(if: acceptanceEnabled), .serialized)
 struct SummarizationE2ETests {
 
     /// A short product meeting with unmistakable decisions, one owned action,
