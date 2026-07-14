@@ -73,21 +73,24 @@ actor QAPipeline {
     static let topK = 4
 
     /// Cosine-similarity floor (dot product on normalized vectors) below which
-    /// the meeting is judged not to cover the question and the pipeline refuses
-    /// WITHOUT calling the LLM.
+    /// retrieval is deemed empty and the pipeline refuses WITHOUT calling the
+    /// LLM. This is a low SAFETY NET, not the primary grounding gate.
     ///
-    /// Calibrated at 0.20 against EmbeddingGemma on a REAL saved meeting
-    /// (SPEC-06 §7.1, measured 2026-07-14): genuine questions — including
-    /// Spanish and broad "what is this about?" ones — score 0.23–0.35 against a
-    /// whole-meeting chunk, while clearly off-topic questions (wrong domain,
-    /// trivia) score 0.14–0.16. The gap is ~0.20. A short meeting folds into a
-    /// single ~diluted chunk, which pushes even on-topic cosines down, so the
-    /// floor must be low to avoid false refusals of easy questions; the LLM —
-    /// prompted to answer ONLY from the excerpts, and which refuses honestly on
-    /// its own — is the real grounding guarantee for anything above the floor.
-    /// (An earlier 0.40, calibrated on synthetic keyword-dense chunks, refused
-    /// nearly every real question and was wrong.)
-    static let relevanceFloor: Float = 0.20
+    /// Why low: the absolute cosine EmbeddingGemma produces is not comparable
+    /// across meetings — it scales with chunk length and content. Measured over
+    /// real saved meetings (SPEC-06 §7.1, 2026-07-14), genuine questions land at
+    /// 0.21–0.35 and clearly off-topic ones at 0.13–0.16, and a short meeting
+    /// (one small diluted chunk) pushes even easy questions down to ~0.21. Any
+    /// fixed threshold high enough to reject off-topic also false-rejects real
+    /// questions on some meeting — chasing the number is whack-a-mole.
+    ///
+    /// So the LLM — prompted to answer ONLY from the excerpts, and which refuses
+    /// honestly on its own when they don't cover the question — is the real
+    /// grounding authority. The floor only skips the model for near-degenerate
+    /// retrieval; everything plausibly related goes to the LLM. The cost is a
+    /// short generation for an off-topic question instead of an instant canned
+    /// refusal, which is the right trade for never false-refusing a real one.
+    static let relevanceFloor: Float = 0.10
 
     /// Fixed response when retrieval is too weak (never model-generated).
     static let refusalText = "This meeting doesn't seem to cover that."
