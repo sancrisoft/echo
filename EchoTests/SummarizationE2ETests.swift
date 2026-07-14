@@ -121,48 +121,62 @@ struct SummarizationE2ETests {
     /// still holds, and we assert the route actually was map-reduce via the
     /// per-part progress callback.
     private static func longTranscript() -> [TranscriptSegment] {
-        // Filler is real conversational text (no owners/decisions) that pads the
-        // token count; ~350 chars each keeps segments realistic.
-        let filler = [
-            "So, moving on, I think we should keep the momentum going on this.",
-            "Right, and I looked at the numbers again over the weekend to be sure.",
-            "Yeah, the dashboards are mostly green, a couple of yellow spots though.",
-            "Let me share my screen so everyone can follow along with the charts.",
-            "Okay, that makes sense, thanks for walking us through the details there.",
-            "I agree the trend is encouraging but we shouldn't get complacent yet.",
-            "Good point, let's keep an eye on the latency graph during peak hours.",
-            "Someone asked about the mobile rollout earlier, we can circle back.",
-            "Sure, I'll paste the link to the doc in the chat after the call.",
-            "Understood, that all sounds reasonable to me from the data side.",
+        // Filler is real conversational text carrying no facts. Each filler
+        // segment is a few sentences (~90 tokens) so 300 segments clear 20K
+        // tokens, and a long gap every 25 segments makes chunks close at natural
+        // seams (several map chunks, not two giant ones).
+        let sentences = [
+            "So, moving on, I think we should keep the momentum going on this workstream.",
+            "Right, and I looked at the numbers again over the weekend just to be sure of them.",
+            "Yeah, the dashboards are mostly green, though there are a couple of yellow spots.",
+            "Let me share my screen for a moment so everyone can follow along with the charts.",
+            "Okay, that makes sense, thanks for walking us through all of those details there.",
+            "I agree the trend is encouraging, but I don't think we should get complacent yet.",
+            "Good point, let's keep an eye on the latency graph during the peak traffic hours.",
+            "Someone asked about the mobile rollout timing earlier, we can circle back to it.",
+            "Sure, I will paste the link to the shared document in the chat right after the call.",
+            "Understood, that all sounds perfectly reasonable to me from the data side of things.",
+            "We can revisit the staffing plan next week once the new headcount is confirmed.",
+            "The customer feedback has been broadly positive, with a few small usability notes.",
         ]
+        func filler(_ index: Int) -> String {
+            // Six sentences, rotated by index → ~90 tokens, varied per segment.
+            (0..<6).map { sentences[(index + $0 * 5) % sentences.count] }.joined(separator: " ")
+        }
 
-        // (index-in-output, speaker, text). Signal lines carry the facts.
+        // (index, speaker, text). Facts spread across the whole meeting; the
+        // decision lines are unmistakable and the onboarding action is left
+        // explicitly unassigned (the owner-null grounding trap).
         let signals: [(Int, Speaker, String)] = [
-            (5,  .teammates, "Decision: we ship the Atlas beta this Friday, everyone agreed."),
-            (40, .me,        "I'll prepare the release notes before Thursday, I'll own that."),
-            (80, .teammates, "The onboarding guide still needs updating for the new sidebar."),
-            (81, .me,        "True, nobody has picked that up yet, it's unassigned for now."),
-            (120,.teammates, "Decision made: we migrate the backend to Postgres next sprint."),
-            (160,.teammates, "Open question: which regions get the beta first? Marketing hasn't said."),
-            (200,.me,        "Risk: the analytics vendor contract is still unsigned this week."),
-            (201,.teammates, "Decision: we cut scope on the reporting module to hit the date."),
+            (18,  .teammates, "Decision confirmed: we will ship the Atlas beta this Friday. Everyone on the call agreed to that date."),
+            (70,  .me,        "Action item for me: I will prepare the release notes before Thursday. I own that task."),
+            (130, .teammates, "The onboarding guide still needs to be updated for the new sidebar layout."),
+            (131, .me,        "Right, nobody has picked that up yet, so that one stays unassigned for now."),
+            (150, .teammates, "Decision made: we will migrate the backend database from SQLite to Postgres next sprint."),
+            (205, .teammates, "Open question we could not resolve: which regions get the beta first? Marketing has not answered."),
+            (255, .me,        "Risk to flag: the analytics vendor contract is still unsigned as of this week."),
+            (256, .teammates, "Final decision: we cut the reporting module from scope so we can hit the launch date."),
         ]
         let signalByIndex = Dictionary(uniqueKeysWithValues: signals.map { ($0.0, ($0.1, $0.2)) })
 
-        let total = 250
+        let total = 300
+        var start = 0.0
         return (0..<total).map { index in
+            // A 30s silence every 25 segments — a natural chunk boundary.
+            if index > 0, index.isMultiple(of: 25) { start += 30 }
+            let segStart = start
+            let segEnd = start + 8
+            start = segEnd + 1   // 1s gap between ordinary turns
+
             if let signal = signalByIndex[index] {
                 return TranscriptSegment(
                     channel: signal.0 == .me ? .microphone : .system,
-                    speaker: signal.0, text: signal.1,
-                    start: TimeInterval(index * 12), end: TimeInterval(index * 12 + 10))
+                    speaker: signal.0, text: signal.1, start: segStart, end: segEnd)
             }
             let speaker: Speaker = index.isMultiple(of: 2) ? .me : .teammates
-            let text = filler[index % filler.count] + " " + filler[(index / 3) % filler.count]
             return TranscriptSegment(
                 channel: speaker == .me ? .microphone : .system,
-                speaker: speaker, text: text,
-                start: TimeInterval(index * 12), end: TimeInterval(index * 12 + 10))
+                speaker: speaker, text: filler(index), start: segStart, end: segEnd)
         }
     }
 
