@@ -73,15 +73,24 @@ actor QAPipeline {
     static let topK = 4
 
     /// Cosine-similarity floor (dot product on normalized vectors) below which
-    /// the meeting is judged not to cover the question and the pipeline refuses
-    /// WITHOUT calling the LLM. Calibrated at 0.40 against EmbeddingGemma
-    /// (SPEC-06 §7.1, measured 2026-07-14 + confirmed with the user): on-topic
-    /// questions score ≥0.43 and clearly off-topic ones ≤0.39, so 0.40 sits in
-    /// the gap — it catches blatant off-topic at retrieval time while the LLM,
-    /// prompted to answer only from the excerpts, remains the backstop for the
-    /// borderline band (it refuses honestly on its own). The initial 0.30 let
-    /// nearly every off-topic question through the floor, so it was raised.
-    static let relevanceFloor: Float = 0.40
+    /// retrieval is deemed empty and the pipeline refuses WITHOUT calling the
+    /// LLM. This is a low SAFETY NET, not the primary grounding gate.
+    ///
+    /// Why low: the absolute cosine EmbeddingGemma produces is not comparable
+    /// across meetings — it scales with chunk length and content. Measured over
+    /// real saved meetings (SPEC-06 §7.1, 2026-07-14), genuine questions land at
+    /// 0.21–0.35 and clearly off-topic ones at 0.13–0.16, and a short meeting
+    /// (one small diluted chunk) pushes even easy questions down to ~0.21. Any
+    /// fixed threshold high enough to reject off-topic also false-rejects real
+    /// questions on some meeting — chasing the number is whack-a-mole.
+    ///
+    /// So the LLM — prompted to answer ONLY from the excerpts, and which refuses
+    /// honestly on its own when they don't cover the question — is the real
+    /// grounding authority. The floor only skips the model for near-degenerate
+    /// retrieval; everything plausibly related goes to the LLM. The cost is a
+    /// short generation for an off-topic question instead of an instant canned
+    /// refusal, which is the right trade for never false-refusing a real one.
+    static let relevanceFloor: Float = 0.10
 
     /// Fixed response when retrieval is too weak (never model-generated).
     static let refusalText = "This meeting doesn't seem to cover that."
@@ -218,10 +227,14 @@ actor QAPipeline {
     static let systemPrompt = """
     You answer questions about one recorded meeting for a local-first macOS \
     app. Use ONLY the transcript excerpts provided by the user. If the excerpts \
-    do not contain the answer, say so plainly. Never use outside knowledge. \
-    Cite the timestamps of the excerpts you rely on, in [m:ss] form. "You" is \
-    the current user; "Team" is the teammates. Answer in the language of the \
-    question.
+    do not contain the answer, say so plainly. Never use outside knowledge, and \
+    never give your own opinions, evaluations, judgments, predictions, or \
+    advice. If the user asks for your point of view or for anything not stated \
+    in the meeting, begin by saying plainly that you can only answer from what \
+    was said in the meeting, and then, if the meeting touches the topic, report \
+    what was said about it. Cite the timestamps of the excerpts you rely on, in \
+    [m:ss] form. "You" is the current user; "Team" is the teammates. Answer in \
+    the language of the question.
     """
 
     static func userPrompt(question: String, chunks: [RAGIndexedChunk]) -> String {
