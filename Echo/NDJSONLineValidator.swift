@@ -41,6 +41,9 @@ nonisolated enum NDJSONLineValidator {
         switch type {
         case "short", "detailed":
             return isString(object["text"])
+        case "chunknote":
+            // Map-phase gist (SPEC-05): text only, no evidence.
+            return isString(object["text"])
         case "decision":
             return isString(object["title"])
                 && isNullableString(object["details"])
