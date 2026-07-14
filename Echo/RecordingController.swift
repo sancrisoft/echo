@@ -309,7 +309,11 @@ final class RecordingController {
             state.updateStatus("")
 
             var latest: MeetingSummary?
-            let stream = await summarizer.generate(from: transcript, using: engine)
+            // Long transcripts map-reduce; surface per-part progress on the
+            // existing status line ("Summarizing part 3/7…"). Short ones emit none.
+            let stream = await summarizer.generate(from: transcript, using: engine) { [weak self] phase in
+                Task { @MainActor in self?.state.updateStatus(phase) }
+            }
             for try await partial in stream {
                 guard generation == sessionGeneration, !state.isRecording else { return }
                 latest = partial
