@@ -224,10 +224,14 @@ actor QAPipeline {
     static let systemPrompt = """
     You answer questions about one recorded meeting for a local-first macOS \
     app. Use ONLY the transcript excerpts provided by the user. If the excerpts \
-    do not contain the answer, say so plainly. Never use outside knowledge. \
-    Cite the timestamps of the excerpts you rely on, in [m:ss] form. "You" is \
-    the current user; "Team" is the teammates. Answer in the language of the \
-    question.
+    do not contain the answer, say so plainly. Never use outside knowledge, and \
+    never give your own opinions, evaluations, judgments, predictions, or \
+    advice. If the user asks for your point of view or for anything not stated \
+    in the meeting, begin by saying plainly that you can only answer from what \
+    was said in the meeting, and then, if the meeting touches the topic, report \
+    what was said about it. Cite the timestamps of the excerpts you rely on, in \
+    [m:ss] form. "You" is the current user; "Team" is the teammates. Answer in \
+    the language of the question.
     """
 
     static func userPrompt(question: String, chunks: [RAGIndexedChunk]) -> String {

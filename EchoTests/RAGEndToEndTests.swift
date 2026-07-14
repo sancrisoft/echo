@@ -120,6 +120,24 @@ struct RAGEndToEndTests {
         )
         print("[RAG-E2E] absent answer: isRefusal=\(absent.isRefusal) text=\(absent.text)")
         #expect(absent.isRefusal || Self.disclaimsCoverage(absent.text))
+
+        // 3. Opinion request → must NOT editorialize; it declines to give a
+        // personal view and stays anchored to the meeting (grounding rule).
+        let opinion = try await finalAnswer(
+            pipeline, question: "What is your personal opinion — should they ship on Friday?", meetingID: id
+        )
+        print("[RAG-E2E] opinion answer: isRefusal=\(opinion.isRefusal) text=\(opinion.text)")
+        #expect(opinion.isRefusal || Self.declinesOpinion(opinion.text) || Self.disclaimsCoverage(opinion.text))
+    }
+
+    /// True if an English answer signals it will only answer from the meeting
+    /// rather than volunteering a personal opinion.
+    private static func declinesOpinion(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        let signals = ["only answer", "can only", "based on the", "based on what",
+                       "from the meeting", "from what was said", "i can't provide",
+                       "cannot provide", "not able to", "don't have", "do not have"]
+        return signals.contains { lower.contains($0) }
     }
 
     /// True if an English answer explicitly says the meeting/excerpts do not
