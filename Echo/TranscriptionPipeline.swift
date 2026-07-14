@@ -386,11 +386,18 @@ actor TranscriptionPipeline {
         let started = clock.now
         let stateRef = state
         do {
+            // 0. Single-data-root rule: WhisperKit historically downloaded to
+            //    swift-transformers' default (~/Documents/huggingface). Move
+            //    any existing cache under EchoPaths once — no re-download —
+            //    then pin every download below to the same base.
+            EchoPaths.migrateLegacyWhisperKitCacheIfNeeded()
+
             // 1. Download the model with progress (first run only — cached after,
             //    so this returns almost immediately on later launches).
             await state?.updateStatus("Downloading model…")
             let folder = try await WhisperKit.download(
                 variant: modelVariant,
+                downloadBase: EchoPaths.modelsDirectory,
                 useBackgroundSession: false
             ) { progress in
                 Task { @MainActor in
@@ -399,10 +406,12 @@ actor TranscriptionPipeline {
             }
 
             // 2. Compile + load from the local folder (no model re-download;
-            //    download:true only lets the tokenizer resolve if needed).
+            //    download:true only lets the tokenizer resolve if needed —
+            //    tokenizerFolder pins that resolve under EchoPaths too).
             await state?.updateStatus("Loading model…")
             whisper = try await WhisperKit(
                 modelFolder: folder.path,
+                tokenizerFolder: EchoPaths.modelsDirectory,
                 verbose: false,
                 logLevel: .error,
                 prewarm: false,
