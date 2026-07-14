@@ -93,6 +93,14 @@ final class RecordingController {
 
     let state = RecordingState()
 
+    /// Persistent meeting history (SPEC-03). Owned here so the controller can
+    /// save on stop and attach summaries; the dashboard reads it for the sidebar.
+    let library = MeetingLibrary()
+
+    /// The meeting saved for the just-stopped session, so both the stop path and
+    /// a later `retrySummary` attach their summary to the correct meeting.
+    private var lastSavedMeetingID: UUID?
+
     private let mic = MicrophoneCapture()
     private let system = SystemAudioCapture()
     private let pipeline: TranscriptionPipeline
@@ -181,6 +189,9 @@ final class RecordingController {
         let aecStage = startEchoHandling()
         wireCallbacks(aecStage: aecStage)
         state.markStarted()
+        // The previous session's live state is about to be reused; select the
+        // "Live" row so the dashboard follows the new recording.
+        library.beginLiveSession()
         startInputDeviceHandling()
 
         do {
@@ -200,7 +211,14 @@ final class RecordingController {
 
     func retrySummary() async {
         guard !state.isRecording else { return }
-        await generateSummary(from: state.segments, sessionGeneration: sessionGeneration)
+        // The segments stay in `state.segments` until the next recording, and
+        // `lastSavedMeetingID` still points at the meeting they were saved as, so
+        // a successful retry attaches to that same meeting.
+        await generateSummary(
+            from: state.segments,
+            sessionGeneration: sessionGeneration,
+            meetingID: lastSavedMeetingID
+        )
     }
 
     /// Explicit download from the dashboard's model control (the same
@@ -246,13 +264,28 @@ final class RecordingController {
         inputHealth.endSession()
         let transcript = state.segments
         let generation = sessionGeneration
+        // Capture before `markStopped` clears it — the meeting's real start.
+        let startedAt = state.startedAt ?? Date()
         state.markStopped()
 
         guard summarize else { return }
-        await generateSummary(from: transcript, sessionGeneration: generation)
+
+        // Persist BEFORE the summary runs (SPEC-03 criterion 1): a crash in the
+        // LLM must never lose the transcript. Empty transcripts are not saved.
+        var meetingID: UUID?
+        if !transcript.isEmpty {
+            meetingID = await library.persist(segments: transcript, startedAt: startedAt, endedAt: Date())
+        }
+        lastSavedMeetingID = meetingID
+
+        await generateSummary(from: transcript, sessionGeneration: generation, meetingID: meetingID)
     }
 
-    private func generateSummary(from transcript: [TranscriptSegment], sessionGeneration generation: Int) async {
+    private func generateSummary(
+        from transcript: [TranscriptSegment],
+        sessionGeneration generation: Int,
+        meetingID: UUID?
+    ) async {
         guard !transcript.isEmpty else {
             state.markSummaryUnavailable("No transcript was captured.")
             return
@@ -286,6 +319,11 @@ final class RecordingController {
             guard generation == sessionGeneration, !state.isRecording else { return }
             if let latest {
                 state.markSummaryReady(latest)
+                // Persist the finished summary alongside its meeting (SPEC-03
+                // criterion 2). A failure state is never persisted as a summary.
+                if let meetingID {
+                    await library.attachSummary(latest, to: meetingID)
+                }
             } else {
                 state.markSummaryUnavailable("Gemma returned an empty summary.")
             }
