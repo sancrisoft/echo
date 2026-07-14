@@ -109,4 +109,111 @@ struct SummarizationE2ETests {
             #expect(real.count * 2 >= allEvidence.count)
         }
     }
+
+    /// A long meeting (>20K tokens) that forces the map-reduce route (SPEC-05
+    /// §5.6). Meaningful decisions/actions/questions/risk are sprinkled through
+    /// a long body of filler so the notes must cite timestamps from the whole
+    /// duration, not just the opening. The grounding trap (an owner-less action)
+    /// still holds, and we assert the route actually was map-reduce via the
+    /// per-part progress callback.
+    private static func longTranscript() -> [TranscriptSegment] {
+        // Filler is real conversational text (no owners/decisions) that pads the
+        // token count; ~350 chars each keeps segments realistic.
+        let filler = [
+            "So, moving on, I think we should keep the momentum going on this.",
+            "Right, and I looked at the numbers again over the weekend to be sure.",
+            "Yeah, the dashboards are mostly green, a couple of yellow spots though.",
+            "Let me share my screen so everyone can follow along with the charts.",
+            "Okay, that makes sense, thanks for walking us through the details there.",
+            "I agree the trend is encouraging but we shouldn't get complacent yet.",
+            "Good point, let's keep an eye on the latency graph during peak hours.",
+            "Someone asked about the mobile rollout earlier, we can circle back.",
+            "Sure, I'll paste the link to the doc in the chat after the call.",
+            "Understood, that all sounds reasonable to me from the data side.",
+        ]
+
+        // (index-in-output, speaker, text). Signal lines carry the facts.
+        let signals: [(Int, Speaker, String)] = [
+            (5,  .teammates, "Decision: we ship the Atlas beta this Friday, everyone agreed."),
+            (40, .me,        "I'll prepare the release notes before Thursday, I'll own that."),
+            (80, .teammates, "The onboarding guide still needs updating for the new sidebar."),
+            (81, .me,        "True, nobody has picked that up yet, it's unassigned for now."),
+            (120,.teammates, "Decision made: we migrate the backend to Postgres next sprint."),
+            (160,.teammates, "Open question: which regions get the beta first? Marketing hasn't said."),
+            (200,.me,        "Risk: the analytics vendor contract is still unsigned this week."),
+            (201,.teammates, "Decision: we cut scope on the reporting module to hit the date."),
+        ]
+        let signalByIndex = Dictionary(uniqueKeysWithValues: signals.map { ($0.0, ($0.1, $0.2)) })
+
+        let total = 250
+        return (0..<total).map { index in
+            if let signal = signalByIndex[index] {
+                return TranscriptSegment(
+                    channel: signal.0 == .me ? .microphone : .system,
+                    speaker: signal.0, text: signal.1,
+                    start: TimeInterval(index * 12), end: TimeInterval(index * 12 + 10))
+            }
+            let speaker: Speaker = index.isMultiple(of: 2) ? .me : .teammates
+            let text = filler[index % filler.count] + " " + filler[(index / 3) % filler.count]
+            return TranscriptSegment(
+                channel: speaker == .me ? .microphone : .system,
+                speaker: speaker, text: text,
+                start: TimeInterval(index * 12), end: TimeInterval(index * 12 + 10))
+        }
+    }
+
+    @Test("long meeting routes through map-reduce and stays grounded")
+    func longMeetingMapReduce() async throws {
+        let manager = SummaryModelManager()
+        let engine = try await manager.ensureReady { phase, fraction in
+            print("[E2E] \(phase) \(Int(fraction * 100))%")
+        }
+
+        let transcript = Self.longTranscript()
+        let validIDs = Set(transcript.map { $0.id.uuidString.lowercased() })
+        let estimator = HeuristicTokenEstimator()
+        let tokens = transcript.reduce(0) { $0 + estimator.estimate($1.text) }
+        #expect(tokens > 20_000)                                  // genuinely long
+        #expect(tokens > SummarizationPipeline.singlePassBudget)  // forces map-reduce
+
+        let pipeline = SummarizationPipeline()
+        var phases: [String] = []
+        var snapshots = 0
+        var final: MeetingSummary?
+        for try await snapshot in await pipeline.generate(
+            from: transcript, using: engine, progress: { phases.append($0) }) {
+            snapshots += 1
+            final = snapshot
+        }
+
+        let summary = try #require(final)
+        print("[E2E long] tokens=\(tokens) snapshots=\(snapshots) phases=\(phases.count)")
+        print("[E2E long] decisions=\(summary.decisions.count) actions=\(summary.actionItems.count) questions=\(summary.openQuestions.count) risks=\(summary.risks.count)")
+
+        // Route was map-reduce: per-part progress fired.
+        #expect(phases.contains { $0.hasPrefix("Summarizing part 1/") })
+        #expect(snapshots > 1)
+
+        // Prose present and grounded.
+        #expect(!summary.shortSummary.isEmpty)
+        #expect(!summary.detailedSummary.isEmpty)
+        #expect(!summary.decisions.isEmpty)
+
+        // Every surviving evidence ID is real (executable grounding filters the
+        // rest on both routes).
+        let allEvidence = summary.decisions.flatMap(\.evidenceSegmentIDs)
+            + summary.actionItems.flatMap(\.evidenceSegmentIDs)
+            + summary.openQuestions.flatMap(\.evidenceSegmentIDs)
+            + summary.risks.flatMap(\.evidenceSegmentIDs)
+        #expect(allEvidence.allSatisfy { validIDs.contains($0.lowercased()) })
+
+        // Notes span the whole meeting: at least one item cites a segment from
+        // the back half (the Postgres/regions/risk/scope-cut signals live there).
+        let backHalfIDs = Set(transcript.suffix(transcript.count / 2).map { $0.id.uuidString.lowercased() })
+        #expect(allEvidence.contains { backHalfIDs.contains($0.lowercased()) })
+
+        // Grounding trap: the onboarding-guide action has no owner in the text.
+        let onboardingActions = summary.actionItems.filter { $0.task.lowercased().contains("onboarding") }
+        #expect(onboardingActions.allSatisfy { $0.owner == nil })
+    }
 }

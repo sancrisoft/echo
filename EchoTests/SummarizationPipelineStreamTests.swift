@@ -46,9 +46,9 @@ private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
     }
 }
 
-private func segment(_ text: String, at start: TimeInterval = 0) -> TranscriptSegment {
+private func segment(_ text: String, id: UUID = UUID(), at start: TimeInterval = 0) -> TranscriptSegment {
     TranscriptSegment(
-        channel: .microphone, speaker: .me, text: text, start: start, end: start + 4
+        id: id, channel: .microphone, speaker: .me, text: text, start: start, end: start + 4
     )
 }
 
@@ -60,6 +60,9 @@ struct SummarizationPipelineStreamTests {
     /// over many one-character deltas.
     @Test("cruel chunk splits still produce correct progressive snapshots")
     func cruelSplits() async throws {
+        // Evidence must cite a real segment ID or the item is dropped (SPEC-05
+        // executable grounding), so the fixture segment carries this exact UUID.
+        let segID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         let ndjson =
             #"{"type":"short","text":"Ship v2 \"Friday\"."}"# + "\n"
             + #"{"type":"detailed","text":"The team reviewed QA and agreed."}"# + "\n"
@@ -85,7 +88,7 @@ struct SummarizationPipelineStreamTests {
         let pipeline = SummarizationPipeline()
 
         var snapshots: [MeetingSummary] = []
-        for try await snapshot in await pipeline.generate(from: [segment("hello")], using: engine) {
+        for try await snapshot in await pipeline.generate(from: [segment("hello", id: segID)], using: engine) {
             snapshots.append(snapshot)
         }
 
@@ -108,18 +111,19 @@ struct SummarizationPipelineStreamTests {
 
     @Test("malformed lines are dropped, valid ones survive")
     func malformedLinesDropped() async throws {
+        let segID = UUID()
         let chunks = [
             "{\"type\":\"short\",\"text\":\"Valid.\"}\n",
             "total garbage, not json\n",
             "{\"type\":\"decision\",\"title\":\"No evidence key\"}\n",
             "{\"type\":\"detailed\",\"text\":\"Also valid.\"}\n",
-            "{\"type\":\"risk\",\"risk\":\"Real risk\",\"details\":null,\"evidence\":[\"a\"]}\n",
+            "{\"type\":\"risk\",\"risk\":\"Real risk\",\"details\":null,\"evidence\":[\"\(segID.uuidString)\"]}\n",
         ]
         let engine = ScriptedEngine(scripts: [chunks])
         let pipeline = SummarizationPipeline()
 
         var final: MeetingSummary?
-        for try await snapshot in await pipeline.generate(from: [segment("hi")], using: engine) {
+        for try await snapshot in await pipeline.generate(from: [segment("hi", id: segID)], using: engine) {
             final = snapshot
         }
 
@@ -129,6 +133,35 @@ struct SummarizationPipelineStreamTests {
         #expect(summary.decisions.isEmpty)       // malformed decision dropped
         #expect(summary.risks.count == 1)
         #expect(engine.calls == 1)
+    }
+
+    @Test("single-pass drops items whose evidence cites no real segment")
+    func singlePassEvidenceGrounding() async throws {
+        let realID = UUID()
+        let fakeID = UUID()   // not part of the transcript
+        let chunks = [
+            "{\"type\":\"short\",\"text\":\"S.\"}\n",
+            "{\"type\":\"detailed\",\"text\":\"D.\"}\n",
+            // Grounded: cites the real segment → kept.
+            "{\"type\":\"decision\",\"title\":\"Real\",\"details\":null,\"evidence\":[\"\(realID.uuidString)\"]}\n",
+            // Hallucinated evidence only → dropped.
+            "{\"type\":\"decision\",\"title\":\"Fake\",\"details\":null,\"evidence\":[\"\(fakeID.uuidString)\"]}\n",
+            // Empty evidence → dropped.
+            "{\"type\":\"risk\",\"risk\":\"Empty\",\"details\":null,\"evidence\":[]}\n",
+        ]
+        let engine = ScriptedEngine(scripts: [chunks])
+        let pipeline = SummarizationPipeline()
+
+        var final: MeetingSummary?
+        for try await snapshot in await pipeline.generate(from: [segment("hi", id: realID)], using: engine) {
+            final = snapshot
+        }
+
+        let summary = try #require(final)
+        #expect(summary.decisions.count == 1)
+        #expect(summary.decisions.first?.title == "Real")
+        #expect(summary.decisions.first?.evidenceSegmentIDs == [realID.uuidString])
+        #expect(summary.risks.isEmpty)   // empty-evidence risk dropped
     }
 
     @Test("a stream with no valid short/detailed retries exactly once")
