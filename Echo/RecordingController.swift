@@ -11,8 +11,6 @@
 
 import SwiftUI
 import Observation
-import AppKit
-import UniformTypeIdentifiers
 import os
 
 /// Measures real mic-capture gaps for SP-002's "input switch mid-recording"
@@ -122,9 +120,11 @@ final class RecordingController {
     // and applies the mode machine's current mode to the audio path.
     private var switchingStage: SwitchingAECStage?
     private let summarizer = SummarizationPipeline()
-    private let llamaServer = LlamaServerManager()
+    private let summaryModelManager = SummaryModelManager()
     private var sessionGeneration = 0
-    private(set) var gemmaModelPath: String? = LlamaServerConfig.storedModelPath
+    /// Dashboard-facing lifecycle of the summary model (download/load/ready).
+    /// Owned here so the UI never talks to the manager actor directly.
+    private(set) var summaryModelState: SummaryModelState = .notDownloaded
 
     var isRecording: Bool { state.isRecording }
 
@@ -154,6 +154,8 @@ final class RecordingController {
 
         // Warm up the (large) models at launch so pressing record is instant.
         Task { await prepare() }
+        // Paint the summary-model control from the on-disk cache state.
+        Task { await refreshSummaryModelState() }
     }
 
     /// Loads the transcription models ahead of time. Idempotent.
@@ -196,23 +198,37 @@ final class RecordingController {
         await stop(summarize: true)
     }
 
-    func selectGemmaModel() {
-        let panel = NSOpenPanel()
-        panel.title = "Select Gemma GGUF model"
-        panel.prompt = "Select"
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [UTType(filenameExtension: "gguf") ?? .data]
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        LlamaServerConfig.storeModelURL(url)
-        gemmaModelPath = url.path
-    }
-
     func retrySummary() async {
         guard !state.isRecording else { return }
         await generateSummary(from: state.segments, sessionGeneration: sessionGeneration)
+    }
+
+    /// Explicit download from the dashboard's model control (the same
+    /// download runs implicitly on the first summary if the user never
+    /// pressed the button). Downloads AND loads, so "Ready" means the next
+    /// summary starts instantly.
+    func downloadSummaryModel() async {
+        guard !summaryModelState.isBusy else { return }
+        do {
+            _ = try await summaryModelManager.ensureReady { [weak self] phase, fraction in
+                Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
+            }
+            summaryModelState = .ready
+        } catch {
+            summaryModelState = .failed(error.localizedDescription)
+        }
+    }
+
+    private func refreshSummaryModelState() async {
+        summaryModelState = await summaryModelManager.cachedModelExists() ? .ready : .notDownloaded
+    }
+
+    private func applySummaryModelProgress(_ phase: String, _ fraction: Double) {
+        if phase.hasPrefix("Loading") {
+            summaryModelState = .loading
+        } else {
+            summaryModelState = .downloading(fraction)
+        }
     }
 
     private func stop(summarize: Bool) async {
@@ -245,11 +261,22 @@ final class RecordingController {
         state.markSummaryGenerating()
 
         do {
-            let llamaConfig = try LlamaServerConfig.resolved()
-            try await llamaServer.ensureRunning(config: llamaConfig)
+            // First run downloads (~8.3 GB, once) and loads the model; later
+            // runs return the warm engine immediately. Progress surfaces
+            // through the existing status line and the model control.
+            let engine = try await summaryModelManager.ensureReady { [weak self] phase, fraction in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.applySummaryModelProgress(phase, fraction)
+                    let percent = Int(fraction * 100)
+                    self.state.updateStatus(phase.hasPrefix("Loading") ? phase : "\(phase) \(percent)%")
+                }
+            }
+            summaryModelState = .ready
+            state.updateStatus("")
 
             var latest: MeetingSummary?
-            let stream = await summarizer.generate(from: transcript)
+            let stream = await summarizer.generate(from: transcript, using: engine)
             for try await partial in stream {
                 guard generation == sessionGeneration, !state.isRecording else { return }
                 latest = partial
@@ -263,6 +290,10 @@ final class RecordingController {
                 state.markSummaryUnavailable("Gemma returned an empty summary.")
             }
         } catch {
+            if error is SummaryModelError {
+                summaryModelState = .failed(error.localizedDescription)
+            }
+            state.updateStatus("")
             guard generation == sessionGeneration, !state.isRecording else { return }
             state.markSummaryFailed(error.localizedDescription)
         }
