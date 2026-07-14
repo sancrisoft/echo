@@ -11,7 +11,7 @@
 
 import SwiftUI
 
-private enum DetailTab: Hashable { case transcript, summary, ask }
+private enum DetailTab: Hashable { case transcript, summary }
 
 struct DashboardView: View {
     @Environment(RecordingController.self) private var controller
@@ -231,13 +231,6 @@ private struct LiveMeetingDetail: View {
             summary
                 .tabItem { Label("Summary", systemImage: "sparkles") }
                 .tag(DetailTab.summary)
-            AskUnavailableView(
-                message: controller.state.isRecording
-                    ? "Available when the recording ends."
-                    : "Ask is available for saved meetings."
-            )
-            .tabItem { Label("Ask", systemImage: "questionmark.bubble") }
-            .tag(DetailTab.ask)
         }
         .padding(.top, 8)
     }
@@ -397,9 +390,6 @@ private struct PastMeetingDetail: View {
                     summary(for: record)
                         .tabItem { Label("Summary", systemImage: "sparkles") }
                         .tag(DetailTab.summary)
-                    AskView(meetingID: id)
-                        .tabItem { Label("Ask", systemImage: "questionmark.bubble") }
-                        .tag(DetailTab.ask)
                 }
                 .padding(.top, 8)
             } else if isLoading {

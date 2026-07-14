@@ -129,17 +129,6 @@ final class RecordingController {
     private var switchingStage: SwitchingAECStage?
     private let summarizer = SummarizationPipeline()
     private let summaryModelManager = SummaryModelManager()
-
-    // MARK: - RAG Q&A (SPEC-06) — pure additions consumed by the Ask tab.
-
-    /// On-device embeddings for retrieval. Shared with `qaPipeline` so the query
-    /// side and the index side use one loaded model.
-    let embeddings = EmbeddingsService()
-    /// Answers questions grounded in one meeting's retrieved transcript chunks.
-    /// Built in `init` because it wires together the embeddings service, a RAG
-    /// index store over the same meeting folder, and the summary model manager.
-    let qaPipeline: QAPipeline
-
     private var sessionGeneration = 0
     /// Dashboard-facing lifecycle of the summary model (download/load/ready).
     /// Owned here so the UI never talks to the manager actor directly.
@@ -152,19 +141,6 @@ final class RecordingController {
         // OSLog diagnostic (SP-002 US-12, previously the pipeline's default)
         // and to the input-health classifier (ADR-006) — one stream, two
         // observational consumers, neither able to influence the decision.
-        // RAG Q&A surface (SPEC-06). A dedicated MeetingStore over the same
-        // default root as the library reads the saved meetings; the index store
-        // caches per-meeting indices for the session.
-        self.qaPipeline = QAPipeline(
-            indexStore: RAGIndexStore(
-                meetingStore: MeetingStore(),
-                embeddings: embeddings,
-                chunkingConfig: ChunkingConfig()
-            ),
-            embeddings: embeddings,
-            modelManager: summaryModelManager
-        )
-
         let inputHealth = InputHealthTracker()
         self.inputHealth = inputHealth
         self.pipeline = TranscriptionPipeline(
@@ -263,27 +239,6 @@ final class RecordingController {
 
     private func refreshSummaryModelState() async {
         summaryModelState = await summaryModelManager.cachedModelExists() ? .ready : .notDownloaded
-    }
-
-    // MARK: - RAG Q&A model readiness (SPEC-06)
-
-    /// Whether BOTH models the Ask tab needs (the generative model and the
-    /// embedding model) are already on disk. Cheap: only checks snapshots, never
-    /// loads weights. The Ask tab uses this to decide between its download CTA
-    /// and the ask surface (it reuses these managers — no duplicated state).
-    func qaModelsCached() async -> Bool {
-        let summaryReady = await summaryModelManager.cachedModelExists()
-        let embeddingsReady = await embeddings.cachedModelExists()
-        return summaryReady && embeddingsReady
-    }
-
-    /// Downloads (and loads) both Q&A models with the same progress convention
-    /// as the summary flow. Used by the Ask tab's download CTA; the first
-    /// question would trigger the same downloads implicitly.
-    func ensureQAModelsReady(progress: @Sendable @escaping (String, Double) -> Void) async throws {
-        _ = try await summaryModelManager.ensureReady(progress: progress)
-        summaryModelState = .ready
-        try await embeddings.ensureReady(progress: progress)
     }
 
     private func applySummaryModelProgress(_ phase: String, _ fraction: Double) {
