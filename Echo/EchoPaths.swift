@@ -35,6 +35,16 @@ nonisolated enum EchoPaths {
         return url
     }
 
+    /// ~/Library/Application Support/Echo/Meetings — one subfolder per saved
+    /// meeting (SPEC-03). Unlike `modelsDirectory` this accessor does NOT create
+    /// the directory: `MeetingStore` owns creation (its `save` makes the tree,
+    /// its `listMetas` tolerates the root not existing yet), which keeps the
+    /// store injectable with an arbitrary root in tests without this global
+    /// accessor touching disk as a side effect.
+    static var meetingsDirectory: URL {
+        appSupportDirectory.appending(path: "Meetings", directoryHint: .isDirectory)
+    }
+
     // MARK: - Legacy WhisperKit cache migration
 
     /// Repos that historically landed in swift-transformers' default download
