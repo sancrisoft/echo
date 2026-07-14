@@ -74,14 +74,20 @@ actor QAPipeline {
 
     /// Cosine-similarity floor (dot product on normalized vectors) below which
     /// the meeting is judged not to cover the question and the pipeline refuses
-    /// WITHOUT calling the LLM. Calibrated at 0.40 against EmbeddingGemma
-    /// (SPEC-06 §7.1, measured 2026-07-14 + confirmed with the user): on-topic
-    /// questions score ≥0.43 and clearly off-topic ones ≤0.39, so 0.40 sits in
-    /// the gap — it catches blatant off-topic at retrieval time while the LLM,
-    /// prompted to answer only from the excerpts, remains the backstop for the
-    /// borderline band (it refuses honestly on its own). The initial 0.30 let
-    /// nearly every off-topic question through the floor, so it was raised.
-    static let relevanceFloor: Float = 0.40
+    /// WITHOUT calling the LLM.
+    ///
+    /// Calibrated at 0.20 against EmbeddingGemma on a REAL saved meeting
+    /// (SPEC-06 §7.1, measured 2026-07-14): genuine questions — including
+    /// Spanish and broad "what is this about?" ones — score 0.23–0.35 against a
+    /// whole-meeting chunk, while clearly off-topic questions (wrong domain,
+    /// trivia) score 0.14–0.16. The gap is ~0.20. A short meeting folds into a
+    /// single ~diluted chunk, which pushes even on-topic cosines down, so the
+    /// floor must be low to avoid false refusals of easy questions; the LLM —
+    /// prompted to answer ONLY from the excerpts, and which refuses honestly on
+    /// its own — is the real grounding guarantee for anything above the floor.
+    /// (An earlier 0.40, calibrated on synthetic keyword-dense chunks, refused
+    /// nearly every real question and was wrong.)
+    static let relevanceFloor: Float = 0.20
 
     /// Fixed response when retrieval is too weak (never model-generated).
     static let refusalText = "This meeting doesn't seem to cover that."
