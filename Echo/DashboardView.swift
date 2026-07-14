@@ -3,32 +3,30 @@
 //  Echo
 //
 //  The full window opened from "Open dashboard" (and shown automatically when a
-//  recording stops). Two tabs: the live transcript and the (upcoming) summary.
+//  recording stops). A NavigationSplitView (SPEC-03): a sidebar with the "Live"
+//  session (while recording) and the persistent meeting history, and a detail
+//  pane with the Transcript/Summary tabs. The live session shows `controller.state`
+//  directly; a past meeting loads its saved `MeetingRecord` read-only.
 //
 
 import SwiftUI
 
+private enum DetailTab: Hashable { case transcript, summary }
+
 struct DashboardView: View {
     @Environment(RecordingController.self) private var controller
-
-    private enum Tab: Hashable { case transcript, summary }
-    @State private var selectedTab: Tab = .transcript
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             Divider()
-            TabView(selection: $selectedTab) {
-                transcript
-                    .tabItem { Label("Transcript", systemImage: "text.bubble") }
-                    .tag(Tab.transcript)
-                summary
-                    .tabItem { Label("Summary", systemImage: "sparkles") }
-                    .tag(Tab.summary)
+            NavigationSplitView {
+                MeetingSidebar()
+            } detail: {
+                MeetingDetailContainer()
             }
-            .padding(.top, 8)
         }
-        .frame(minWidth: 520, minHeight: 420)
+        .frame(minWidth: 720, minHeight: 460)
     }
 
     // MARK: - Toolbar
@@ -89,29 +87,152 @@ struct DashboardView: View {
         .padding()
     }
 
-    // MARK: - Transcript
+}
 
-    @ViewBuilder
-    private var transcript: some View {
-        if transcriptRows.isEmpty {
-            ContentUnavailableView(
-                controller.state.isRecording ? "Listening…" : "No transcript yet",
-                systemImage: "text.bubble",
-                description: Text(controller.state.isRecording
-                    ? "Text will appear here as people speak."
-                    : "Start recording to generate the transcript.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(transcriptRows) { row in
-                        SegmentRow(segment: row.segment, isPartial: row.isPartial)
+// MARK: - Sidebar
+
+private struct MeetingSidebar: View {
+    @Environment(RecordingController.self) private var controller
+    @State private var pendingDelete: MeetingMeta?
+
+    var body: some View {
+        @Bindable var library = controller.library
+
+        List(selection: $library.selection) {
+            if controller.state.isRecording {
+                LiveSidebarRow()
+                    .tag(MeetingSelection.live)
+            }
+
+            Section("History") {
+                if library.metas.isEmpty {
+                    Text("No saved meetings yet.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(library.metas) { meta in
+                        MeetingSidebarRow(meta: meta)
+                            .tag(MeetingSelection.meeting(meta.id))
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    pendingDelete = meta
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                     }
                 }
-                .padding()
             }
         }
+        .navigationTitle("Meetings")
+        .frame(minWidth: 220)
+        .confirmationDialog(
+            "Delete this meeting?",
+            isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            ),
+            presenting: pendingDelete
+        ) { meta in
+            Button("Delete", role: .destructive) {
+                Task { await controller.library.delete(meta.id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { meta in
+            Text("“\(meta.title)” and its transcript and summary will be permanently deleted.")
+        }
+    }
+}
+
+private struct LiveSidebarRow: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "record.circle")
+                .foregroundStyle(.red)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Live")
+                    .font(.body.weight(.semibold))
+                Text("Recording in progress")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct MeetingSidebarRow: View {
+    let meta: MeetingMeta
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(meta.title)
+                .font(.body.weight(.medium))
+                .lineLimit(1)
+            HStack(spacing: 6) {
+                Text(Self.durationText(meta.duration))
+                if meta.hasSummary {
+                    Image(systemName: "sparkles")
+                }
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private static func durationText(_ duration: TimeInterval) -> String {
+        let total = max(0, Int(duration.rounded()))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        return hours > 0
+            ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+// MARK: - Detail
+
+/// Routes the detail pane between the live session and a saved meeting. The
+/// just-stopped meeting keeps showing the live state (so its summary streams in
+/// without a jump) until the next recording clears `activeMeetingID`.
+private struct MeetingDetailContainer: View {
+    @Environment(RecordingController.self) private var controller
+    @State private var selectedTab: DetailTab = .transcript
+
+    var body: some View {
+        let library = controller.library
+        switch library.selection {
+        case .live, nil:
+            LiveMeetingDetail(selectedTab: $selectedTab)
+        case .meeting(let id):
+            if id == library.activeMeetingID {
+                LiveMeetingDetail(selectedTab: $selectedTab)
+            } else {
+                PastMeetingDetail(id: id, selectedTab: $selectedTab)
+                    .id(id)
+            }
+        }
+    }
+}
+
+/// The current session (or empty idle state): transcript with live partials and
+/// the streaming/regenerable summary over `controller.state`.
+private struct LiveMeetingDetail: View {
+    @Environment(RecordingController.self) private var controller
+    @Binding var selectedTab: DetailTab
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            TranscriptScroll(rows: transcriptRows, isRecording: controller.state.isRecording)
+                .tabItem { Label("Transcript", systemImage: "text.bubble") }
+                .tag(DetailTab.transcript)
+            summary
+                .tabItem { Label("Summary", systemImage: "sparkles") }
+                .tag(DetailTab.summary)
+        }
+        .padding(.top, 8)
     }
 
     private var transcriptRows: [TranscriptDisplayRow] {
@@ -129,8 +250,6 @@ struct DashboardView: View {
             return $0.segment.start < $1.segment.start
         }
     }
-
-    // MARK: - Summary
 
     @ViewBuilder
     private var summary: some View {
@@ -247,6 +366,97 @@ struct DashboardView: View {
 
     private var canRetrySummary: Bool {
         !controller.state.isRecording && !controller.state.segments.isEmpty
+    }
+}
+
+/// A saved meeting, read-only. Loads its `MeetingRecord` off the main thread
+/// (the actor decodes) and shows the same transcript/summary views — no live
+/// partials, and a fixed summary (or an "unavailable" state).
+private struct PastMeetingDetail: View {
+    let id: UUID
+    @Binding var selectedTab: DetailTab
+    @Environment(RecordingController.self) private var controller
+
+    @State private var record: MeetingRecord?
+    @State private var isLoading = true
+
+    var body: some View {
+        Group {
+            if let record {
+                TabView(selection: $selectedTab) {
+                    TranscriptScroll(rows: rows(for: record), isRecording: false)
+                        .tabItem { Label("Transcript", systemImage: "text.bubble") }
+                        .tag(DetailTab.transcript)
+                    summary(for: record)
+                        .tabItem { Label("Summary", systemImage: "sparkles") }
+                        .tag(DetailTab.summary)
+                }
+                .padding(.top, 8)
+            } else if isLoading {
+                ProgressView()
+                    .controlSize(.large)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView(
+                    "Couldn't open this meeting",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("Its files may be missing or corrupted.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task(id: id) {
+            isLoading = true
+            record = await controller.library.loadRecord(id)
+            isLoading = false
+        }
+    }
+
+    private func rows(for record: MeetingRecord) -> [TranscriptDisplayRow] {
+        record.segments.map { TranscriptDisplayRow(segment: $0, isPartial: false) }
+    }
+
+    @ViewBuilder
+    private func summary(for record: MeetingRecord) -> some View {
+        if let summary = record.summary {
+            SummaryContentView(summary: summary, segments: record.segments)
+        } else {
+            ContentUnavailableView(
+                "No summary",
+                systemImage: "sparkles",
+                description: Text("No summary was generated for this meeting.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+// MARK: - Shared transcript list
+
+private struct TranscriptScroll: View {
+    let rows: [TranscriptDisplayRow]
+    let isRecording: Bool
+
+    var body: some View {
+        if rows.isEmpty {
+            ContentUnavailableView(
+                isRecording ? "Listening…" : "No transcript",
+                systemImage: "text.bubble",
+                description: Text(isRecording
+                    ? "Text will appear here as people speak."
+                    : "This meeting has no transcript.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(rows) { row in
+                        SegmentRow(segment: row.segment, isPartial: row.isPartial)
+                    }
+                }
+                .padding()
+            }
+        }
     }
 }
 
