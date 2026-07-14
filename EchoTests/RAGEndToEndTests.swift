@@ -109,6 +109,9 @@ struct RAGEndToEndTests {
         #expect(!present.citations.isEmpty)
         let citesBudget = present.citations.contains { $0.start <= Self.budgetTime && $0.end >= Self.budgetTime }
         #expect(citesBudget)
+        // An answerable question must be answered directly, with no "I can only
+        // answer from the meeting" disclaimer prefacing it.
+        #expect(!Self.declinesOpinion(present.text))
 
         // 2. Absent fact → honest refusal, no invention. The refusal can come
         // from the relevance floor (deterministic, no LLM) OR from the LLM
