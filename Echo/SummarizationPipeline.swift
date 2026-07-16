@@ -210,6 +210,80 @@ actor SummarizationPipeline {
         return (summary.shortSummary, summary.detailedSummary)
     }
 
+    // MARK: - Row caption (library one-liner)
+
+    /// A single plain-text sentence describing the meeting, shown under the
+    /// title in the library list. Generated from the finished summary — concise
+    /// and already grounded in the transcript — rather than the raw transcript,
+    /// and deliberately kept out of `MeetingSummary`: it is a headline for the
+    /// row, not a summary section. Best-effort: any failure (or an empty reply)
+    /// returns `nil` and the row simply shows no caption.
+    func oneLineDescription(for summary: MeetingSummary, using engine: any TextGenerating) async -> String? {
+        let source = summary.shortSummary.isEmpty
+            ? String(summary.detailedSummary.prefix(1200))
+            : summary.shortSummary
+        guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+
+        var params = GenerationParams()
+        params.maxTokens = 64
+        params.temperature = 0.2
+
+        var text = ""
+        do {
+            for try await delta in engine.stream(
+                system: Self.captionSystemPrompt,
+                user: Self.captionUserPrompt(source),
+                params: params
+            ) {
+                try Task.checkCancellation()
+                text += delta
+                if text.count > 400 { break }   // one sentence never needs more
+            }
+        } catch {
+            Self.log.warning("One-line description generation failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        return Self.cleanCaption(text)
+    }
+
+    private static let captionSystemPrompt = """
+    You write a single, concise sentence that captures what a meeting was about, \
+    in plain English. Output ONLY that one sentence: no preamble, no quotation \
+    marks, no bullet points, no more than 16 words. Ground it strictly in the \
+    notes provided; never invent specifics.
+    """
+
+    private static func captionUserPrompt(_ notes: String) -> String {
+        """
+        Meeting notes:
+
+        \(notes)
+
+        One sentence describing this meeting:
+        """
+    }
+
+    /// First sentence, unwrapped from any quotes/label the model prepends,
+    /// trimmed and length-capped.
+    private static func cleanCaption(_ raw: String) -> String? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let range = text.range(of: "sentence:", options: .caseInsensitive) {
+            text = String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let newline = text.firstIndex(where: \.isNewline) {
+            text = String(text[..<newline])
+        }
+        if let end = text.firstIndex(where: { $0 == "." || $0 == "!" || $0 == "?" }) {
+            text = String(text[...end])
+        }
+        text = text.trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'“”‘’"))
+        guard !text.isEmpty else { return nil }
+        if text.count > 160 {
+            text = String(text.prefix(157)).trimmingCharacters(in: .whitespaces) + "…"
+        }
+        return text
+    }
+
     // MARK: - Generation primitives
 
     /// One prose-bearing generation with the single-pass retry contract: up to

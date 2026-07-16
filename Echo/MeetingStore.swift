@@ -48,6 +48,11 @@ actor MeetingStore {
 
     // MARK: - Sidecar contract (SPEC-06/08)
 
+    /// The root under which every meeting folder lives. `nonisolated` (it is a
+    /// `let`) so callers like the storage-footer measurement can read it
+    /// without awaiting the actor.
+    nonisolated var rootDirectory: URL { root }
+
     /// The folder for a meeting. `nonisolated` and side-effect-free so other
     /// features can locate a meeting's sidecars without awaiting the actor and
     /// without accidentally creating anything.
@@ -80,13 +85,27 @@ actor MeetingStore {
     /// Writes `summary.json` and flips `meta.hasSummary` to `true`. Called when
     /// a summary lands after the meeting was already saved (SPEC-03 criterion
     /// 2). Throws if the meeting folder / meta is missing.
-    func attachSummary(_ summary: MeetingSummary, to id: UUID) async throws {
+    ///
+    /// `description`, when provided, is stored on the meta as the row's
+    /// one-line caption in the same write (it is generated alongside the
+    /// summary). Passing `nil` leaves any existing caption untouched.
+    func attachSummary(_ summary: MeetingSummary, description: String? = nil, to id: UUID) async throws {
         let directory = directory(for: id)
         let metaURL = directory.appending(path: Filename.meta)
         var meta = try decode(MeetingMeta.self, from: metaURL)
         try await writeSummary(summary, to: directory.appending(path: Filename.summary))
         meta.hasSummary = true
+        if let description { meta.oneLineDescription = description }
         try writeJSON(meta, to: metaURL)
+    }
+
+    /// Rewrites only `meta.json` for an existing meeting (rename, trash/restore,
+    /// word-count backfill). The caller owns the full, up-to-date `MeetingMeta`;
+    /// this persists it verbatim. Throws if the folder is missing (the atomic
+    /// write into a nonexistent directory fails), so a caller can't resurrect a
+    /// deleted meeting by updating it.
+    func updateMeta(_ meta: MeetingMeta) throws {
+        try writeJSON(meta, to: directory(for: meta.id).appending(path: Filename.meta))
     }
 
     // MARK: - Read

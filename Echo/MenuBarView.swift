@@ -124,7 +124,7 @@ struct MenuBarView: View {
             Button(action: stopAndOpenDashboard) {
                 Label("Stop", systemImage: "stop.fill")
                     .font(.headline)
-                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 12)
             }
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
@@ -151,7 +151,7 @@ struct MenuBarView: View {
             } label: {
                 Label("Start Recording", systemImage: "play.fill")
                     .font(.headline)
-                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 12)
             }
             .controlSize(.large)
             .buttonStyle(.borderedProminent)

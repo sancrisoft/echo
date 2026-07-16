@@ -28,9 +28,34 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
     var segmentCount: Int
     var hasSummary: Bool
 
+    /// Total transcript word count, denormalized here so the list can show it
+    /// without loading the (potentially large) transcript. Optional and encoded
+    /// only when present (`encodeIfPresent`): folders written before this field
+    /// existed decode to `nil`, and the on-disk bytes of a meeting that never had
+    /// one are unchanged — the SPEC-06/08 golden stays byte-stable. The library
+    /// populates it (it owns the segments at save time); the store never injects
+    /// it, so an untouched `meta.json` keeps its original shape.
+    var wordCount: Int?
+
+    /// A single-sentence, AI-generated caption shown under the title in the
+    /// list. Deliberately distinct from `MeetingSummary.shortSummary` and never
+    /// rendered inside the summary view — it is a headline for the row only.
+    /// Written when the summary lands; `nil` until then (or for meetings that
+    /// predate the feature).
+    var oneLineDescription: String?
+
+    /// When the meeting was moved to Trash, or `nil` if it is live in the
+    /// library. A trashed meeting keeps all its files; the library hides it from
+    /// "All Meetings", lists it under "Trash", and permanently deletes it once
+    /// this timestamp is older than the retention window.
+    var trashedAt: Date?
+
     /// Wall-clock length of the meeting. Computed, so it is never encoded — the
     /// two timestamps are the source of truth.
     var duration: TimeInterval { endedAt.timeIntervalSince(startedAt) }
+
+    /// Whether the meeting is currently in Trash.
+    var isTrashed: Bool { trashedAt != nil }
 
     nonisolated init(
         schemaVersion: Int = 1,
@@ -39,7 +64,10 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
         startedAt: Date,
         endedAt: Date,
         segmentCount: Int,
-        hasSummary: Bool
+        hasSummary: Bool,
+        wordCount: Int? = nil,
+        oneLineDescription: String? = nil,
+        trashedAt: Date? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.id = id
@@ -48,6 +76,9 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
         self.endedAt = endedAt
         self.segmentCount = segmentCount
         self.hasSummary = hasSummary
+        self.wordCount = wordCount
+        self.oneLineDescription = oneLineDescription
+        self.trashedAt = trashedAt
     }
 
     /// The default title for a freshly stopped recording. Fixed en-US format
@@ -59,6 +90,13 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "MMM d, yyyy, HH:mm"
         return "Meeting — " + formatter.string(from: startedAt)
+    }
+
+    /// Canonical transcript word count — one source of truth for the list row,
+    /// the menu-bar stat, and the value denormalized into `wordCount`. Splits on
+    /// whitespace, matching how a reader counts words.
+    nonisolated static func wordCount(of segments: [TranscriptSegment]) -> Int {
+        segments.reduce(0) { $0 + $1.text.split(whereSeparator: \.isWhitespace).count }
     }
 }
 
