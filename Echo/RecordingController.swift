@@ -325,8 +325,12 @@ final class RecordingController {
                 state.markSummaryReady(latest)
                 // Persist the finished summary alongside its meeting (SPEC-03
                 // criterion 2). A failure state is never persisted as a summary.
+                // The AI one-line caption for the library row is generated from
+                // the finished summary in the same step (best-effort — `nil` if
+                // it fails, leaving the row without a caption).
                 if let meetingID {
-                    await library.attachSummary(latest, to: meetingID)
+                    let description = await summarizer.oneLineDescription(for: latest, using: engine)
+                    await library.attachSummary(latest, description: description, to: meetingID)
                 }
             } else {
                 state.markSummaryUnavailable("Gemma returned an empty summary.")

@@ -45,6 +45,14 @@ nonisolated enum EchoPaths {
         appSupportDirectory.appending(path: "Meetings", directoryHint: .isDirectory)
     }
 
+    /// ~/Library/Application Support/Echo/settings.json — small persisted UI
+    /// state (e.g. whether the privacy banner was dismissed). Lives in the
+    /// single data root instead of UserDefaults, per the 2026-07-13 decision.
+    /// `AppSettings` owns creation of the parent directory on first write.
+    static var settingsFile: URL {
+        appSupportDirectory.appending(path: "settings.json", directoryHint: .notDirectory)
+    }
+
     // MARK: - Legacy WhisperKit cache migration
 
     /// Repos that historically landed in swift-transformers' default download
