@@ -2,12 +2,15 @@
 //  DashboardView.swift
 //  Echo
 //
-//  The full window opened from the menu bar. The library redesign makes this a
-//  meetings browser: a custom top bar, a sidebar (All Meetings / Trash + a
-//  storage footer), and a searchable, sortable, date-grouped list of compact
-//  meeting rows with working quick actions. Opening a meeting pushes the
-//  (reused) Transcript/Summary detail; recording still starts from the menu bar
-//  ("New Recording" here is present but inactive for now).
+//  The full window opened from the menu bar. A meetings browser: the window
+//  title bar hosts the breadcrumb (or, with a detail open, the meeting title
+//  and back chevron), the REC pill while recording, and the New Recording /
+//  Stop button; a sidebar (All Meetings / Trash + a storage footer); and a
+//  searchable, sortable, date-grouped list of compact meeting rows with
+//  working quick actions. Opening a meeting (or the pinned live row / REC
+//  pill while recording) covers the list with the detail: an underlined
+//  Transcript / AI Summary tab bar, the committed transcript, and — while
+//  recording — a footer with the popover's live waves and the partial text.
 //
 
 import SwiftUI
@@ -17,10 +20,17 @@ import AppKit
 
 private enum DetailTab: Hashable { case transcript, summary }
 
-/// A meeting the detail stack is pushed to, with the tab it should open on.
-private struct OpenedMeeting: Hashable, Identifiable {
-    let id: UUID
-    var tab: DetailTab
+/// What the detail overlay is showing: the in-progress recording session, or a
+/// saved meeting by id.
+private enum DetailTarget: Hashable {
+    case live
+    case saved(UUID)
+}
+
+/// A detail the window has open, with the tab it should open on.
+private struct OpenedDetail: Hashable {
+    let target: DetailTarget
+    var tab: DetailTab = .transcript
 }
 
 enum MeetingSortOrder: String, CaseIterable, Identifiable {
@@ -56,6 +66,11 @@ enum MeetingSortOrder: String, CaseIterable, Identifiable {
 struct DashboardView: View {
     @Environment(RecordingController.self) private var controller
 
+    /// The detail currently covering the list, if any. Lives on the shell so
+    /// the window title bar can swap between the breadcrumb and the opened
+    /// meeting's title (with its back chevron).
+    @State private var opened: OpenedDetail?
+
     var body: some View {
         // A plain HStack instead of NavigationSplitView: on this macOS the
         // split view's columns carry a rigid AppKit fitting height of roughly
@@ -64,10 +79,10 @@ struct DashboardView: View {
         // sidebar, list header pushed out of view). The mockup wants a plain
         // fixed sidebar anyway — no split-view chrome needed.
         HStack(spacing: 0) {
-            LibrarySidebar()
+            LibrarySidebar(opened: $opened)
                 .frame(width: 240)
             Divider()
-            MeetingLibraryDetail()
+            MeetingLibraryDetail(opened: $opened)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(nsColor: .textBackgroundColor))
         }
@@ -130,45 +145,138 @@ struct DashboardView: View {
         }
         #endif
         .toolbar {
-            // The window's native title bar hosts the top bar (breadcrumb +
-            // on-device pill on the left, New Recording on the right), so the
-            // window stays draggable and respects the header.
-            // Flat breadcrumb: no glass platter behind it — it should blend
-            // into the title bar, not read as a raised control.
+            // The window's native title bar hosts the top bar (breadcrumb or
+            // the opened meeting's title on the left, plus the REC pill while
+            // recording; New Recording / Stop on the right), so the window
+            // stays draggable and respects the header.
+            // Flat leading content: no glass platter behind it — it should
+            // blend into the title bar, not read as a raised control.
             if #available(macOS 26.0, *) {
-                ToolbarItem(placement: .navigation) { breadcrumb }
+                ToolbarItem(placement: .navigation) { topBarLeading }
                     .sharedBackgroundVisibility(.hidden)
             } else {
-                ToolbarItem(placement: .navigation) { breadcrumb }
+                ToolbarItem(placement: .navigation) { topBarLeading }
             }
             ToolbarItem(placement: .primaryAction) {
-                RecordToolbarButton()
+                RecordToolbarButton { opened = OpenedDetail(target: .live) }
             }
         }
     }
 
-    private var breadcrumb: some View {
+    private var topBarLeading: some View {
         HStack(spacing: 8) {
-            MeetingGlyph(size: 20)
-            Text("Echo").font(.headline)
-            Text("/").foregroundStyle(.tertiary)
-            Text(controller.library.section == .trash ? "Trash" : "Meetings")
-                .font(.headline)
-                .foregroundStyle(.secondary)
+            if opened != nil {
+                Button {
+                    opened = nil
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Back to all meetings")
+
+                MeetingGlyph(size: 20)
+                Text(openedTitle)
+                    .font(.headline)
+                    .lineLimit(1)
+            } else {
+                MeetingGlyph(size: 20)
+                Text("Echo").font(.headline)
+                Text("/").foregroundStyle(.tertiary)
+                Text(controller.library.section == .trash ? "Trash" : "Meetings")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Global recording indicator: visible in both the list and any
+            // open detail, only while a session is running. Clicking it jumps
+            // to the live meeting.
+            if controller.state.isRecording {
+                RecPill { opened = OpenedDetail(target: .live) }
+            }
+        }
+    }
+
+    private var openedTitle: String {
+        switch opened?.target {
+        case .saved(let id):
+            return controller.library.meta(for: id)?.title ?? "Meeting"
+        case .live:
+            return liveMeetingTitle(controller)
+        case nil:
+            return ""
         }
     }
 }
 
+/// The display title for the in-progress session: the auto title it will be
+/// saved under while recording, or — once stopped and persisted — the saved
+/// meeting's title.
+@MainActor
+private func liveMeetingTitle(_ controller: RecordingController) -> String {
+    if let startedAt = controller.state.startedAt {
+        return MeetingMeta.autoTitle(startedAt: startedAt)
+    }
+    if let active = controller.library.activeMeetingID,
+       let meta = controller.library.meta(for: active) {
+        return meta.title
+    }
+    return "New Recording"
+}
+
+/// The red "● REC 00:24:18" capsule in the title bar. Ticks once a second and
+/// opens the live meeting detail when clicked.
+private struct RecPill: View {
+    @Environment(RecordingController.self) private var controller
+    let action: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            Button(action: action) {
+                HStack(spacing: 6) {
+                    Circle().fill(.red).frame(width: 7, height: 7)
+                    Text("REC")
+                        .font(.caption.weight(.bold))
+                    Text(recTimerString(controller.state.elapsed))
+                        .font(.caption.weight(.medium).monospacedDigit())
+                }
+                .foregroundStyle(.red)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.red.opacity(0.12), in: Capsule())
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Open the live meeting")
+        }
+    }
+}
+
+private func recTimerString(_ interval: TimeInterval) -> String {
+    let total = max(0, Int(interval))
+    return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+}
+
 /// Start/stop toggle in the window toolbar. Mirrors the menu bar control: New
-/// Recording starts a session; while recording it becomes a red Stop button,
-/// and stopping lands the new meeting in the list.
+/// Recording starts a session (and opens the live detail); while recording it
+/// becomes a red Stop button, and stopping lands the new meeting in the list.
 private struct RecordToolbarButton: View {
     @Environment(RecordingController.self) private var controller
+    /// Called when a session actually started, so the window can jump to the
+    /// live meeting detail.
+    let onStart: () -> Void
 
     var body: some View {
         let isRecording = controller.state.isRecording
         Button {
-            Task { await controller.toggle() }
+            Task {
+                let wasRecording = controller.state.isRecording
+                await controller.toggle()
+                if !wasRecording && controller.state.isRecording { onStart() }
+            }
         } label: {
             Label(
                 isRecording ? "Stop Recording" : "New Recording",
@@ -192,6 +300,7 @@ private struct RecordToolbarButton: View {
 
 private struct LibrarySidebar: View {
     @Environment(RecordingController.self) private var controller
+    @Binding var opened: OpenedDetail?
 
     var body: some View {
         let library = controller.library
@@ -200,20 +309,28 @@ private struct LibrarySidebar: View {
         // no rows at all on this macOS (verified via the view-tree dump — the
         // outline view materializes zero row views even for plain Texts).
         // Custom rows also match the mockup's look more closely.
+        // Clicking a section always lands on its list, so any open detail
+        // closes even when the section itself doesn't change.
         VStack(alignment: .leading, spacing: 4) {
             SidebarRow(
                 title: "All Meetings",
                 systemImage: "square.stack.3d.up.fill",
                 count: library.metas.count,
                 isSelected: library.section == .all
-            ) { library.section = .all }
+            ) {
+                library.section = .all
+                opened = nil
+            }
 
             SidebarRow(
                 title: "Trash",
                 systemImage: "trash",
                 count: library.trashedMetas.count,
                 isSelected: library.section == .trash
-            ) { library.section = .trash }
+            ) {
+                library.section = .trash
+                opened = nil
+            }
 
             Spacer()
 
@@ -285,11 +402,11 @@ private struct SidebarRow: View {
 
 // MARK: - Detail routing
 
-/// Hosts the navigation stack: the list for the current section is the root,
-/// and opening a meeting pushes the reused detail.
+/// Hosts the right pane: the list for the current section is the root, and
+/// opening a meeting covers it with the detail.
 private struct MeetingLibraryDetail: View {
     @Environment(RecordingController.self) private var controller
-    @State private var opened: OpenedMeeting?
+    @Binding var opened: OpenedDetail?
 
     var body: some View {
         let library = controller.library
@@ -301,13 +418,13 @@ private struct MeetingLibraryDetail: View {
                 TrashView(opened: $opened)
             }
         }
-        // Opening a meeting shows the detail as a full-cover overlay (with its
-        // own back button) rather than a pushed NavigationStack view, so it
-        // never contends with the window toolbar. Opaque background so it
-        // fully covers the list.
+        // Opening a meeting shows the detail as a full-cover overlay (its back
+        // affordance lives in the window title bar) rather than a pushed
+        // NavigationStack view, so it never contends with the window toolbar.
+        // Opaque background so it fully covers the list.
         .overlay {
-            if let target = opened {
-                MeetingDetailScreen(id: target.id, initialTab: target.tab) { opened = nil }
+            if let detail = opened {
+                MeetingDetailScreen(target: detail.target, initialTab: detail.tab) { opened = nil }
                     .background(.background)
             }
         }
@@ -322,7 +439,7 @@ private struct MeetingLibraryDetail: View {
 private struct AllMeetingsView: View {
     @Environment(RecordingController.self) private var controller
     @Environment(AppSettings.self) private var settings
-    @Binding var opened: OpenedMeeting?
+    @Binding var opened: OpenedDetail?
 
     @State private var searchText = ""
     @State private var sortOrder: MeetingSortOrder = .recent
@@ -336,6 +453,14 @@ private struct AllMeetingsView: View {
             header
             if !settings.privacyBannerDismissed {
                 PrivacyBanner { settings.dismissPrivacyBanner() }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 8)
+            }
+            // The in-progress session has no saved row yet (it persists on
+            // stop), so while recording a pinned live row sits above the list
+            // and opens the live detail.
+            if controller.state.isRecording {
+                LiveMeetingRow { opened = OpenedDetail(target: .live) }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 8)
             }
@@ -458,7 +583,7 @@ private struct AllMeetingsView: View {
         .onDeleteCommand { trashSelected() }
         .onKeyPress(.return) {
             guard let selection else { return .ignored }
-            opened = OpenedMeeting(id: selection, tab: .transcript)
+            opened = OpenedDetail(target: .saved(selection))
             return .handled
         }
     }
@@ -469,7 +594,7 @@ private struct AllMeetingsView: View {
                 meta: meta,
                 isActive: meta.id == controller.library.activeMeetingID,
                 summaryState: controller.state.summaryState,
-                onOpen: { tab in opened = OpenedMeeting(id: meta.id, tab: tab) },
+                onOpen: { tab in opened = OpenedDetail(target: .saved(meta.id), tab: tab) },
                 onRename: {
                     renameTarget = meta
                     renameText = meta.title
@@ -478,7 +603,7 @@ private struct AllMeetingsView: View {
             .tag(meta.id)
             .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
             .simultaneousGesture(TapGesture(count: 2).onEnded {
-                opened = OpenedMeeting(id: meta.id, tab: .transcript)
+                opened = OpenedDetail(target: .saved(meta.id))
             })
         }
     }
@@ -504,7 +629,7 @@ private struct AllMeetingsView: View {
 
 private struct TrashView: View {
     @Environment(RecordingController.self) private var controller
-    @Binding var opened: OpenedMeeting?
+    @Binding var opened: OpenedDetail?
 
     @State private var selection: UUID?
     @State private var confirmDelete: MeetingMeta?
@@ -572,14 +697,14 @@ private struct TrashView: View {
                 ForEach(trashed) { meta in
                     TrashRow(
                         meta: meta,
-                        onOpen: { opened = OpenedMeeting(id: meta.id, tab: .transcript) },
+                        onOpen: { opened = OpenedDetail(target: .saved(meta.id)) },
                         onRestore: { Task { await controller.library.restore(meta.id) } },
                         onDelete: { confirmDelete = meta }
                     )
                     .tag(meta.id)
                     .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
                     .simultaneousGesture(TapGesture(count: 2).onEnded {
-                        opened = OpenedMeeting(id: meta.id, tab: .transcript)
+                        opened = OpenedDetail(target: .saved(meta.id))
                     })
                 }
             }
@@ -729,6 +854,62 @@ private struct MeetingRow: View {
 
     private func trash() {
         Task { await controller.library.trash(meta.id) }
+    }
+}
+
+/// The pinned row shown above the list while a recording is running: the
+/// session's auto title, a ticking elapsed/word-count line, and a red
+/// "Recording" badge. Clicking anywhere opens the live detail.
+private struct LiveMeetingRow: View {
+    @Environment(RecordingController.self) private var controller
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 12) {
+                MeetingGlyph(size: 34)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(liveMeetingTitle(controller))
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(metadataText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                HStack(spacing: 4) {
+                    Circle().fill(.red).frame(width: 7, height: 7)
+                    Text("Recording")
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.red)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.red.opacity(0.12), in: Capsule())
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.red.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.red.opacity(0.15))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Open the live meeting")
+    }
+
+    private var metadataText: String {
+        let words = MeetingMeta.wordCount(of: controller.state.segments)
+        return "\(recTimerString(controller.state.elapsed))  ·  \(words.formatted()) words"
     }
 }
 
@@ -927,18 +1108,21 @@ private struct MeetingDateGroup: Identifiable {
 
 // MARK: - Detail screen (reused Transcript/Summary views)
 
-/// Routes an opened meeting between the live in-memory state (the just-stopped
-/// session, so a summary can still stream in) and a saved record loaded from
-/// disk. This is the interim detail — the redesigned detail replaces it later.
+/// Routes an opened detail between the live in-memory state (the running or
+/// just-stopped session, so partials render in the footer and a summary can
+/// still stream in) and a saved record loaded from disk. Chrome per the
+/// redesign: an underlined Transcript / AI Summary tab bar at the top (the
+/// title and back affordance live in the window title bar) and, while
+/// recording, the live-transcription footer at the bottom.
 private struct MeetingDetailScreen: View {
-    let id: UUID
+    let target: DetailTarget
     let initialTab: DetailTab
     let onClose: () -> Void
     @Environment(RecordingController.self) private var controller
     @State private var selectedTab: DetailTab
 
-    init(id: UUID, initialTab: DetailTab, onClose: @escaping () -> Void) {
-        self.id = id
+    init(target: DetailTarget, initialTab: DetailTab, onClose: @escaping () -> Void) {
+        self.target = target
         self.initialTab = initialTab
         self.onClose = onClose
         _selectedTab = State(initialValue: initialTab)
@@ -947,31 +1131,20 @@ private struct MeetingDetailScreen: View {
     var body: some View {
         let library = controller.library
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Button(action: onClose) {
-                    Label("All Meetings", systemImage: "chevron.left")
-                        .font(.body.weight(.medium))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tint)
+            DetailTabBar(selection: $selectedTab)
 
-                Divider().frame(height: 16)
-
-                Text(library.meta(for: id)?.title ?? "Meeting")
-                    .font(.headline)
-                    .lineLimit(1)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-
-            Divider()
-
-            if id == library.activeMeetingID {
+            switch target {
+            case .live:
                 LiveMeetingDetail(selectedTab: $selectedTab)
-            } else {
-                PastMeetingDetail(id: id, selectedTab: $selectedTab)
-                    .id(id)
+            case .saved(let id):
+                // A saved meeting that is still "active" is the just-stopped
+                // session: keep it on the live state so its summary streams in.
+                if id == library.activeMeetingID {
+                    LiveMeetingDetail(selectedTab: $selectedTab)
+                } else {
+                    PastMeetingDetail(id: id, selectedTab: $selectedTab)
+                        .id(id)
+                }
             }
         }
         // Escape returns to the list.
@@ -979,37 +1152,65 @@ private struct MeetingDetailScreen: View {
     }
 }
 
-/// The current session (or empty idle state): transcript with live partials and
-/// the streaming/regenerable summary over `controller.state`.
+/// The mockup's underlined tab strip: Transcript / AI Summary.
+private struct DetailTabBar: View {
+    @Binding var selection: DetailTab
+
+    var body: some View {
+        HStack(spacing: 24) {
+            tab("Transcript", .transcript)
+            tab("AI Summary", .summary)
+            Spacer()
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 14)
+    }
+
+    private func tab(_ title: String, _ value: DetailTab) -> some View {
+        let isSelected = selection == value
+        return Button {
+            selection = value
+        } label: {
+            VStack(spacing: 7) {
+                Text(title)
+                    .font(.body.weight(isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                Rectangle()
+                    .fill(isSelected ? Color.echoIndigo : .clear)
+                    .frame(height: 2)
+            }
+            .fixedSize()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The current session (or empty idle state): the committed transcript and the
+/// streaming/regenerable summary over `controller.state`, plus — while
+/// recording — the footer with the popover's waves and the live partial text.
 private struct LiveMeetingDetail: View {
     @Environment(RecordingController.self) private var controller
     @Binding var selectedTab: DetailTab
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            TranscriptScroll(rows: transcriptRows, isRecording: controller.state.isRecording)
-                .tabItem { Label("Transcript", systemImage: "text.bubble") }
-                .tag(DetailTab.transcript)
-            summary
-                .tabItem { Label("Summary", systemImage: "sparkles") }
-                .tag(DetailTab.summary)
-        }
-        .padding(.top, 8)
-    }
-
-    private var transcriptRows: [TranscriptDisplayRow] {
-        let finalRows = controller.state.segments.map {
-            TranscriptDisplayRow(segment: $0, isPartial: false)
-        }
-        let partialRows = controller.state.partialSegments.values.map {
-            TranscriptDisplayRow(segment: $0, isPartial: true)
-        }
-
-        return (finalRows + partialRows).sorted {
-            if $0.segment.start == $1.segment.start {
-                return !$0.isPartial && $1.isPartial
+        VStack(spacing: 0) {
+            Group {
+                switch selectedTab {
+                case .transcript:
+                    TranscriptScroll(
+                        segments: controller.state.segments,
+                        isRecording: controller.state.isRecording
+                    )
+                case .summary:
+                    summary
+                }
             }
-            return $0.segment.start < $1.segment.start
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if controller.state.isRecording {
+                LiveTranscriptFooter()
+            }
         }
     }
 
@@ -1145,15 +1346,12 @@ private struct PastMeetingDetail: View {
     var body: some View {
         Group {
             if let record {
-                TabView(selection: $selectedTab) {
-                    TranscriptScroll(rows: rows(for: record), isRecording: false)
-                        .tabItem { Label("Transcript", systemImage: "text.bubble") }
-                        .tag(DetailTab.transcript)
+                switch selectedTab {
+                case .transcript:
+                    TranscriptScroll(segments: record.segments, isRecording: false)
+                case .summary:
                     summary(for: record)
-                        .tabItem { Label("Summary", systemImage: "sparkles") }
-                        .tag(DetailTab.summary)
                 }
-                .padding(.top, 8)
             } else if isLoading {
                 ProgressView()
                     .controlSize(.large)
@@ -1174,10 +1372,6 @@ private struct PastMeetingDetail: View {
         }
     }
 
-    private func rows(for record: MeetingRecord) -> [TranscriptDisplayRow] {
-        record.segments.map { TranscriptDisplayRow(segment: $0, isPartial: false) }
-    }
-
     @ViewBuilder
     private func summary(for record: MeetingRecord) -> some View {
         if let summary = record.summary {
@@ -1195,12 +1389,14 @@ private struct PastMeetingDetail: View {
 
 // MARK: - Shared transcript list
 
+/// The committed (final) transcript only — live partial text renders in the
+/// footer, never here.
 private struct TranscriptScroll: View {
-    let rows: [TranscriptDisplayRow]
+    let segments: [TranscriptSegment]
     let isRecording: Bool
 
     var body: some View {
-        if rows.isEmpty {
+        if segments.isEmpty {
             ContentUnavailableView(
                 isRecording ? "Listening…" : "No transcript",
                 systemImage: "text.bubble",
@@ -1211,62 +1407,96 @@ private struct TranscriptScroll: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(rows) { row in
-                        SegmentRow(segment: row.segment, isPartial: row.isPartial)
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    ForEach(segments) { segment in
+                        SegmentRow(segment: segment)
                     }
                 }
-                .padding()
+                // A readable column as in the mockup: capped width, centered
+                // in the pane.
+                .frame(maxWidth: 720, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .frame(maxWidth: .infinity)
             }
         }
-    }
-}
-
-private struct TranscriptDisplayRow: Identifiable {
-    let segment: TranscriptSegment
-    let isPartial: Bool
-
-    var id: String {
-        isPartial ? "partial-\(segment.channel.rawValue)" : segment.id.uuidString
     }
 }
 
 private struct SegmentRow: View {
     let segment: TranscriptSegment
-    var isPartial = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(isPartial ? accent.opacity(0.45) : accent)
-                .frame(width: 8, height: 8)
-                .padding(.top, 6)
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(segment.speaker.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(accent)
-                    Text(isPartial ? "Live" : timestamp)
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Text(segment.text)
-                    .font(.body)
-                    .foregroundStyle(isPartial ? .secondary : .primary)
-                    .opacity(isPartial ? 0.78 : 1)
-                    .textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(segment.speaker.displayName)
+                    .font(.subheadline.weight(.semibold))
+                Text(timestamp)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
+            Text(segment.text)
+                .font(.body)
+                .textSelection(.enabled)
         }
     }
 
-    private var accent: Color {
-        segment.channel == .microphone ? .blue : .purple
+    private var timestamp: String {
+        recTimerString(segment.start)
+    }
+}
+
+// MARK: - Live transcription footer
+
+/// The detail's bottom bar while recording: the same dual waves as the menu
+/// bar popover (real capture levels), the current live partial text, and the
+/// transcribing / processed-locally status. Final transcript lines never
+/// render here — they land in the list above.
+private struct LiveTranscriptFooter: View {
+    @Environment(RecordingController.self) private var controller
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 14) {
+                DualWaveView(
+                    inputLevel: DualWaveView.amplitude(controller.state.inputLevels),
+                    outputLevel: DualWaveView.amplitude(controller.state.outputLevels)
+                )
+                .frame(width: 130, height: 30)
+
+                Text(liveText ?? "Listening…")
+                    .font(.callout.italic())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+
+                Spacer(minLength: 12)
+
+                Text("Transcribing…")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(Color.echoIndigo)
+
+                HStack(spacing: 5) {
+                    Image(systemName: "checkmark.shield")
+                    Text("Processed locally")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private var timestamp: String {
-        let total = Int(segment.start)
-        return String(format: "%d:%02d", total / 60, total % 60)
+    /// The most recent provisional line across both channels. Partials are
+    /// per-channel; the one that starts later is the one being spoken now.
+    private var liveText: String? {
+        let partials = controller.state.partialSegments.values
+        guard let latest = partials.max(by: { $0.start < $1.start }) else { return nil }
+        let text = latest.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text + "…"
     }
 }
 
