@@ -164,6 +164,9 @@ final class RecordingController {
         Task { await prepare() }
         // Paint the summary-model control from the on-disk cache state.
         Task { await refreshSummaryModelState() }
+        // Catch up on summaries a quit interrupted (or that never ran): scan
+        // the saved meetings once the library loads.
+        Task { await backfillMissingSummaries() }
     }
 
     /// Loads the transcription models ahead of time. Idempotent.
@@ -234,6 +237,85 @@ final class RecordingController {
             summaryModelState = .ready
         } catch {
             summaryModelState = .failed(error.localizedDescription)
+        }
+    }
+
+    // MARK: - Summary backfill (launch catch-up)
+
+    /// The meeting the launch backfill is currently summarizing, if any. The
+    /// library list shows its row as "Processing" and its detail as generating.
+    private(set) var backfillingMeetingID: UUID?
+
+    /// Guards against overlapping backfill runs.
+    private var isBackfillingSummaries = false
+
+    /// Summarizes saved meetings that have no summary yet — a quit during
+    /// generation, an earlier failure, or an old unprocessed meeting (user
+    /// decision 2026-07-17: every summary-less meeting qualifies, not only
+    /// interrupted sessions). Runs once per launch, one meeting at a time,
+    /// newest first; a recording starting aborts it and the rest catch up on
+    /// the next launch. With no model on disk it does nothing — the backfill
+    /// never triggers the multi-GB download on its own.
+    private func backfillMissingSummaries() async {
+        guard !isBackfillingSummaries else { return }
+        isBackfillingSummaries = true
+        defer {
+            isBackfillingSummaries = false
+            backfillingMeetingID = nil
+        }
+
+        // The library loads asynchronously at launch; an explicit (idempotent)
+        // refresh guarantees `metas` is current before scanning.
+        await library.refresh()
+        guard await summaryModelManager.cachedModelExists() else { return }
+
+        // Meetings that already got their attempt this run: a failed or empty
+        // generation must not spin the loop — it retries on the next launch.
+        var attempted: Set<UUID> = []
+
+        while !state.isRecording {
+            guard let meta = library.metas.first(where: { !$0.hasSummary && !attempted.contains($0.id) })
+            else { return }
+            attempted.insert(meta.id)
+
+            guard let record = await library.loadRecord(meta.id), !record.segments.isEmpty else { continue }
+            backfillingMeetingID = meta.id
+
+            do {
+                let engine = try await summaryModelManager.ensureReady { [weak self] phase, fraction in
+                    Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
+                }
+                summaryModelState = .ready
+                guard !state.isRecording else { return }
+
+                var latest: MeetingSummary?
+                let stream = await summarizer.generate(from: record.segments, using: engine)
+                for try await partial in stream {
+                    // A recording started mid-generation: abandon this meeting
+                    // (ending the loop cancels the generation task) so the LLM
+                    // never competes with live transcription.
+                    guard !state.isRecording else { return }
+                    latest = partial
+                }
+
+                if let latest {
+                    let description = await summarizer.oneLineDescription(for: latest, using: engine)
+                    await library.attachSummary(latest, description: description, to: meta.id)
+                } else {
+                    Self.log.error("Summary backfill: empty summary for \(meta.id.uuidString, privacy: .public)")
+                }
+            } catch {
+                Self.log.error("""
+                Summary backfill failed for \(meta.id.uuidString, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+                // A model-level failure would fail every remaining meeting too.
+                if error is SummaryModelError {
+                    summaryModelState = .failed(error.localizedDescription)
+                    return
+                }
+            }
+            backfillingMeetingID = nil
         }
     }
 

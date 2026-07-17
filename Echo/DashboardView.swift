@@ -593,6 +593,7 @@ private struct AllMeetingsView: View {
             MeetingRow(
                 meta: meta,
                 isActive: meta.id == controller.library.activeMeetingID,
+                isBackfilling: meta.id == controller.backfillingMeetingID,
                 summaryState: controller.state.summaryState,
                 onOpen: { tab in opened = OpenedDetail(target: .saved(meta.id), tab: tab) },
                 onRename: {
@@ -750,6 +751,7 @@ private struct MeetingRow: View {
     @Environment(RecordingController.self) private var controller
     let meta: MeetingMeta
     let isActive: Bool
+    let isBackfilling: Bool
     let summaryState: SummaryState
     let onOpen: (DetailTab) -> Void
     let onRename: () -> Void
@@ -784,7 +786,7 @@ private struct MeetingRow: View {
             .buttonStyle(.plain)
             .help("View transcript")
 
-            StatusPill(meta: meta, isActive: isActive, summaryState: summaryState)
+            StatusPill(meta: meta, isActive: isActive, isBackfilling: isBackfilling, summaryState: summaryState)
 
             quickActions
         }
@@ -976,6 +978,7 @@ private struct TrashRow: View {
 private struct StatusPill: View {
     let meta: MeetingMeta
     let isActive: Bool
+    let isBackfilling: Bool
     let summaryState: SummaryState
 
     var body: some View {
@@ -1005,6 +1008,10 @@ private struct StatusPill: View {
             default:
                 break
             }
+        }
+        // The launch backfill is summarizing this meeting right now.
+        if isBackfilling {
+            return ("Processing", .orange, "clock", true)
         }
         if meta.hasSummary {
             return ("Processed", .green, "checkmark.circle", false)
@@ -1365,7 +1372,10 @@ private struct PastMeetingDetail: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .task(id: id) {
+        // Keyed on `hasSummary` (the view's `.id(id)` already resets identity
+        // per meeting): when the launch backfill attaches a summary while this
+        // detail is open, the record reloads and the summary appears in place.
+        .task(id: controller.library.meta(for: id)?.hasSummary ?? false) {
             isLoading = true
             record = await controller.library.loadRecord(id)
             isLoading = false
@@ -1376,6 +1386,17 @@ private struct PastMeetingDetail: View {
     private func summary(for record: MeetingRecord) -> some View {
         if let summary = record.summary {
             SummaryContentView(summary: summary, segments: record.segments)
+        } else if controller.backfillingMeetingID == id {
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Generating summary…")
+                    .font(.headline)
+                Text("Gemma is reading this meeting's transcript locally.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ContentUnavailableView(
                 "No summary",
