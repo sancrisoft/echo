@@ -17,7 +17,7 @@ Everything runs locally: audio, transcripts, and summaries never leave your Mac.
 - macOS 15.6 or later
 - Apple Silicon (M-series) Mac
 - Disk space for the on-device models (several GB, downloaded on first use)
-- [GitHub CLI](https://cli.github.com) (`gh`) with access to this repository, for installation
+- [GitHub CLI](https://cli.github.com) (`gh`) with access to this repository — or a personal access token — for installation
 
 ## Install
 
@@ -37,6 +37,23 @@ gh api -H "Accept: application/vnd.github.raw" repos/sancrisoft/echo/contents/sc
 ```
 
 Available versions are listed under [Releases](https://github.com/sancrisoft/echo/releases).
+</details>
+
+<details>
+<summary>Using curl instead of gh</summary>
+
+If you don't use the GitHub CLI (e.g. you only authenticate to GitHub over SSH), you can install with plain `curl` and a personal access token. SSH keys don't work against the GitHub API, so a token is required for the private release assets:
+
+1. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with access to `sancrisoft/echo` and read-only **Contents** permission (a classic token with the `repo` scope also works).
+2. Run:
+
+```sh
+export GITHUB_TOKEN=github_pat_...
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw" \
+  https://api.github.com/repos/sancrisoft/echo/contents/scripts/install.sh | bash
+```
+
+Appending `-s v0.0.1` installs that specific version, same as with `gh`.
 </details>
 
 ### Update

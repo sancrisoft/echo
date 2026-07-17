@@ -64,4 +64,6 @@ jobs:
 
           \`\`\`sh
           gh api -H \"Accept: application/vnd.github.raw\" repos/${GITHUB_REPOSITORY}/contents/scripts/install.sh | bash
-          \`\`\`"
+          \`\`\`
+
+          No \`gh\`? See the [install instructions](https://github.com/${GITHUB_REPOSITORY}#install) for a curl + token alternative."
