@@ -1452,6 +1452,7 @@ private struct SegmentRow: View {
             HStack(spacing: 8) {
                 Text(segment.speaker.displayName)
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(accent)
                 Text(timestamp)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -1460,6 +1461,12 @@ private struct SegmentRow: View {
                 .font(.body)
                 .textSelection(.enabled)
         }
+    }
+
+    /// Speaker accent: the user keeps the brand indigo (their wave, the
+    /// glyph); everyone on the system stream gets a distinguishable purple.
+    private var accent: Color {
+        segment.speaker == .me ? .echoIndigo : .purple
     }
 
     private var timestamp: String {
