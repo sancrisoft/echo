@@ -91,6 +91,12 @@ struct DashboardView: View {
             minHeight: 560, idealHeight: 720, maxHeight: .infinity
         )
         .navigationTitle("")
+        // Opening the window is a natural catch-up point: any meeting still
+        // missing its summary starts processing in view (row pill flips to
+        // "Processing"). `onAppear` + the controller's fire-and-forget kick —
+        // NOT `.task` — so closing the window mid-run can't cancel a
+        // generation halfway through.
+        .onAppear { controller.kickSummaryBackfill() }
         #if DEBUG
         // Dev-only verification loop: with ECHO_SNAPSHOT_PATH set (and the
         // window auto-opened via ECHO_OPEN_DASHBOARD, see EchoApp), renders
