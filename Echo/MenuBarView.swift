@@ -113,8 +113,8 @@ struct MenuBarView: View {
             }
 
             DualWaveView(
-                inputLevel: Self.amplitude(controller.state.inputLevels),
-                outputLevel: Self.amplitude(controller.state.outputLevels)
+                inputLevel: DualWaveView.amplitude(controller.state.inputLevels),
+                outputLevel: DualWaveView.amplitude(controller.state.outputLevels)
             )
             .frame(height: 54)
             .padding(.vertical, 2)
@@ -253,16 +253,6 @@ struct MenuBarView: View {
     private static func minutesString(_ duration: TimeInterval) -> String {
         let minutes = max(1, Int((duration / 60).rounded()))
         return "\(minutes) min"
-    }
-
-    /// A single display amplitude (0...1) from a channel's rolling levels: the
-    /// mean of the most recent samples, lightly gained so ordinary speech reads
-    /// as a visible wave. Still entirely real capture data.
-    private static func amplitude(_ levels: [CGFloat]) -> CGFloat {
-        guard !levels.isEmpty else { return 0 }
-        let recent = levels.suffix(8)
-        let mean = recent.reduce(0, +) / CGFloat(recent.count)
-        return min(1, mean * 1.4)
     }
 
     #if DEBUG

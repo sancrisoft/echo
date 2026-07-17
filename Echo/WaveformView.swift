@@ -24,6 +24,17 @@ struct DualWaveView: View {
     /// Current system amplitude, 0...1 (real capture level — teammates).
     var outputLevel: CGFloat
 
+    /// A single display amplitude (0...1) from a channel's rolling levels: the
+    /// mean of the most recent samples, lightly gained so ordinary speech reads
+    /// as a visible wave. Still entirely real capture data. Shared by every
+    /// surface that renders these waves (menu bar popover, live detail footer).
+    static func amplitude(_ levels: [CGFloat]) -> CGFloat {
+        guard !levels.isEmpty else { return 0 }
+        let recent = levels.suffix(8)
+        let mean = recent.reduce(0, +) / CGFloat(recent.count)
+        return min(1, mean * 1.4)
+    }
+
     var body: some View {
         // `.animation` gives a per-frame date; only the phase advances with it,
         // so the waves travel while their height stays tied to real levels.
