@@ -183,8 +183,13 @@ struct MenuBarView: View {
     /// The most severe active capture-health notice, if any. Ordered so a
     /// device-lost notice is never masked by an input-health one (the same
     /// priority the stacked notices used before). All of these clear on stop.
+    /// A dead transcriber outranks everything: audio is captured but every
+    /// sample is dropped, so nothing of this session will be transcribed.
     private var activeWarning: String? {
         let s = controller.state
+        if s.transcriberUnavailable {
+            return "Speech model isn't loaded — this recording won't be transcribed. Check your connection and relaunch Echo."
+        }
         return s.inputNotice ?? s.micHealthNotice ?? s.systemHealthNotice ?? s.echoNotice
     }
 

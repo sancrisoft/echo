@@ -199,6 +199,11 @@ final class RecordingController {
 
         do {
             await pipeline.start(appendingTo: state)
+            // `pipeline.start` awaits the (re)load, so "not ready" here means
+            // the model genuinely failed to load and this session's audio is
+            // being dropped — surface it instead of pretending to transcribe.
+            let transcriberReady = await pipeline.isReady
+            state.markTranscriberUnavailable(!transcriberReady)
             try await startMicIfExpected()
             try await system.start()
             state.status = ""

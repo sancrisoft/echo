@@ -1513,9 +1513,18 @@ private struct LiveTranscriptFooter: View {
 
                 Spacer(minLength: 12)
 
-                Text("Transcribing…")
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(Color.echoIndigo)
+                // Honest status: while the speech model isn't loaded the
+                // pipeline drops every sample, and "Transcribing…" would be
+                // a lie that costs the user the whole meeting.
+                if controller.state.transcriberUnavailable {
+                    Text("Not transcribing — speech model failed to load")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("Transcribing…")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(Color.echoIndigo)
+                }
 
                 HStack(spacing: 5) {
                     Image(systemName: "checkmark.shield")
