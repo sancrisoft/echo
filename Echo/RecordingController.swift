@@ -133,6 +133,9 @@ final class RecordingController {
     /// Dashboard-facing lifecycle of the summary model (download/load/ready).
     /// Owned here so the UI never talks to the manager actor directly.
     private(set) var summaryModelState: SummaryModelState = .notDownloaded
+    /// Same for the speech model — fed by the pipeline's phase handler. Starts
+    /// as `.loading` because `prepare()` kicks the (cache-first) load at init.
+    private(set) var speechModelState: SpeechModelState = .loading
 
     /// One-shot request (set by the menu bar's Stop) for the dashboard to open
     /// straight onto the just-stopped meeting, so the streaming summary — and
@@ -175,8 +178,13 @@ final class RecordingController {
         kickSummaryBackfill()
     }
 
-    /// Loads the transcription models ahead of time. Idempotent.
+    /// Loads the transcription models ahead of time. Idempotent — also the
+    /// banner's speech-model Retry action (a failed load resets itself so a
+    /// later call genuinely retries).
     func prepare() async {
+        await pipeline.setModelPhaseHandler { [weak self] phase in
+            Task { @MainActor in self?.speechModelState = phase }
+        }
         await pipeline.preload(updating: state)
     }
 
@@ -213,6 +221,11 @@ final class RecordingController {
             try await startMicIfExpected()
             try await system.start()
             state.status = ""
+            // Recording is the implicit request for this meeting's summary:
+            // fetch the model's files during the session, after the speech
+            // model is up (so on a fresh install Whisper's download — the one
+            // that gates recording — never shares bandwidth with this one).
+            prefetchSummaryModelIfNeeded()
         } catch {
             state.status = error.localizedDescription
             await stop(summarize: false)
@@ -235,23 +248,53 @@ final class RecordingController {
         )
     }
 
-    /// Explicit download from the dashboard's model control (the same
+    /// Explicit download from the dashboard's model controls (the same
     /// download runs implicitly on the first summary if the user never
-    /// pressed the button). Downloads AND loads, so "Ready" means the next
-    /// summary starts instantly.
+    /// pressed a button). While idle it downloads AND loads, so "Ready" means
+    /// the next summary starts instantly; while recording it fetches files
+    /// only — the 12B load must never compete with live transcription.
     func downloadSummaryModel() async {
         guard !summaryModelState.isBusy else { return }
         do {
-            _ = try await summaryModelManager.ensureReady { [weak self] phase, fraction in
+            let progress: @Sendable (String, Double) -> Void = { [weak self] phase, fraction in
                 Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
             }
+            if state.isRecording {
+                try await summaryModelManager.ensureDownloaded(progress: progress)
+            } else {
+                _ = try await summaryModelManager.ensureReady(progress: progress)
+            }
             summaryModelState = .ready
+            if !state.isRecording { state.updateStatus("") }
             // The model just became usable: meetings that were waiting for it
             // (the launch backfill skips everything while it isn't on disk)
             // can be processed right away instead of on the next launch.
             kickSummaryBackfill()
         } catch {
             summaryModelState = .failed(error.localizedDescription)
+            if !state.isRecording { state.updateStatus("") }
+        }
+    }
+
+    /// Fetches the summary model's files while a recording runs (download
+    /// only — the 12B weights must never load into RAM while Whisper is
+    /// transcribing live; the post-stop `ensureReady` does the load). Joins
+    /// any in-flight download, so at most one transfer ever runs. A failure
+    /// only paints the banner: the stop path and its own retry buttons own
+    /// recovery, and the session itself is never disturbed.
+    private func prefetchSummaryModelIfNeeded() {
+        guard !summaryModelState.isBusy else { return }
+        if case .ready = summaryModelState { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.summaryModelManager.ensureDownloaded { [weak self] phase, fraction in
+                    Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
+                }
+                self.summaryModelState = .ready
+            } catch {
+                self.summaryModelState = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -269,6 +312,20 @@ final class RecordingController {
     /// chokes on can't burn a generation on every trigger — and retried on
     /// the next launch, when this set dies with the process.
     private var backfillFailedIDs: Set<UUID> = []
+
+    /// A meeting the user explicitly asked to summarize (the past detail's
+    /// "Generate summary" button): the next backfill iteration takes it
+    /// before the newest-first scan. Survives until a run actually consumes
+    /// it, so a request made while a generation is busy still lands.
+    private var requestedSummaryID: UUID?
+
+    /// User-initiated summary generation for one saved meeting. Clears the
+    /// meeting's failed-this-run mark so the backfill genuinely retries it.
+    func requestSummary(for id: UUID) {
+        backfillFailedIDs.remove(id)
+        requestedSummaryID = id
+        kickSummaryBackfill()
+    }
 
     /// Fire-and-forget entry point for every backfill trigger: launch, each
     /// recording stop, opening the dashboard window, and a completed model
@@ -306,7 +363,14 @@ final class RecordingController {
             default: break
             }
 
-            guard let meta = library.metas.first(where: { !$0.hasSummary && !backfillFailedIDs.contains($0.id) })
+            // A user-requested meeting front-runs the newest-first scan;
+            // consumed exactly once so the loop then resumes normal order.
+            let requested = requestedSummaryID.flatMap { id in
+                library.metas.first { $0.id == id && !$0.hasSummary }
+            }
+            requestedSummaryID = nil
+            guard let meta = requested
+                ?? library.metas.first(where: { !$0.hasSummary && !backfillFailedIDs.contains($0.id) })
             else { return }
 
             guard let record = await library.loadRecord(meta.id), !record.segments.isEmpty else {
@@ -320,6 +384,7 @@ final class RecordingController {
                     Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
                 }
                 summaryModelState = .ready
+                if !state.isRecording { state.updateStatus("") }
                 guard !state.isRecording else { return }
 
                 var latest: MeetingSummary?
@@ -366,7 +431,15 @@ final class RecordingController {
     }
 
     private func refreshSummaryModelState() async {
-        summaryModelState = await summaryModelManager.cachedModelExists() ? .ready : .notDownloaded
+        if await summaryModelManager.cachedModelExists() {
+            summaryModelState = .ready
+        } else if let bytes = await summaryModelManager.partialDownloadBytes() {
+            // A quit mid-download left resumable files behind: offer "Resume"
+            // instead of a from-scratch "Download".
+            summaryModelState = .partiallyDownloaded(bytesOnDisk: bytes)
+        } else {
+            summaryModelState = .notDownloaded
+        }
     }
 
     private func applySummaryModelProgress(_ phase: String, _ fraction: Double) {
@@ -374,6 +447,13 @@ final class RecordingController {
             summaryModelState = .loading
         } else {
             summaryModelState = .downloading(fraction)
+        }
+        // The popover's status line tells the same truth while idle. During a
+        // recording it shows the live word count instead — the banner and the
+        // model control carry the progress there.
+        if !state.isRecording {
+            let percent = Int(fraction * 100)
+            state.updateStatus(phase.hasPrefix("Downloading") ? "\(phase) \(percent)%" : phase)
         }
     }
 
@@ -435,21 +515,19 @@ final class RecordingController {
         state.markSummaryGenerating()
 
         do {
-            // First run downloads (~8.3 GB, once) and loads the model; later
-            // runs return the warm engine immediately. Progress surfaces
-            // through the existing status line and the model control.
+            // First run downloads (~8.3 GB, once — resuming whatever the
+            // recording-start prefetch already fetched) and loads the model;
+            // later runs return the warm engine immediately. The progress
+            // drives `summaryModelState`, which the detail's generating view
+            // renders as the real phase — never "Generating…" over a download.
             let engine = try await summaryModelManager.ensureReady { [weak self] phase, fraction in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.applySummaryModelProgress(phase, fraction)
-                    let percent = Int(fraction * 100)
-                    // Only the active download phase carries a meaningful
-                    // percentage ("Download stalled — retrying…" does not).
-                    self.state.updateStatus(phase.hasPrefix("Downloading") ? "\(phase) \(percent)%" : phase)
-                }
+                Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
             }
             summaryModelState = .ready
-            state.updateStatus("")
+            guard generation == sessionGeneration, !state.isRecording else { return }
+            // Re-assert now that the model phase is over: the status line
+            // returns from download/load text to the honest "Generating…".
+            state.markSummaryGenerating()
 
             var latest: MeetingSummary?
             // Long transcripts map-reduce; surface per-part progress on the

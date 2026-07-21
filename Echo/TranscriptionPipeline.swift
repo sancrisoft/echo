@@ -134,6 +134,17 @@ nonisolated struct AudioStats: Sendable {
     }
 }
 
+/// Dashboard-facing lifecycle of the speech (Whisper) model — the models
+/// banner's row for "which model is this, what is it doing right now".
+/// Mirrors `SummaryModelState`; `ready` here means loaded and transcribing-
+/// capable (Whisper is compiled into memory at launch, unlike the LLM).
+enum SpeechModelState: Equatable {
+    case loading
+    case downloading(Double)   // fraction ∈ [0, 1]
+    case ready
+    case failed(String)
+}
+
 actor TranscriptionPipeline {
 
     static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "TranscriptionPipeline")
@@ -169,6 +180,21 @@ actor TranscriptionPipeline {
 
     /// WhisperKit model variant (quantized large-v3 — good accuracy/size balance).
     private let modelVariant = "large-v3-v20240930_626MB"
+    /// Human name + size for the models banner.
+    static let modelDisplayName = "Whisper large-v3"
+    static let modelDisplaySize = "626 MB"
+
+    /// Reports model-lifecycle transitions to the controller for the models
+    /// banner. The `RecordingState` status string stays the popover's channel;
+    /// this one is typed so the UI can render progress bars and retry buttons.
+    private var modelPhaseHandler: (@Sendable (SpeechModelState) -> Void)?
+
+    func setModelPhaseHandler(_ handler: @Sendable @escaping (SpeechModelState) -> Void) {
+        modelPhaseHandler = handler
+        // Late subscription: reflect an already-finished load immediately so
+        // the banner never sits on a stale "Loading".
+        if loaded { handler(.ready) }
+    }
 
     private var whisper: WhisperKit?
     private var loaded = false
@@ -385,6 +411,7 @@ actor TranscriptionPipeline {
         let clock = ContinuousClock()
         let started = clock.now
         let stateRef = state
+        let phase = modelPhaseHandler
         do {
             // 0. Single-data-root rule: WhisperKit historically downloaded to
             //    swift-transformers' default (~/Documents/huggingface). Move
@@ -407,7 +434,8 @@ actor TranscriptionPipeline {
                 // First run (or partial cache): download with progress. A
                 // stalled download is cancelled and retried instead of
                 // hanging the pipeline at its last percentage forever.
-                await state?.updateStatus("Downloading model…")
+                await state?.updateStatus("Downloading speech model…")
+                phase?(.downloading(0))
                 let variant = modelVariant
                 folder = try await ModelDownload.withStallRetry(
                     onRetry: { attempt in
@@ -423,8 +451,9 @@ actor TranscriptionPipeline {
                         useBackgroundSession: false
                     ) { progress in
                         noteProgress(progress.fractionCompleted)
+                        phase?(.downloading(progress.fractionCompleted))
                         Task { @MainActor in
-                            stateRef?.updateStatus("Downloading model… \(Int(progress.fractionCompleted * 100))%")
+                            stateRef?.updateStatus("Downloading speech model… \(Int(progress.fractionCompleted * 100))%")
                         }
                     }
                 }
@@ -433,7 +462,8 @@ actor TranscriptionPipeline {
             // 2. Compile + load from the local folder (no model re-download;
             //    download:true only lets the tokenizer resolve if needed —
             //    tokenizerFolder pins that resolve under EchoPaths too).
-            await state?.updateStatus("Loading model…")
+            await state?.updateStatus("Loading speech model…")
+            phase?(.loading)
             whisper = try await WhisperKit(
                 modelFolder: folder.path,
                 tokenizerFolder: EchoPaths.modelsDirectory,
@@ -445,10 +475,12 @@ actor TranscriptionPipeline {
             )
             loaded = true
             Self.log.info("Model loaded in \(started.duration(to: clock.now).description, privacy: .public)")
+            phase?(.ready)
             await state?.updateStatus("")
         } catch {
             Self.log.error("Model load failed: \(error.localizedDescription, privacy: .public)")
-            await state?.updateStatus("Couldn't load model: \(error.localizedDescription)")
+            phase?(.failed(error.localizedDescription))
+            await state?.updateStatus("Couldn't load speech model: \(error.localizedDescription)")
         }
     }
 

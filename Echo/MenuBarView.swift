@@ -188,7 +188,7 @@ struct MenuBarView: View {
     private var activeWarning: String? {
         let s = controller.state
         if s.transcriberUnavailable {
-            return "Speech model isn't loaded — this recording won't be transcribed. Check your connection and relaunch Echo."
+            return "Speech model isn't loaded — this recording won't be transcribed. Retry from the dashboard's model banner."
         }
         return s.inputNotice ?? s.micHealthNotice ?? s.systemHealthNotice ?? s.echoNotice
     }

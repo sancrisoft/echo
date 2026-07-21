@@ -481,6 +481,12 @@ private struct AllMeetingsView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 8)
             }
+            // Renders only while a model is downloading/loading/failed, so
+            // "what is the app doing" is answered here instead of behind a
+            // vague status line. Carries its own padding: when hidden it must
+            // contribute zero height, and padding a collapsed conditional
+            // would still take up space.
+            ModelStatusBanner()
             // The in-progress session has no saved row yet (it persists on
             // stop), so while recording a pinned live row sits above the list
             // and opens the live detail.
@@ -1081,6 +1087,162 @@ private struct PrivacyBanner: View {
     }
 }
 
+// MARK: - AI models banner
+
+/// Status card for the two on-device models: which model, what it's for, and
+/// what it's doing right now — live download progress, loading, ready, or a
+/// failure with its retry. Renders nothing once both models are ready: the
+/// steady state needs no chrome.
+private struct ModelStatusBanner: View {
+    @Environment(RecordingController.self) private var controller
+
+    var body: some View {
+        if needsAttention {
+            VStack(alignment: .leading, spacing: 10) {
+                row(
+                    icon: "waveform",
+                    name: "Speech · \(TranscriptionPipeline.modelDisplayName) · \(TranscriptionPipeline.modelDisplaySize)",
+                    purpose: "Turns meeting audio into the transcript"
+                ) { speechStatus }
+                Divider()
+                row(
+                    icon: "sparkles",
+                    name: "Summary · \(SummaryModelManager.modelDisplayName) · \(SummaryModelManager.modelDisplaySize)",
+                    purpose: "Writes the meeting notes after each recording"
+                ) { summaryStatus }
+            }
+            .padding(12)
+            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+        }
+    }
+
+    /// Both models ready → the banner disappears entirely.
+    private var needsAttention: Bool {
+        if case .ready = controller.speechModelState,
+           case .ready = controller.summaryModelState {
+            return false
+        }
+        return true
+    }
+
+    private func row(
+        icon: String,
+        name: String,
+        purpose: String,
+        @ViewBuilder trailing: () -> some View
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(Color.echoIndigo)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name)
+                    .font(.callout.weight(.semibold))
+                Text(purpose)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 12)
+            trailing()
+        }
+    }
+
+    @ViewBuilder
+    private var speechStatus: some View {
+        switch controller.speechModelState {
+        case .downloading(let fraction):
+            downloadProgress(fraction)
+        case .loading:
+            loadingIndicator
+        case .ready:
+            readyLabel
+        case .failed(let message):
+            failure(message) {
+                Task { await controller.prepare() }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var summaryStatus: some View {
+        switch controller.summaryModelState {
+        case .notDownloaded:
+            downloadButton("Download")
+        case .partiallyDownloaded(let bytes):
+            HStack(spacing: 8) {
+                Text("\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) of \(SummaryModelManager.modelDisplaySize) on disk")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                downloadButton("Resume download")
+            }
+        case .downloading(let fraction):
+            downloadProgress(fraction)
+        case .loading:
+            loadingIndicator
+        case .ready:
+            readyLabel
+        case .failed(let message):
+            failure(message) {
+                Task { await controller.downloadSummaryModel() }
+            }
+        }
+    }
+
+    // MARK: Shared status elements
+
+    private func downloadProgress(_ fraction: Double) -> some View {
+        HStack(spacing: 8) {
+            ProgressView(value: fraction)
+                .frame(width: 140)
+            Text("\(Int(fraction * 100))%")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var loadingIndicator: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Loading…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var readyLabel: some View {
+        Label("Ready", systemImage: "checkmark.circle.fill")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.green)
+    }
+
+    private func failure(_ message: String, retry: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: 280, alignment: .trailing)
+            Button("Retry", action: retry)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+        }
+    }
+
+    private func downloadButton(_ title: String) -> some View {
+        Button {
+            Task { await controller.downloadSummaryModel() }
+        } label: {
+            Label(title, systemImage: "arrow.down.circle")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+}
+
 // MARK: - Filtering / grouping
 
 private enum MeetingFilter {
@@ -1271,21 +1433,13 @@ private struct LiveMeetingDetail: View {
                         ? "Echo will generate this once the recording stops."
                         : "Start and stop a recording to generate meeting notes.")
                 )
-                summaryModelControl
+                SummaryModelControl(onRetrySummary: retrySummaryAction)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         case .generating:
-            VStack(spacing: 12) {
-                ProgressView()
-                    .controlSize(.large)
-                Text("Generating summary…")
-                    .font(.headline)
-                Text("Gemma is reading the final transcript locally.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            SummaryGenerationProgressView(subject: "the final transcript")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         case .streaming(let meetingSummary):
             SummaryContentView(summary: meetingSummary, segments: controller.state.segments, isStreaming: true)
@@ -1308,17 +1462,80 @@ private struct LiveMeetingDetail: View {
                     systemImage: "exclamationmark.triangle",
                     description: Text(message)
                 )
-                summaryModelControl
+                SummaryModelControl(onRetrySummary: retrySummaryAction)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private var summaryModelControl: some View {
+    /// Re-runs the just-stopped session's summary — only while its segments
+    /// are still in memory (they clear when the next recording starts).
+    private var retrySummaryAction: (() -> Void)? {
+        guard !controller.state.isRecording, !controller.state.segments.isEmpty else { return nil }
+        return { Task { await controller.retrySummary() } }
+    }
+}
+
+/// The "working on it" face of a summary. It tells the user what is actually
+/// happening — downloading the model (with a real progress bar), loading it
+/// into memory, or genuinely generating — instead of claiming "Generating…"
+/// over a multi-GB download.
+private struct SummaryGenerationProgressView: View {
+    @Environment(RecordingController.self) private var controller
+    /// What the generation reads — "the final transcript" (live session) or
+    /// "this meeting's transcript" (backfill on a saved meeting).
+    let subject: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            switch controller.summaryModelState {
+            case .downloading(let fraction):
+                ProgressView(value: fraction)
+                    .frame(maxWidth: 280)
+                Text("Downloading summary model… \(Int(fraction * 100))%")
+                    .font(.headline)
+                Text("One-time \(SummaryModelManager.modelDisplaySize) download. The summary is generated as soon as it finishes.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+            case .loading:
+                ProgressView()
+                    .controlSize(.large)
+                Text("Loading summary model…")
+                    .font(.headline)
+                Text("Bringing \(SummaryModelManager.modelDisplayName) into memory.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+            default:
+                ProgressView()
+                    .controlSize(.large)
+                Text("Generating summary…")
+                    .font(.headline)
+                Text("Gemma is reading \(subject) locally.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 40)
+    }
+}
+
+/// The summary model's status line plus its download/resume/retry action.
+/// Reused by the live detail's idle/failed states and the past detail's
+/// no-summary state.
+private struct SummaryModelControl: View {
+    @Environment(RecordingController.self) private var controller
+    /// Prominent extra action (the live detail's "Retry" for the last
+    /// session's summary); nil hides it.
+    var onRetrySummary: (() -> Void)? = nil
+
+    var body: some View {
         HStack(spacing: 10) {
             Image(systemName: "cpu")
                 .foregroundStyle(.secondary)
-            Text(summaryModelDescription)
+            Text(description)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -1335,10 +1552,8 @@ private struct LiveMeetingDetail: View {
                 .disabled(controller.summaryModelState.isBusy)
             }
 
-            if canRetrySummary {
-                Button {
-                    Task { await controller.retrySummary() }
-                } label: {
+            if let onRetrySummary {
+                Button(action: onRetrySummary) {
                     Label("Retry", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.borderedProminent)
@@ -1348,10 +1563,13 @@ private struct LiveMeetingDetail: View {
         .padding(.horizontal)
     }
 
-    private var summaryModelDescription: String {
+    private var description: String {
         switch controller.summaryModelState {
         case .notDownloaded:
-            return "Summary model not downloaded"
+            return "Summary model not downloaded · \(SummaryModelManager.modelDisplaySize)"
+        case .partiallyDownloaded(let bytes):
+            let done = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+            return "Download incomplete · \(done) of \(SummaryModelManager.modelDisplaySize) on disk"
         case .downloading(let fraction):
             return "Downloading summary model… \(Int(fraction * 100))%"
         case .loading:
@@ -1365,21 +1583,21 @@ private struct LiveMeetingDetail: View {
 
     private var showsDownloadButton: Bool {
         switch controller.summaryModelState {
-        case .notDownloaded, .failed, .downloading:
+        case .notDownloaded, .partiallyDownloaded, .failed, .downloading:
             return true
         case .loading, .ready:
             return false
         }
     }
 
-    /// A failed download reads as a retry, not a first-time download.
+    /// A failed download reads as a retry, an interrupted one as a resume —
+    /// not a from-scratch download.
     private var downloadButtonTitle: String {
-        if case .failed = controller.summaryModelState { return "Retry download" }
-        return "Download model"
-    }
-
-    private var canRetrySummary: Bool {
-        !controller.state.isRecording && !controller.state.segments.isEmpty
+        switch controller.summaryModelState {
+        case .failed: return "Retry download"
+        case .partiallyDownloaded: return "Resume download"
+        default: return "Download model"
+        }
     }
 }
 
@@ -1431,24 +1649,41 @@ private struct PastMeetingDetail: View {
         if let summary = record.summary {
             SummaryContentView(summary: summary, segments: record.segments)
         } else if controller.backfillingMeetingID == id {
-            VStack(spacing: 12) {
-                ProgressView()
-                    .controlSize(.large)
-                Text("Generating summary…")
-                    .font(.headline)
-                Text("Gemma is reading this meeting's transcript locally.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            SummaryGenerationProgressView(subject: "this meeting's transcript")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            // Not a dead end: the transcript is saved, so the summary can be
+            // generated right here — or the missing model downloaded first.
+            VStack(spacing: 18) {
+                ContentUnavailableView(
+                    "No summary",
+                    systemImage: "sparkles",
+                    description: Text(noSummaryDescription)
+                )
+                if case .ready = controller.summaryModelState {
+                    Button {
+                        controller.requestSummary(for: id)
+                    } label: {
+                        Label("Generate summary", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(controller.state.isRecording)
+                    .help(controller.state.isRecording
+                        ? "Available after the current recording stops"
+                        : "Generate this meeting's summary now")
+                } else {
+                    SummaryModelControl()
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ContentUnavailableView(
-                "No summary",
-                systemImage: "sparkles",
-                description: Text("No summary was generated for this meeting.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private var noSummaryDescription: String {
+        if case .ready = controller.summaryModelState {
+            return "The transcript is saved, so you can generate one now."
+        }
+        return "Generating one needs the summary model. Download it and this meeting will be processed automatically."
     }
 }
 
