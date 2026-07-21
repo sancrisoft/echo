@@ -134,6 +134,12 @@ final class RecordingController {
     /// Owned here so the UI never talks to the manager actor directly.
     private(set) var summaryModelState: SummaryModelState = .notDownloaded
 
+    /// One-shot request (set by the menu bar's Stop) for the dashboard to open
+    /// straight onto the just-stopped meeting, so the streaming summary — and
+    /// the finished one, via the detail's auto-switch to the AI Summary tab —
+    /// is actually seen. Consumed and cleared by `DashboardView`.
+    var pendingLiveDetailOpen = false
+
     var isRecording: Bool { state.isRecording }
 
     init() {
@@ -400,13 +406,20 @@ final class RecordingController {
         }
         lastSavedMeetingID = meetingID
 
-        await generateSummary(from: transcript, sessionGeneration: generation, meetingID: meetingID)
-
-        // A stop is also a natural catch-up point: the model is warm, and any
-        // meeting still missing its summary (one whose backfill was aborted
-        // when this session began, or this very meeting if its generation
-        // just failed) gets an attempt without waiting for a relaunch.
-        kickSummaryBackfill()
+        // Fire-and-forget: `stop()` returns once the meeting is persisted, so
+        // the UI (the popover's Stop → dashboard hand-off in particular) never
+        // sits blocked behind minutes of generation. The summary streams into
+        // `state.summaryState` and the open detail follows it live.
+        Task { [weak self] in
+            guard let self else { return }
+            await self.generateSummary(from: transcript, sessionGeneration: generation, meetingID: meetingID)
+            // A stop is also a natural catch-up point: the model is warm, and
+            // any meeting still missing its summary (one whose backfill was
+            // aborted when this session began, or this very meeting if its
+            // generation just failed) gets an attempt without waiting for a
+            // relaunch.
+            self.kickSummaryBackfill()
+        }
     }
 
     private func generateSummary(

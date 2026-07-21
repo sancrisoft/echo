@@ -222,8 +222,12 @@ struct MenuBarView: View {
 
     private func stopAndOpenDashboard() {
         Task {
-            await controller.toggle()   // stop
-            openDashboard()             // land the user on the transcript
+            await controller.toggle()   // stop — returns once the meeting is saved
+            // Land the user inside the just-stopped meeting: the transcript is
+            // there immediately, and the detail switches itself to AI Summary
+            // when the (background) generation completes.
+            controller.pendingLiveDetailOpen = true
+            openDashboard()
         }
     }
 

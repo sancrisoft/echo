@@ -96,7 +96,15 @@ struct DashboardView: View {
         // "Processing"). `onAppear` + the controller's fire-and-forget kick —
         // NOT `.task` — so closing the window mid-run can't cancel a
         // generation halfway through.
-        .onAppear { controller.kickSummaryBackfill() }
+        .onAppear {
+            controller.kickSummaryBackfill()
+            consumePendingLiveDetailOpen()
+        }
+        // The window may already be open when the menu bar's Stop asks for the
+        // live detail — onAppear won't re-fire then, so follow the flag too.
+        .onChange(of: controller.pendingLiveDetailOpen) { _, pending in
+            if pending { consumePendingLiveDetailOpen() }
+        }
         #if DEBUG
         // Dev-only verification loop: with ECHO_SNAPSHOT_PATH set (and the
         // window auto-opened via ECHO_OPEN_DASHBOARD, see EchoApp), renders
@@ -215,6 +223,17 @@ struct DashboardView: View {
         case nil:
             return ""
         }
+    }
+
+    /// Honors the menu bar Stop's one-shot request to land inside the
+    /// just-stopped meeting. Opens on the AI Summary tab when the summary
+    /// already finished; otherwise the detail switches itself on completion.
+    private func consumePendingLiveDetailOpen() {
+        guard controller.pendingLiveDetailOpen else { return }
+        controller.pendingLiveDetailOpen = false
+        let summaryDone: Bool
+        if case .ready = controller.state.summaryState { summaryDone = true } else { summaryDone = false }
+        opened = OpenedDetail(target: .live, tab: summaryDone ? .summary : .transcript)
     }
 }
 
@@ -1225,6 +1244,19 @@ private struct LiveMeetingDetail: View {
                 LiveTranscriptFooter()
             }
         }
+        // The finished summary announces itself: the moment generation
+        // completes, the detail lands on it instead of leaving it hidden
+        // behind an unselected tab.
+        .onChange(of: summaryIsComplete) { _, complete in
+            if complete { selectedTab = .summary }
+        }
+    }
+
+    /// True exactly while the session's summary is finished (not streaming,
+    /// not failed) — the transition edge that flips the tab.
+    private var summaryIsComplete: Bool {
+        if case .ready = controller.state.summaryState { return true }
+        return false
     }
 
     @ViewBuilder
