@@ -96,7 +96,15 @@ struct DashboardView: View {
         // "Processing"). `onAppear` + the controller's fire-and-forget kick —
         // NOT `.task` — so closing the window mid-run can't cancel a
         // generation halfway through.
-        .onAppear { controller.kickSummaryBackfill() }
+        .onAppear {
+            controller.kickSummaryBackfill()
+            consumePendingLiveDetailOpen()
+        }
+        // The window may already be open when the menu bar's Stop asks for the
+        // live detail — onAppear won't re-fire then, so follow the flag too.
+        .onChange(of: controller.pendingLiveDetailOpen) { _, pending in
+            if pending { consumePendingLiveDetailOpen() }
+        }
         #if DEBUG
         // Dev-only verification loop: with ECHO_SNAPSHOT_PATH set (and the
         // window auto-opened via ECHO_OPEN_DASHBOARD, see EchoApp), renders
@@ -215,6 +223,17 @@ struct DashboardView: View {
         case nil:
             return ""
         }
+    }
+
+    /// Honors the menu bar Stop's one-shot request to land inside the
+    /// just-stopped meeting. Opens on the AI Summary tab when the summary
+    /// already finished; otherwise the detail switches itself on completion.
+    private func consumePendingLiveDetailOpen() {
+        guard controller.pendingLiveDetailOpen else { return }
+        controller.pendingLiveDetailOpen = false
+        let summaryDone: Bool
+        if case .ready = controller.state.summaryState { summaryDone = true } else { summaryDone = false }
+        opened = OpenedDetail(target: .live, tab: summaryDone ? .summary : .transcript)
     }
 }
 
@@ -1225,6 +1244,19 @@ private struct LiveMeetingDetail: View {
                 LiveTranscriptFooter()
             }
         }
+        // The finished summary announces itself: the moment generation
+        // completes, the detail lands on it instead of leaving it hidden
+        // behind an unselected tab.
+        .onChange(of: summaryIsComplete) { _, complete in
+            if complete { selectedTab = .summary }
+        }
+    }
+
+    /// True exactly while the session's summary is finished (not streaming,
+    /// not failed) — the transition edge that flips the tab.
+    private var summaryIsComplete: Bool {
+        if case .ready = controller.state.summaryState { return true }
+        return false
     }
 
     @ViewBuilder
@@ -1297,7 +1329,7 @@ private struct LiveMeetingDetail: View {
                 Button {
                     Task { await controller.downloadSummaryModel() }
                 } label: {
-                    Label("Download model", systemImage: "arrow.down.circle")
+                    Label(downloadButtonTitle, systemImage: "arrow.down.circle")
                 }
                 .buttonStyle(.bordered)
                 .disabled(controller.summaryModelState.isBusy)
@@ -1338,6 +1370,12 @@ private struct LiveMeetingDetail: View {
         case .loading, .ready:
             return false
         }
+    }
+
+    /// A failed download reads as a retry, not a first-time download.
+    private var downloadButtonTitle: String {
+        if case .failed = controller.summaryModelState { return "Retry download" }
+        return "Download model"
     }
 
     private var canRetrySummary: Bool {
@@ -1417,10 +1455,20 @@ private struct PastMeetingDetail: View {
 // MARK: - Shared transcript list
 
 /// The committed (final) transcript only — live partial text renders in the
-/// footer, never here.
+/// footer, never here. While recording, the list follows new segments
+/// automatically as long as the user is at the bottom; scrolling up detaches
+/// and a floating "Latest" button re-engages. Past meetings never auto-scroll.
 private struct TranscriptScroll: View {
     let segments: [TranscriptSegment]
     let isRecording: Bool
+
+    /// Whether the viewport currently sits at (or near) the bottom — the
+    /// user's implicit opt-in to keep following new segments.
+    @State private var isAtBottom = true
+
+    /// Stable scroll target below the last row; scrolling to a row id inside
+    /// the LazyVStack is unreliable for not-yet-materialized rows.
+    private static let bottomAnchorID = "transcript-bottom"
 
     var body: some View {
         if segments.isEmpty {
@@ -1433,18 +1481,68 @@ private struct TranscriptScroll: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
-                    ForEach(segments) { segment in
-                        SegmentRow(segment: segment)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        LazyVStack(alignment: .leading, spacing: 22) {
+                            ForEach(segments) { segment in
+                                SegmentRow(segment: segment)
+                            }
+                        }
+                        // A readable column as in the mockup: capped width,
+                        // centered in the pane.
+                        .frame(maxWidth: 720, alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 20)
+                        .frame(maxWidth: .infinity)
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id(Self.bottomAnchorID)
                     }
                 }
-                // A readable column as in the mockup: capped width, centered
-                // in the pane.
-                .frame(maxWidth: 720, alignment: .leading)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
-                .frame(maxWidth: .infinity)
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    // "Near bottom" with a small tolerance, so the follow mode
+                    // survives sub-row jitter; also true when the content
+                    // doesn't fill the viewport yet.
+                    geometry.contentOffset.y + geometry.containerSize.height
+                        >= geometry.contentSize.height - 60
+                } action: { _, nearBottom in
+                    isAtBottom = nearBottom
+                }
+                .onChange(of: segments.count) {
+                    guard isRecording, isAtBottom else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+                    }
+                }
+                // Opening the live detail mid-recording starts at the latest
+                // line, matching the follow-by-default behavior.
+                .onAppear {
+                    if isRecording { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if isRecording && !isAtBottom {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+                            }
+                        } label: {
+                            Label("Latest", systemImage: "arrow.down")
+                                .font(.callout.weight(.medium))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(.regularMaterial, in: Capsule())
+                                .overlay(Capsule().strokeBorder(.quaternary))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(16)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        .help("Jump to the latest transcript line")
+                    }
+                }
+                .animation(.easeOut(duration: 0.18), value: isAtBottom)
             }
         }
     }
@@ -1507,9 +1605,18 @@ private struct LiveTranscriptFooter: View {
 
                 Spacer(minLength: 12)
 
-                Text("Transcribing…")
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(Color.echoIndigo)
+                // Honest status: while the speech model isn't loaded the
+                // pipeline drops every sample, and "Transcribing…" would be
+                // a lie that costs the user the whole meeting.
+                if controller.state.transcriberUnavailable {
+                    Text("Not transcribing — speech model failed to load")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("Transcribing…")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(Color.echoIndigo)
+                }
 
                 HStack(spacing: 5) {
                     Image(systemName: "checkmark.shield")
