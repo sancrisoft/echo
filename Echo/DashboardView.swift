@@ -1455,10 +1455,20 @@ private struct PastMeetingDetail: View {
 // MARK: - Shared transcript list
 
 /// The committed (final) transcript only — live partial text renders in the
-/// footer, never here.
+/// footer, never here. While recording, the list follows new segments
+/// automatically as long as the user is at the bottom; scrolling up detaches
+/// and a floating "Latest" button re-engages. Past meetings never auto-scroll.
 private struct TranscriptScroll: View {
     let segments: [TranscriptSegment]
     let isRecording: Bool
+
+    /// Whether the viewport currently sits at (or near) the bottom — the
+    /// user's implicit opt-in to keep following new segments.
+    @State private var isAtBottom = true
+
+    /// Stable scroll target below the last row; scrolling to a row id inside
+    /// the LazyVStack is unreliable for not-yet-materialized rows.
+    private static let bottomAnchorID = "transcript-bottom"
 
     var body: some View {
         if segments.isEmpty {
@@ -1471,18 +1481,68 @@ private struct TranscriptScroll: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 22) {
-                    ForEach(segments) { segment in
-                        SegmentRow(segment: segment)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 0) {
+                        LazyVStack(alignment: .leading, spacing: 22) {
+                            ForEach(segments) { segment in
+                                SegmentRow(segment: segment)
+                            }
+                        }
+                        // A readable column as in the mockup: capped width,
+                        // centered in the pane.
+                        .frame(maxWidth: 720, alignment: .leading)
+                        .padding(.horizontal, 24)
+                        .padding(.vertical, 20)
+                        .frame(maxWidth: .infinity)
+
+                        Color.clear
+                            .frame(height: 1)
+                            .id(Self.bottomAnchorID)
                     }
                 }
-                // A readable column as in the mockup: capped width, centered
-                // in the pane.
-                .frame(maxWidth: 720, alignment: .leading)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
-                .frame(maxWidth: .infinity)
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    // "Near bottom" with a small tolerance, so the follow mode
+                    // survives sub-row jitter; also true when the content
+                    // doesn't fill the viewport yet.
+                    geometry.contentOffset.y + geometry.containerSize.height
+                        >= geometry.contentSize.height - 60
+                } action: { _, nearBottom in
+                    isAtBottom = nearBottom
+                }
+                .onChange(of: segments.count) {
+                    guard isRecording, isAtBottom else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+                    }
+                }
+                // Opening the live detail mid-recording starts at the latest
+                // line, matching the follow-by-default behavior.
+                .onAppear {
+                    if isRecording { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    if isRecording && !isAtBottom {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+                            }
+                        } label: {
+                            Label("Latest", systemImage: "arrow.down")
+                                .font(.callout.weight(.medium))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(.regularMaterial, in: Capsule())
+                                .overlay(Capsule().strokeBorder(.quaternary))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(16)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        .help("Jump to the latest transcript line")
+                    }
+                }
+                .animation(.easeOut(duration: 0.18), value: isAtBottom)
             }
         }
     }
