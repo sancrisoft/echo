@@ -1297,7 +1297,7 @@ private struct LiveMeetingDetail: View {
                 Button {
                     Task { await controller.downloadSummaryModel() }
                 } label: {
-                    Label("Download model", systemImage: "arrow.down.circle")
+                    Label(downloadButtonTitle, systemImage: "arrow.down.circle")
                 }
                 .buttonStyle(.bordered)
                 .disabled(controller.summaryModelState.isBusy)
@@ -1338,6 +1338,12 @@ private struct LiveMeetingDetail: View {
         case .loading, .ready:
             return false
         }
+    }
+
+    /// A failed download reads as a retry, not a first-time download.
+    private var downloadButtonTitle: String {
+        if case .failed = controller.summaryModelState { return "Retry download" }
+        return "Download model"
     }
 
     private var canRetrySummary: Bool {

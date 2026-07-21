@@ -392,16 +392,41 @@ actor TranscriptionPipeline {
             //    then pin every download below to the same base.
             EchoPaths.migrateLegacyWhisperKitCacheIfNeeded()
 
-            // 1. Download the model with progress (first run only — cached after,
-            //    so this returns almost immediately on later launches).
-            await state?.updateStatus("Downloading model…")
-            let folder = try await WhisperKit.download(
-                variant: modelVariant,
-                downloadBase: EchoPaths.modelsDirectory,
-                useBackgroundSession: false
-            ) { progress in
-                Task { @MainActor in
-                    stateRef?.updateStatus("Downloading model… \(Int(progress.fractionCompleted * 100))%")
+            // 1. Resolve the model, preferring the local snapshot: a complete
+            //    cache loads with ZERO network. `WhisperKit.download` always
+            //    hits the Hub API first, so a launch with no connectivity —
+            //    or with a stale ~/.cache/huggingface token the Hub rejects
+            //    (observed 2026-07-21: an expired OAuth token 401'd every
+            //    launch) — would fail the whole load while the model sat
+            //    fully cached on disk. Local-first means the network is only
+            //    touched when something is actually missing.
+            let folder: URL
+            if let cached = Self.cachedModelFolder(for: modelVariant) {
+                folder = cached
+            } else {
+                // First run (or partial cache): download with progress. A
+                // stalled download is cancelled and retried instead of
+                // hanging the pipeline at its last percentage forever.
+                await state?.updateStatus("Downloading model…")
+                let variant = modelVariant
+                folder = try await ModelDownload.withStallRetry(
+                    onRetry: { attempt in
+                        Self.log.warning("Whisper model download stalled; retrying (attempt \(attempt, privacy: .public))")
+                        Task { @MainActor in
+                            stateRef?.updateStatus("Download stalled — retrying…")
+                        }
+                    }
+                ) { noteProgress in
+                    try await WhisperKit.download(
+                        variant: variant,
+                        downloadBase: EchoPaths.modelsDirectory,
+                        useBackgroundSession: false
+                    ) { progress in
+                        noteProgress(progress.fractionCompleted)
+                        Task { @MainActor in
+                            stateRef?.updateStatus("Downloading model… \(Int(progress.fractionCompleted * 100))%")
+                        }
+                    }
                 }
             }
 
@@ -425,6 +450,33 @@ actor TranscriptionPipeline {
             Self.log.error("Model load failed: \(error.localizedDescription, privacy: .public)")
             await state?.updateStatus("Couldn't load model: \(error.localizedDescription)")
         }
+    }
+
+    /// Whether the transcriber is actually usable — `ingest` drops all audio
+    /// until it is. The controller surfaces this at session start so a failed
+    /// model load can never masquerade as "Transcribing…".
+    var isReady: Bool { loaded }
+
+    /// The complete local snapshot for `variant`, or nil when any required
+    /// artifact is missing (a partial cache falls through to the resumable
+    /// download path). Mirrors WhisperKit's repo layout under the app's
+    /// single data root: models/argmaxinc/whisperkit-coreml/<model>, where
+    /// <model> is "openai_whisper-" + variant.
+    private static func cachedModelFolder(for variant: String) -> URL? {
+        let repoDirectory = EchoPaths.modelsDirectory
+            .appending(path: "models/argmaxinc/whisperkit-coreml")
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: repoDirectory.path),
+              let name = entries.first(where: { $0.hasSuffix(variant) })
+        else { return nil }
+
+        let folder = repoDirectory.appending(path: name)
+        // The compiled Core ML bundles WhisperKit loads, plus its config.
+        let required = ["MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc", "TextDecoder.mlmodelc", "config.json"]
+        for artifact in required {
+            guard fm.fileExists(atPath: folder.appending(path: artifact).path) else { return nil }
+        }
+        return folder
     }
 
     /// Resets per-session state and ensures the models are loaded.

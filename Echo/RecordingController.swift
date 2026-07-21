@@ -425,7 +425,9 @@ final class RecordingController {
                     guard let self else { return }
                     self.applySummaryModelProgress(phase, fraction)
                     let percent = Int(fraction * 100)
-                    self.state.updateStatus(phase.hasPrefix("Loading") ? phase : "\(phase) \(percent)%")
+                    // Only the active download phase carries a meaningful
+                    // percentage ("Download stalled — retrying…" does not).
+                    self.state.updateStatus(phase.hasPrefix("Downloading") ? "\(phase) \(percent)%" : phase)
                 }
             }
             summaryModelState = .ready

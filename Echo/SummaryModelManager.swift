@@ -121,13 +121,24 @@ actor SummaryModelManager {
             try Self.checkDiskSpace()
             progress("Downloading summary model…", 0)
             do {
-                let hub = HubApiWrapper(downloadBase: EchoPaths.modelsDirectory)
-                let repo = HubApiWrapper.Repo(id: Self.modelID)
-                _ = try await hub.snapshot(
-                    from: repo,
-                    matching: Self.downloadGlobs
-                ) { snapshotProgress in
-                    progress("Downloading summary model…", snapshotProgress.fractionCompleted)
+                // Stall watchdog + retry: a download whose connection goes
+                // idle is cancelled and re-run (the Hub snapshot skips files
+                // already on disk, so a retry resumes where it stalled).
+                _ = try await ModelDownload.withStallRetry(
+                    onRetry: { attempt in
+                        Self.log.warning("Summary model download stalled; retrying (attempt \(attempt, privacy: .public))")
+                        progress("Download stalled — retrying…", 0)
+                    }
+                ) { noteProgress in
+                    let hub = HubApiWrapper(downloadBase: EchoPaths.modelsDirectory)
+                    let repo = HubApiWrapper.Repo(id: Self.modelID)
+                    return try await hub.snapshot(
+                        from: repo,
+                        matching: Self.downloadGlobs
+                    ) { snapshotProgress in
+                        noteProgress(snapshotProgress.fractionCompleted)
+                        progress("Downloading summary model…", snapshotProgress.fractionCompleted)
+                    }
                 }
             } catch {
                 throw SummaryModelError.downloadFailed(error.localizedDescription)
