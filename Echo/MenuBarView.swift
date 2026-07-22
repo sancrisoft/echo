@@ -147,7 +147,12 @@ struct MenuBarView: View {
             infoLine
 
             Button {
-                Task { await controller.toggle() }
+                Task {
+                    await controller.toggle()
+                    // Gated on the speech-model download: the dashboard
+                    // carries the live progress and the "ready" hand-off.
+                    if controller.recordingAwaitingSpeechModel { openDashboard() }
+                }
             } label: {
                 Label("Start Recording", systemImage: "play.fill")
                     .font(.headline)

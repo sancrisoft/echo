@@ -105,6 +105,11 @@ struct DashboardView: View {
         .onChange(of: controller.pendingLiveDetailOpen) { _, pending in
             if pending { consumePendingLiveDetailOpen() }
         }
+        // A record attempt gated on the speech-model download: its callout
+        // lives on the meetings list, so any open detail must step aside.
+        .onChange(of: controller.recordingAwaitingSpeechModel) { _, gated in
+            if gated { opened = nil }
+        }
         #if DEBUG
         // Dev-only verification loop: with ECHO_SNAPSHOT_PATH set (and the
         // window auto-opened via ECHO_OPEN_DASHBOARD, see EchoApp), renders
@@ -478,6 +483,14 @@ private struct AllMeetingsView: View {
             header
             if !settings.privacyBannerDismissed {
                 PrivacyBanner { settings.dismissPrivacyBanner() }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 8)
+            }
+            // The user pressed record before the speech model was on disk:
+            // explain that recording unlocks once the download finishes and
+            // hand off with a Start button when it does.
+            if controller.recordingAwaitingSpeechModel {
+                SpeechModelGateBanner(opened: $opened)
                     .padding(.horizontal, 20)
                     .padding(.bottom, 8)
             }
@@ -1084,6 +1097,125 @@ private struct PrivacyBanner: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.green.opacity(0.20))
         )
+    }
+}
+
+// MARK: - Speech-model gate banner
+
+/// Shown when the user tried to record before the speech model was on disk
+/// (`RecordingController.recordingAwaitingSpeechModel`): says plainly that
+/// recording becomes available once the download finishes, tracks the live
+/// phase, and — the moment the model is ready — offers the Start button the
+/// original click was aiming for.
+private struct SpeechModelGateBanner: View {
+    @Environment(RecordingController.self) private var controller
+    @Binding var opened: OpenedDetail?
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            trailing
+            Button {
+                controller.dismissSpeechModelGate()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss")
+        }
+        .padding(12)
+        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(tint.opacity(0.20))
+        )
+    }
+
+    private var icon: String {
+        switch controller.speechModelState {
+        case .downloading: return "arrow.down.circle.fill"
+        case .loading: return "waveform.circle.fill"
+        case .ready: return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var tint: Color {
+        switch controller.speechModelState {
+        case .downloading, .loading: return .echoIndigo
+        case .ready: return .green
+        case .failed: return .orange
+        }
+    }
+
+    private var title: String {
+        switch controller.speechModelState {
+        case .downloading: return "Downloading the speech model"
+        case .loading: return "Preparing the speech model"
+        case .ready: return "Speech model ready"
+        case .failed: return "Speech model download failed"
+        }
+    }
+
+    private var message: String {
+        switch controller.speechModelState {
+        case .downloading:
+            return "Recording will be available once the download finishes — this happens only on the first run."
+        case .loading:
+            return "Almost there — recording will be available in a moment."
+        case .ready:
+            return "You can start recording now."
+        case .failed(let message):
+            return message
+        }
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        switch controller.speechModelState {
+        case .downloading(let fraction):
+            HStack(spacing: 8) {
+                ProgressView(value: fraction)
+                    .frame(width: 140)
+                Text("\(Int(fraction * 100))%")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        case .loading:
+            ProgressView()
+                .controlSize(.small)
+        case .ready:
+            Button {
+                Task {
+                    await controller.toggle()
+                    if controller.state.isRecording { opened = OpenedDetail(target: .live) }
+                }
+            } label: {
+                Label("Start recording", systemImage: "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.echoIndigo)
+            .controlSize(.small)
+        case .failed:
+            Button("Retry") {
+                Task { await controller.prepare() }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
     }
 }
 
