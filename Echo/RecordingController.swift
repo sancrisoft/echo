@@ -143,6 +143,21 @@ final class RecordingController {
     /// is actually seen. Consumed and cleared by `DashboardView`.
     var pendingLiveDetailOpen = false
 
+    /// Set when the user pressed record but the speech model still needed its
+    /// (multi-minute) download — fresh install, or an earlier one that failed.
+    /// While true the dashboard shows the "downloading — recording unlocks
+    /// when it finishes" callout and the menu bar opens the dashboard onto it.
+    /// Cleared when a session actually starts or the callout is dismissed.
+    private(set) var recordingAwaitingSpeechModel = false
+
+    /// The gate callout's dismiss. The download itself keeps running — only
+    /// the "you pressed record too early" framing goes away.
+    func dismissSpeechModelGate() { recordingAwaitingSpeechModel = false }
+
+    /// One-shot per app run: the record-while-not-downloaded gate uses the
+    /// wait to get both capture-permission prompts out of the way.
+    private var capturePermissionsPrimed = false
+
     var isRecording: Bool { state.isRecording }
 
     init() {
@@ -200,6 +215,22 @@ final class RecordingController {
 
     func start() async {
         guard !state.isRecording else { return }
+
+        // Recording without the speech model would capture audio the session
+        // can't transcribe. When the model still needs its download, don't
+        // start: surface the progress in the dashboard instead, and use the
+        // wait to get the one-time setup done — kick the download (idempotent;
+        // also retries a failed load) and raise both capture-permission
+        // prompts. A cache-only load is not gated: it resolves in seconds and
+        // `pipeline.start` below awaits it as it always has.
+        if await pipeline.needsModelDownload {
+            recordingAwaitingSpeechModel = true
+            Task { await prepare() }
+            primeCapturePermissions()
+            return
+        }
+
+        recordingAwaitingSpeechModel = false
         sessionGeneration += 1
         state.status = "Requesting permissions…"
 
@@ -234,6 +265,20 @@ final class RecordingController {
 
     func stop() async {
         await stop(summarize: true)
+    }
+
+    /// Raises the microphone and system-audio permission prompts sequentially
+    /// (one dialog at a time) so both are settled before the first real
+    /// session. Denials are not handled here: the session start paths already
+    /// surface them (`MicrophoneCapture.start` aborts the session; the system
+    /// tap fails with its own error).
+    private func primeCapturePermissions() {
+        guard !capturePermissionsPrimed else { return }
+        capturePermissionsPrimed = true
+        Task {
+            _ = await MicrophoneCapture.requestPermission()
+            await SystemAudioCapture.primePermission()
+        }
     }
 
     func retrySummary() async {

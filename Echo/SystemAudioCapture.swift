@@ -55,6 +55,23 @@ final class SystemAudioCapture: AudioCaptureSource {
 
     // MARK: - Lifecycle
 
+    /// Raises macOS's "System Audio Recording" permission prompt ahead of the
+    /// first real session. The prompt fires when a process tap actually runs,
+    /// so this starts a throwaway capture (no callbacks wired) and tears it
+    /// down immediately. Denial is not an error here — the real session start
+    /// surfaces its own failure.
+    static func primePermission() async {
+        let probe = SystemAudioCapture()
+        do {
+            try await probe.start()
+        } catch {
+            Self.log.warning("""
+            System-audio permission probe failed: \(error.localizedDescription, privacy: .public)
+            """)
+        }
+        probe.stop()
+    }
+
     func start() async throws {
         // A global tap of every process's output, mixed to mono. The empty
         // exclude-list means "tap everything"; Echo plays no audio of its own.
