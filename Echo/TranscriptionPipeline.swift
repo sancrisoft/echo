@@ -489,6 +489,14 @@ actor TranscriptionPipeline {
     /// model load can never masquerade as "Transcribing…".
     var isReady: Bool { loaded }
 
+    /// Whether recording right now would first require fetching the model
+    /// from the network: nothing is loaded and no complete local snapshot
+    /// exists. Deliberately `false` during a cache-only load — that resolves
+    /// in seconds, so a session may simply await it as it always has.
+    var needsModelDownload: Bool {
+        !loaded && Self.cachedModelFolder(for: modelVariant) == nil
+    }
+
     /// The complete local snapshot for `variant`, or nil when any required
     /// artifact is missing (a partial cache falls through to the resumable
     /// download path). Mirrors WhisperKit's repo layout under the app's
