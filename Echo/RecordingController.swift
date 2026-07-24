@@ -184,8 +184,11 @@ final class RecordingController {
             }
         }
 
-        // Warm up the (large) models at launch so pressing record is instant.
-        Task { await prepare() }
+        // Warm up the speech model at launch so pressing record is instant,
+        // then eagerly fetch the summary model — chained AFTER the speech
+        // preload so a fresh install's bandwidth goes to the record-gating
+        // speech download first and the two never co-saturate the link (OQ6).
+        Task { await prepare(); await startEagerSummaryDownloadIfNeeded() }
         // Paint the summary-model control from the on-disk cache state.
         Task { await refreshSummaryModelState() }
         // Catch up on summaries a quit interrupted (or that never ran): scan
@@ -293,21 +296,18 @@ final class RecordingController {
         )
     }
 
-    /// Explicit download from the dashboard's model controls (the same
-    /// download runs implicitly on the first summary if the user never
-    /// pressed a button). While idle it downloads AND loads, so "Ready" means
-    /// the next summary starts instantly; while recording it fetches files
-    /// only — the 12B load must never compete with live transcription.
+    /// Explicit download from the dashboard's model controls (the same download
+    /// runs implicitly on the first summary if the user never pressed a button).
+    /// Download only — NEVER load: pulling the 12B into RAM merely because the
+    /// user pressed "Download" is the ~8.4 GB "doing nothing" bug (ADR-008). The
+    /// weights come into memory only for active summary work and are released
+    /// after a short idle period, so here "Ready" means "snapshot on disk" and
+    /// the first summary pays the load.
     func downloadSummaryModel() async {
         guard !summaryModelState.isBusy else { return }
         do {
-            let progress: @Sendable (String, Double) -> Void = { [weak self] phase, fraction in
+            try await summaryModelManager.ensureDownloaded { [weak self] phase, fraction in
                 Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
-            }
-            if state.isRecording {
-                try await summaryModelManager.ensureDownloaded(progress: progress)
-            } else {
-                _ = try await summaryModelManager.ensureReady(progress: progress)
             }
             summaryModelState = .ready
             if !state.isRecording { state.updateStatus("") }
@@ -340,6 +340,36 @@ final class RecordingController {
             } catch {
                 self.summaryModelState = .failed(error.localizedDescription)
             }
+        }
+    }
+
+    /// Eagerly downloads the summary model on first launch, sequenced BEHIND the
+    /// speech-model preload (`init` chains this after `prepare()` returns): on a
+    /// fresh install the ~626 MB speech download — the one that gates recording —
+    /// wins the bandwidth first and never co-saturates the link with this ~8.3 GB
+    /// one (OQ6 resolved; SP-003 "Speech-model download has priority"). Download
+    /// only, never loads (ADR-008); a no-op once the snapshot is on disk or a
+    /// transfer is already in flight (the manager dedups to one download, and an
+    /// explicit Dashboard download or record-start prefetch may have started
+    /// first). Because it resumes on the next launch, it is also what makes a
+    /// queued summary's "auto-generate once ready" durable across a quit — once
+    /// the files land, the backfill runs.
+    private func startEagerSummaryDownloadIfNeeded() async {
+        guard !summaryModelState.isBusy else { return }
+        if case .ready = summaryModelState { return }
+        do {
+            try await summaryModelManager.ensureDownloaded { [weak self] phase, fraction in
+                Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
+            }
+            summaryModelState = .ready
+            if !state.isRecording { state.updateStatus("") }
+            // The files are now on disk: a summary queued behind the download
+            // (or an older summary-less meeting) can be generated now instead
+            // of on the next launch.
+            kickSummaryBackfill()
+        } catch {
+            summaryModelState = .failed(error.localizedDescription)
+            if !state.isRecording { state.updateStatus("") }
         }
     }
 
@@ -425,38 +455,47 @@ final class RecordingController {
             backfillingMeetingID = meta.id
 
             do {
-                let engine = try await summaryModelManager.ensureReady { [weak self] phase, fraction in
+                // Route the generation through the work scope so the model is
+                // released only after backfill goes idle (ADR-008). The engine
+                // work returns whether the whole backfill should stop (a
+                // recording started, or the task was cancelled) — the same
+                // early-exit conditions that used to `return` from this function
+                // directly; the scope releases the engine on the way out.
+                let shouldStop = try await withSummaryEngine(progress: { [weak self] phase, fraction in
                     Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
-                }
-                summaryModelState = .ready
-                if !state.isRecording { state.updateStatus("") }
-                guard !state.isRecording else { return }
+                }) { engine -> Bool in
+                    summaryModelState = .ready
+                    if !state.isRecording { state.updateStatus("") }
+                    guard !state.isRecording else { return true }
 
-                var latest: MeetingSummary?
-                let stream = await summarizer.generate(from: record.segments, using: engine)
-                for try await partial in stream {
-                    // A recording started mid-generation: abandon this meeting
-                    // (ending the loop cancels the generation task) so the LLM
-                    // never competes with live transcription.
-                    guard !state.isRecording else { return }
-                    latest = partial
-                }
-                // Insurance against an externally cancelled run: a cut-short
-                // stream must never persist a partial summary.
-                guard !Task.isCancelled else { return }
+                    var latest: MeetingSummary?
+                    let stream = await summarizer.generate(from: record.segments, using: engine)
+                    for try await partial in stream {
+                        // A recording started mid-generation: abandon this meeting
+                        // (ending the loop cancels the generation task) so the LLM
+                        // never competes with live transcription.
+                        guard !state.isRecording else { return true }
+                        latest = partial
+                    }
+                    // Insurance against an externally cancelled run: a cut-short
+                    // stream must never persist a partial summary.
+                    guard !Task.isCancelled else { return true }
 
-                if let latest {
-                    let description = await summarizer.oneLineDescription(for: latest, using: engine)
-                    await library.attachSummary(latest, description: description, to: meta.id)
-                    // A failed write (logged by the library) must not spin
-                    // the loop — skip the meeting for the rest of this run.
-                    if library.meta(for: meta.id)?.hasSummary != true {
+                    if let latest {
+                        let description = await summarizer.oneLineDescription(for: latest, using: engine)
+                        await library.attachSummary(latest, description: description, to: meta.id)
+                        // A failed write (logged by the library) must not spin
+                        // the loop — skip the meeting for the rest of this run.
+                        if library.meta(for: meta.id)?.hasSummary != true {
+                            backfillFailedIDs.insert(meta.id)
+                        }
+                    } else {
+                        Self.log.error("Summary backfill: empty summary for \(meta.id.uuidString, privacy: .public)")
                         backfillFailedIDs.insert(meta.id)
                     }
-                } else {
-                    Self.log.error("Summary backfill: empty summary for \(meta.id.uuidString, privacy: .public)")
-                    backfillFailedIDs.insert(meta.id)
+                    return false
                 }
+                if shouldStop { return }
             } catch {
                 Self.log.error("""
                 Summary backfill failed for \(meta.id.uuidString, privacy: .public): \
@@ -551,6 +590,30 @@ final class RecordingController {
         }
     }
 
+    /// Runs `body` with a summary engine, counting the generation as active LLM
+    /// work so the manager keeps the ~8.3 GB model warm for its whole duration
+    /// and arms the idle release only once this returns (ADR-008). The engine is
+    /// acquired on the manager actor; `body` runs here on the main actor with
+    /// its streaming, guards, and persistence unchanged. Release is un-missable
+    /// across every exit — early return, throw, cancellation — because it's
+    /// driven from this do/catch rather than a `defer` (Swift forbids `await` in
+    /// a defer body). A failed acquire releases its own count, so we release
+    /// only after a successful acquire.
+    private func withSummaryEngine<T>(
+        progress: @Sendable @escaping (String, Double) -> Void,
+        _ body: (any TextGenerating) async throws -> T
+    ) async throws -> T {
+        let engine = try await summaryModelManager.acquireEngine(progress: progress)
+        do {
+            let result = try await body(engine)
+            await summaryModelManager.releaseEngine()
+            return result
+        } catch {
+            await summaryModelManager.releaseEngine()
+            throw error
+        }
+    }
+
     private func generateSummary(
         from transcript: [TranscriptSegment],
         sessionGeneration generation: Int,
@@ -566,44 +629,49 @@ final class RecordingController {
         do {
             // First run downloads (~8.3 GB, once — resuming whatever the
             // recording-start prefetch already fetched) and loads the model;
-            // later runs return the warm engine immediately. The progress
-            // drives `summaryModelState`, which the detail's generating view
-            // renders as the real phase — never "Generating…" over a download.
-            let engine = try await summaryModelManager.ensureReady { [weak self] phase, fraction in
+            // later runs reuse the warm engine. The work scope counts this
+            // generation so the model is released only after it finishes and
+            // stays idle (ADR-008); the progress drives `summaryModelState`,
+            // which the detail's generating view renders as the real phase —
+            // never "Generating…" over a download. The early `return`s below
+            // leave the work scope (releasing the engine) exactly as they used
+            // to leave the function.
+            try await withSummaryEngine(progress: { [weak self] phase, fraction in
                 Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
-            }
-            summaryModelState = .ready
-            guard generation == sessionGeneration, !state.isRecording else { return }
-            // Re-assert now that the model phase is over: the status line
-            // returns from download/load text to the honest "Generating…".
-            state.markSummaryGenerating()
-
-            var latest: MeetingSummary?
-            // Long transcripts map-reduce; surface per-part progress on the
-            // existing status line ("Summarizing part 3/7…"). Short ones emit none.
-            let stream = await summarizer.generate(from: transcript, using: engine) { [weak self] phase in
-                Task { @MainActor in self?.state.updateStatus(phase) }
-            }
-            for try await partial in stream {
+            }) { engine in
+                summaryModelState = .ready
                 guard generation == sessionGeneration, !state.isRecording else { return }
-                latest = partial
-                state.markSummaryStreaming(partial)
-            }
+                // Re-assert now that the model phase is over: the status line
+                // returns from download/load text to the honest "Generating…".
+                state.markSummaryGenerating()
 
-            guard generation == sessionGeneration, !state.isRecording else { return }
-            if let latest {
-                state.markSummaryReady(latest)
-                // Persist the finished summary alongside its meeting (SPEC-03
-                // criterion 2). A failure state is never persisted as a summary.
-                // The AI one-line caption for the library row is generated from
-                // the finished summary in the same step (best-effort — `nil` if
-                // it fails, leaving the row without a caption).
-                if let meetingID {
-                    let description = await summarizer.oneLineDescription(for: latest, using: engine)
-                    await library.attachSummary(latest, description: description, to: meetingID)
+                var latest: MeetingSummary?
+                // Long transcripts map-reduce; surface per-part progress on the
+                // existing status line ("Summarizing part 3/7…"). Short ones emit none.
+                let stream = await summarizer.generate(from: transcript, using: engine) { [weak self] phase in
+                    Task { @MainActor in self?.state.updateStatus(phase) }
                 }
-            } else {
-                state.markSummaryUnavailable("Gemma returned an empty summary.")
+                for try await partial in stream {
+                    guard generation == sessionGeneration, !state.isRecording else { return }
+                    latest = partial
+                    state.markSummaryStreaming(partial)
+                }
+
+                guard generation == sessionGeneration, !state.isRecording else { return }
+                if let latest {
+                    state.markSummaryReady(latest)
+                    // Persist the finished summary alongside its meeting (SPEC-03
+                    // criterion 2). A failure state is never persisted as a summary.
+                    // The AI one-line caption for the library row is generated from
+                    // the finished summary in the same step (best-effort — `nil` if
+                    // it fails, leaving the row without a caption).
+                    if let meetingID {
+                        let description = await summarizer.oneLineDescription(for: latest, using: engine)
+                        await library.attachSummary(latest, description: description, to: meetingID)
+                    }
+                } else {
+                    state.markSummaryUnavailable("Gemma returned an empty summary.")
+                }
             }
         } catch {
             if error is SummaryModelError {
