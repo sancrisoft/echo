@@ -150,12 +150,21 @@ final class RecordingController {
     /// Cleared when a session actually starts or the callout is dismissed.
     private(set) var recordingAwaitingSpeechModel = false
 
+    /// One-shot request (set on every record press blocked by a not-ready
+    /// speech model) for the dashboard to raise the explanatory "can't record
+    /// yet" dialog. Distinct from the sticky flag above — that one drives the
+    /// persistent progress banner and stays set, so it can't re-trigger the
+    /// modal on a repeat press. Consumed and cleared by `DashboardView`; the
+    /// dashboard is the stable host (a menu-bar popover would dismiss the
+    /// alert as it closes), so the menu bar routes here by opening the window.
+    var pendingSpeechModelGateNotice = false
+
     /// The gate callout's dismiss. The download itself keeps running — only
     /// the "you pressed record too early" framing goes away.
     func dismissSpeechModelGate() { recordingAwaitingSpeechModel = false }
 
-    /// One-shot per app run: the record-while-not-downloaded gate uses the
-    /// wait to get both capture-permission prompts out of the way.
+    /// One-shot per app run: the record gesture primes both capture-permission
+    /// prompts exactly once, ahead of the readiness check (ADR-009).
     private var capturePermissionsPrimed = false
 
     var isRecording: Bool { state.isRecording }
@@ -184,8 +193,11 @@ final class RecordingController {
             }
         }
 
-        // Warm up the (large) models at launch so pressing record is instant.
-        Task { await prepare() }
+        // Warm up the speech model at launch so pressing record is instant,
+        // then eagerly fetch the summary model — chained AFTER the speech
+        // preload so a fresh install's bandwidth goes to the record-gating
+        // speech download first and the two never co-saturate the link (OQ6).
+        Task { await prepare(); await startEagerSummaryDownloadIfNeeded() }
         // Paint the summary-model control from the on-disk cache state.
         Task { await refreshSummaryModelState() }
         // Catch up on summaries a quit interrupted (or that never ran): scan
@@ -216,21 +228,44 @@ final class RecordingController {
     func start() async {
         guard !state.isRecording else { return }
 
-        // Recording without the speech model would capture audio the session
-        // can't transcribe. When the model still needs its download, don't
-        // start: surface the progress in the dashboard instead, and use the
-        // wait to get the one-time setup done — kick the download (idempotent;
-        // also retries a failed load) and raise both capture-permission
-        // prompts. A cache-only load is not gated: it resolves in seconds and
-        // `pipeline.start` below awaits it as it always has.
-        if await pipeline.needsModelDownload {
+        // Permissions are a gesture effect, not a download-wait effect
+        // (ADR-009): raise the mic + system-audio prompts here — before the
+        // readiness check and awaited — so the OS dialogs are tied to the
+        // user's intent to record, never to a background download, and settle
+        // before either the gate message or real capture. Once per run
+        // (guarded). A brand-new user with no speech model yet sees the prompts
+        // and then the "can't record yet" gate — the accepted order (OQ5).
+        await primeCapturePermissions()
+
+        // Recording readiness is "the speech model is LOADED and transcribing-
+        // capable", not merely present on disk (ADR-009). Gate on the observed
+        // lifecycle: still downloading, still loading, or a failed download/load
+        // must NOT enter a recording state. The old `needsModelDownload` gate
+        // (absent-only) let the loading and load-failed cases slip straight to
+        // `markStarted`, flipping `isRecording` before (or despite) the load
+        // resolving — the hole this closes. Reading `speechModelState`
+        // synchronously is authoritative: it becomes `.ready` only after the
+        // pipeline reports the load finished, and the speech model never
+        // unloads once ready.
+        switch RecordingGateDecision.decide(speechModelState) {
+        case .blocked(let message):
+            // Don't start: surface the sub-state-accurate callout on the
+            // dashboard (the menu bar routes here off this same flag) and make
+            // sure the download/load is running. `prepare()` is idempotent and
+            // also retries a failed load, so a record press on a failed model
+            // IS the retry gesture. No `markStarted` — the record button must
+            // not lie on any surface.
+            Self.log.info("Record gesture blocked — speech model not ready: \(message, privacy: .public)")
             recordingAwaitingSpeechModel = true
+            // Fire the one-shot so the dashboard raises the dialog on THIS press
+            // (the sticky flag above already being set can't re-trigger it).
+            pendingSpeechModelGateNotice = true
             Task { await prepare() }
-            primeCapturePermissions()
             return
+        case .record:
+            recordingAwaitingSpeechModel = false
         }
 
-        recordingAwaitingSpeechModel = false
         sessionGeneration += 1
         state.status = "Requesting permissions…"
 
@@ -268,17 +303,16 @@ final class RecordingController {
     }
 
     /// Raises the microphone and system-audio permission prompts sequentially
-    /// (one dialog at a time) so both are settled before the first real
-    /// session. Denials are not handled here: the session start paths already
-    /// surface them (`MicrophoneCapture.start` aborts the session; the system
-    /// tap fails with its own error).
-    private func primeCapturePermissions() {
+    /// (one dialog at a time) and awaits them, so both are settled before the
+    /// gate check and any real capture — no permission probe ever races a live
+    /// capture session. Denials are not handled here: the session start paths
+    /// already surface them (`MicrophoneCapture.start` aborts the session; the
+    /// system tap fails with its own error).
+    private func primeCapturePermissions() async {
         guard !capturePermissionsPrimed else { return }
         capturePermissionsPrimed = true
-        Task {
-            _ = await MicrophoneCapture.requestPermission()
-            await SystemAudioCapture.primePermission()
-        }
+        _ = await MicrophoneCapture.requestPermission()
+        await SystemAudioCapture.primePermission()
     }
 
     func retrySummary() async {
@@ -293,21 +327,18 @@ final class RecordingController {
         )
     }
 
-    /// Explicit download from the dashboard's model controls (the same
-    /// download runs implicitly on the first summary if the user never
-    /// pressed a button). While idle it downloads AND loads, so "Ready" means
-    /// the next summary starts instantly; while recording it fetches files
-    /// only — the 12B load must never compete with live transcription.
+    /// Explicit download from the dashboard's model controls (the same download
+    /// runs implicitly on the first summary if the user never pressed a button).
+    /// Download only — NEVER load: pulling the 12B into RAM merely because the
+    /// user pressed "Download" is the ~8.4 GB "doing nothing" bug (ADR-008). The
+    /// weights come into memory only for active summary work and are released
+    /// after a short idle period, so here "Ready" means "snapshot on disk" and
+    /// the first summary pays the load.
     func downloadSummaryModel() async {
         guard !summaryModelState.isBusy else { return }
         do {
-            let progress: @Sendable (String, Double) -> Void = { [weak self] phase, fraction in
+            try await summaryModelManager.ensureDownloaded { [weak self] phase, fraction in
                 Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
-            }
-            if state.isRecording {
-                try await summaryModelManager.ensureDownloaded(progress: progress)
-            } else {
-                _ = try await summaryModelManager.ensureReady(progress: progress)
             }
             summaryModelState = .ready
             if !state.isRecording { state.updateStatus("") }
@@ -316,9 +347,42 @@ final class RecordingController {
             // can be processed right away instead of on the next launch.
             kickSummaryBackfill()
         } catch {
-            summaryModelState = .failed(error.localizedDescription)
-            if !state.isRecording { state.updateStatus("") }
+            await applyDownloadFailureOrPause(error)
         }
+    }
+
+    /// Pauses the background summary-model download (SP-003 US-10). Records the
+    /// intent (persisted, so the eager download won't silently resume it now or
+    /// on the next launch) and cancels the in-flight transfer; completed shards
+    /// stay on disk. Only meaningful while actively downloading — a pause is not
+    /// a failure, so the state lands on `.paused`, never `.failed`.
+    func pauseSummaryDownload() async {
+        guard case .downloading = summaryModelState else { return }
+        await summaryModelManager.pauseDownload()
+        summaryModelState = .paused
+        if !state.isRecording { state.updateStatus("") }
+    }
+
+    /// Resumes a paused summary-model download (SP-003 US-10): clears the paused
+    /// intent, then re-runs the single shared download, which skips whatever is
+    /// already complete on disk (no re-fetch of finished shards) and lands back
+    /// in `.downloading` → `.ready`.
+    func resumeSummaryDownload() async {
+        await summaryModelManager.resumeDownload()
+        await downloadSummaryModel()
+    }
+
+    /// Routes a download-path error to the honest state: a pause cancelled the
+    /// transfer (`isDownloadPaused` was set before the cancel) → `.paused`, never
+    /// `.failed`; anything else is a real download failure (SP-003: cancel ≠
+    /// failure).
+    private func applyDownloadFailureOrPause(_ error: Error) async {
+        if await summaryModelManager.isDownloadPaused {
+            summaryModelState = .paused
+        } else {
+            summaryModelState = .failed(error.localizedDescription)
+        }
+        if !state.isRecording { state.updateStatus("") }
     }
 
     /// Fetches the summary model's files while a recording runs (download
@@ -332,14 +396,57 @@ final class RecordingController {
         if case .ready = summaryModelState { return }
         Task { [weak self] in
             guard let self else { return }
+            // Respect a user pause: the record-start prefetch is a background
+            // fetch (SP-003 US-10), so it leaves a paused download alone. The
+            // post-stop summary's own load still fetches what it needs.
+            if await self.summaryModelManager.isDownloadPaused {
+                self.summaryModelState = .paused
+                return
+            }
             do {
                 try await self.summaryModelManager.ensureDownloaded { [weak self] phase, fraction in
                     Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
                 }
                 self.summaryModelState = .ready
             } catch {
-                self.summaryModelState = .failed(error.localizedDescription)
+                await self.applyDownloadFailureOrPause(error)
             }
+        }
+    }
+
+    /// Eagerly downloads the summary model on first launch, sequenced BEHIND the
+    /// speech-model preload (`init` chains this after `prepare()` returns): on a
+    /// fresh install the ~626 MB speech download — the one that gates recording —
+    /// wins the bandwidth first and never co-saturates the link with this ~8.3 GB
+    /// one (OQ6 resolved; SP-003 "Speech-model download has priority"). Download
+    /// only, never loads (ADR-008); a no-op once the snapshot is on disk or a
+    /// transfer is already in flight (the manager dedups to one download, and an
+    /// explicit Dashboard download or record-start prefetch may have started
+    /// first). Because it resumes on the next launch, it is also what makes a
+    /// queued summary's "auto-generate once ready" durable across a quit — once
+    /// the files land, the backfill runs.
+    private func startEagerSummaryDownloadIfNeeded() async {
+        guard !summaryModelState.isBusy else { return }
+        if case .ready = summaryModelState { return }
+        // A pause the user set (this run or a previous one — the intent is
+        // persisted) must survive the launch: don't auto-resume it (SP-003
+        // US-10). Reflect it so the dashboard offers Resume, not Download.
+        if await summaryModelManager.isDownloadPaused {
+            summaryModelState = .paused
+            return
+        }
+        do {
+            try await summaryModelManager.ensureDownloaded { [weak self] phase, fraction in
+                Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
+            }
+            summaryModelState = .ready
+            if !state.isRecording { state.updateStatus("") }
+            // The files are now on disk: a summary queued behind the download
+            // (or an older summary-less meeting) can be generated now instead
+            // of on the next launch.
+            kickSummaryBackfill()
+        } catch {
+            await applyDownloadFailureOrPause(error)
         }
     }
 
@@ -425,38 +532,47 @@ final class RecordingController {
             backfillingMeetingID = meta.id
 
             do {
-                let engine = try await summaryModelManager.ensureReady { [weak self] phase, fraction in
+                // Route the generation through the work scope so the model is
+                // released only after backfill goes idle (ADR-008). The engine
+                // work returns whether the whole backfill should stop (a
+                // recording started, or the task was cancelled) — the same
+                // early-exit conditions that used to `return` from this function
+                // directly; the scope releases the engine on the way out.
+                let shouldStop = try await withSummaryEngine(progress: { [weak self] phase, fraction in
                     Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
-                }
-                summaryModelState = .ready
-                if !state.isRecording { state.updateStatus("") }
-                guard !state.isRecording else { return }
+                }) { engine -> Bool in
+                    summaryModelState = .ready
+                    if !state.isRecording { state.updateStatus("") }
+                    guard !state.isRecording else { return true }
 
-                var latest: MeetingSummary?
-                let stream = await summarizer.generate(from: record.segments, using: engine)
-                for try await partial in stream {
-                    // A recording started mid-generation: abandon this meeting
-                    // (ending the loop cancels the generation task) so the LLM
-                    // never competes with live transcription.
-                    guard !state.isRecording else { return }
-                    latest = partial
-                }
-                // Insurance against an externally cancelled run: a cut-short
-                // stream must never persist a partial summary.
-                guard !Task.isCancelled else { return }
+                    var latest: MeetingSummary?
+                    let stream = await summarizer.generate(from: record.segments, using: engine)
+                    for try await partial in stream {
+                        // A recording started mid-generation: abandon this meeting
+                        // (ending the loop cancels the generation task) so the LLM
+                        // never competes with live transcription.
+                        guard !state.isRecording else { return true }
+                        latest = partial
+                    }
+                    // Insurance against an externally cancelled run: a cut-short
+                    // stream must never persist a partial summary.
+                    guard !Task.isCancelled else { return true }
 
-                if let latest {
-                    let description = await summarizer.oneLineDescription(for: latest, using: engine)
-                    await library.attachSummary(latest, description: description, to: meta.id)
-                    // A failed write (logged by the library) must not spin
-                    // the loop — skip the meeting for the rest of this run.
-                    if library.meta(for: meta.id)?.hasSummary != true {
+                    if let latest {
+                        let description = await summarizer.oneLineDescription(for: latest, using: engine)
+                        await library.attachSummary(latest, description: description, to: meta.id)
+                        // A failed write (logged by the library) must not spin
+                        // the loop — skip the meeting for the rest of this run.
+                        if library.meta(for: meta.id)?.hasSummary != true {
+                            backfillFailedIDs.insert(meta.id)
+                        }
+                    } else {
+                        Self.log.error("Summary backfill: empty summary for \(meta.id.uuidString, privacy: .public)")
                         backfillFailedIDs.insert(meta.id)
                     }
-                } else {
-                    Self.log.error("Summary backfill: empty summary for \(meta.id.uuidString, privacy: .public)")
-                    backfillFailedIDs.insert(meta.id)
+                    return false
                 }
+                if shouldStop { return }
             } catch {
                 Self.log.error("""
                 Summary backfill failed for \(meta.id.uuidString, privacy: .public): \
@@ -478,10 +594,17 @@ final class RecordingController {
     private func refreshSummaryModelState() async {
         if await summaryModelManager.cachedModelExists() {
             summaryModelState = .ready
-        } else if let bytes = await summaryModelManager.partialDownloadBytes() {
+        } else if await summaryModelManager.isDownloadPaused {
+            // The user paused in a previous run: the persisted intent wins over
+            // the crash-interrupted heuristic below, so we offer "Resume" and
+            // the eager launch download leaves it alone (SP-003 US-10).
+            summaryModelState = .paused
+        } else if await summaryModelManager.partialDownloadBytes() != nil {
             // A quit mid-download left resumable files behind: offer "Resume"
-            // instead of a from-scratch "Download".
-            summaryModelState = .partiallyDownloaded(bytesOnDisk: bytes)
+            // instead of a from-scratch "Download". Only the existence of a
+            // partial matters here — its byte count is untrustworthy for
+            // display (ADR-007), so the state carries none.
+            summaryModelState = .partiallyDownloaded
         } else {
             summaryModelState = .notDownloaded
         }
@@ -495,9 +618,11 @@ final class RecordingController {
         }
         // The popover's status line tells the same truth while idle. During a
         // recording it shows the live word count instead — the banner and the
-        // model control carry the progress there.
+        // model control carry the progress there. The percent goes through the
+        // clamped projection so this line (and the menu bar that mirrors it)
+        // can never print past 100% (ADR-007).
         if !state.isRecording {
-            let percent = Int(fraction * 100)
+            let percent = ModelDownloadProgress(fraction: fraction).percent
             state.updateStatus(phase.hasPrefix("Downloading") ? "\(phase) \(percent)%" : phase)
         }
     }
@@ -547,6 +672,30 @@ final class RecordingController {
         }
     }
 
+    /// Runs `body` with a summary engine, counting the generation as active LLM
+    /// work so the manager keeps the ~8.3 GB model warm for its whole duration
+    /// and arms the idle release only once this returns (ADR-008). The engine is
+    /// acquired on the manager actor; `body` runs here on the main actor with
+    /// its streaming, guards, and persistence unchanged. Release is un-missable
+    /// across every exit — early return, throw, cancellation — because it's
+    /// driven from this do/catch rather than a `defer` (Swift forbids `await` in
+    /// a defer body). A failed acquire releases its own count, so we release
+    /// only after a successful acquire.
+    private func withSummaryEngine<T>(
+        progress: @Sendable @escaping (String, Double) -> Void,
+        _ body: (any TextGenerating) async throws -> T
+    ) async throws -> T {
+        let engine = try await summaryModelManager.acquireEngine(progress: progress)
+        do {
+            let result = try await body(engine)
+            await summaryModelManager.releaseEngine()
+            return result
+        } catch {
+            await summaryModelManager.releaseEngine()
+            throw error
+        }
+    }
+
     private func generateSummary(
         from transcript: [TranscriptSegment],
         sessionGeneration generation: Int,
@@ -562,44 +711,49 @@ final class RecordingController {
         do {
             // First run downloads (~8.3 GB, once — resuming whatever the
             // recording-start prefetch already fetched) and loads the model;
-            // later runs return the warm engine immediately. The progress
-            // drives `summaryModelState`, which the detail's generating view
-            // renders as the real phase — never "Generating…" over a download.
-            let engine = try await summaryModelManager.ensureReady { [weak self] phase, fraction in
+            // later runs reuse the warm engine. The work scope counts this
+            // generation so the model is released only after it finishes and
+            // stays idle (ADR-008); the progress drives `summaryModelState`,
+            // which the detail's generating view renders as the real phase —
+            // never "Generating…" over a download. The early `return`s below
+            // leave the work scope (releasing the engine) exactly as they used
+            // to leave the function.
+            try await withSummaryEngine(progress: { [weak self] phase, fraction in
                 Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
-            }
-            summaryModelState = .ready
-            guard generation == sessionGeneration, !state.isRecording else { return }
-            // Re-assert now that the model phase is over: the status line
-            // returns from download/load text to the honest "Generating…".
-            state.markSummaryGenerating()
-
-            var latest: MeetingSummary?
-            // Long transcripts map-reduce; surface per-part progress on the
-            // existing status line ("Summarizing part 3/7…"). Short ones emit none.
-            let stream = await summarizer.generate(from: transcript, using: engine) { [weak self] phase in
-                Task { @MainActor in self?.state.updateStatus(phase) }
-            }
-            for try await partial in stream {
+            }) { engine in
+                summaryModelState = .ready
                 guard generation == sessionGeneration, !state.isRecording else { return }
-                latest = partial
-                state.markSummaryStreaming(partial)
-            }
+                // Re-assert now that the model phase is over: the status line
+                // returns from download/load text to the honest "Generating…".
+                state.markSummaryGenerating()
 
-            guard generation == sessionGeneration, !state.isRecording else { return }
-            if let latest {
-                state.markSummaryReady(latest)
-                // Persist the finished summary alongside its meeting (SPEC-03
-                // criterion 2). A failure state is never persisted as a summary.
-                // The AI one-line caption for the library row is generated from
-                // the finished summary in the same step (best-effort — `nil` if
-                // it fails, leaving the row without a caption).
-                if let meetingID {
-                    let description = await summarizer.oneLineDescription(for: latest, using: engine)
-                    await library.attachSummary(latest, description: description, to: meetingID)
+                var latest: MeetingSummary?
+                // Long transcripts map-reduce; surface per-part progress on the
+                // existing status line ("Summarizing part 3/7…"). Short ones emit none.
+                let stream = await summarizer.generate(from: transcript, using: engine) { [weak self] phase in
+                    Task { @MainActor in self?.state.updateStatus(phase) }
                 }
-            } else {
-                state.markSummaryUnavailable("Gemma returned an empty summary.")
+                for try await partial in stream {
+                    guard generation == sessionGeneration, !state.isRecording else { return }
+                    latest = partial
+                    state.markSummaryStreaming(partial)
+                }
+
+                guard generation == sessionGeneration, !state.isRecording else { return }
+                if let latest {
+                    state.markSummaryReady(latest)
+                    // Persist the finished summary alongside its meeting (SPEC-03
+                    // criterion 2). A failure state is never persisted as a summary.
+                    // The AI one-line caption for the library row is generated from
+                    // the finished summary in the same step (best-effort — `nil` if
+                    // it fails, leaving the row without a caption).
+                    if let meetingID {
+                        let description = await summarizer.oneLineDescription(for: latest, using: engine)
+                        await library.attachSummary(latest, description: description, to: meetingID)
+                    }
+                } else {
+                    state.markSummaryUnavailable("Gemma returned an empty summary.")
+                }
             }
         } catch {
             if error is SummaryModelError {

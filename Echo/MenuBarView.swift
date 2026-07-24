@@ -149,8 +149,12 @@ struct MenuBarView: View {
             Button {
                 Task {
                     await controller.toggle()
-                    // Gated on the speech-model download: the dashboard
-                    // carries the live progress and the "ready" hand-off.
+                    // Blocked on a not-ready speech model — downloading,
+                    // preparing, or a failed download/load (ADR-009): never a
+                    // false recording face here. Open + focus the dashboard,
+                    // which raises the explanatory dialog (a menu-bar popover
+                    // would dismiss an alert as it closes) and shows the live
+                    // download status behind it.
                     if controller.recordingAwaitingSpeechModel { openDashboard() }
                 }
             } label: {
@@ -223,6 +227,16 @@ struct MenuBarView: View {
     private func openDashboard() {
         NSApp.activate(ignoringOtherApps: true)
         openWindow(id: EchoWindow.dashboard)
+        // As an LSUIElement agent, activating + opening the window doesn't
+        // reliably raise or focus it — the window can appear behind other apps.
+        // Force it front on the next run-loop tick, once SwiftUI has created or
+        // surfaced the scene, so the CTA always lands the user on the dashboard.
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows
+                .first { $0.identifier?.rawValue == EchoWindow.dashboard }?
+                .makeKeyAndOrderFront(nil)
+        }
     }
 
     private func stopAndOpenDashboard() {

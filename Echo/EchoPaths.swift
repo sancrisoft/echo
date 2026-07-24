@@ -53,6 +53,15 @@ nonisolated enum EchoPaths {
         appSupportDirectory.appending(path: "settings.json", directoryHint: .notDirectory)
     }
 
+    /// ~/Library/Application Support/Echo/summary-download-state.json — the tiny
+    /// persisted "the user paused the summary-model download" intent (SP-003
+    /// US-10), so the eager background download does not silently resume a pause
+    /// across a relaunch. Sibling of `settingsFile`; `FileDownloadPauseStore`
+    /// owns creation of the parent directory on first write.
+    static var summaryDownloadStateFile: URL {
+        appSupportDirectory.appending(path: "summary-download-state.json", directoryHint: .notDirectory)
+    }
+
     // MARK: - Legacy WhisperKit cache migration
 
     /// Repos that historically landed in swift-transformers' default download

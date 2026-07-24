@@ -71,6 +71,12 @@ struct DashboardView: View {
     /// meeting's title (with its back chevron).
     @State private var opened: OpenedDetail?
 
+    /// Drives the "can't start recording yet" dialog. Hosted here on the stable
+    /// window (not the menu-bar popover, which would dismiss an alert as it
+    /// closes) so both surfaces route through it; its CTA just closes the
+    /// dialog, leaving the live download status visible in the banners behind.
+    @State private var showGateAlert = false
+
     var body: some View {
         // A plain HStack instead of NavigationSplitView: on this macOS the
         // split view's columns carry a rigid AppKit fitting height of roughly
@@ -99,6 +105,10 @@ struct DashboardView: View {
         .onAppear {
             controller.kickSummaryBackfill()
             consumePendingLiveDetailOpen()
+            // The menu bar opens this window on a gated press; the notice was
+            // set before the window existed, so onChange can't catch it —
+            // consume it here as the window appears.
+            consumeSpeechModelGateNotice()
         }
         // The window may already be open when the menu bar's Stop asks for the
         // live detail — onAppear won't re-fire then, so follow the flag too.
@@ -109,6 +119,18 @@ struct DashboardView: View {
         // lives on the meetings list, so any open detail must step aside.
         .onChange(of: controller.recordingAwaitingSpeechModel) { _, gated in
             if gated { opened = nil }
+        }
+        // Raise the "can't record yet" dialog on each blocked press. The
+        // one-shot fires even when the sticky gate flag was already set (a
+        // repeat press), and covers the case where the window was already open.
+        .onChange(of: controller.pendingSpeechModelGateNotice) { _, pending in
+            if pending { consumeSpeechModelGateNotice() }
+        }
+        .alert("Can't start recording yet", isPresented: $showGateAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(RecordingGateDecision.decide(controller.speechModelState).message
+                ?? "The speech model isn't ready yet.")
         }
         #if DEBUG
         // Dev-only verification loop: with ECHO_SNAPSHOT_PATH set (and the
@@ -240,6 +262,12 @@ struct DashboardView: View {
         if case .ready = controller.state.summaryState { summaryDone = true } else { summaryDone = false }
         opened = OpenedDetail(target: .live, tab: summaryDone ? .summary : .transcript)
     }
+
+    private func consumeSpeechModelGateNotice() {
+        guard controller.pendingSpeechModelGateNotice else { return }
+        controller.pendingSpeechModelGateNotice = false
+        showGateAlert = true
+    }
 }
 
 /// The display title for the in-progress session: the auto title it will be
@@ -305,6 +333,9 @@ private struct RecordToolbarButton: View {
             Task {
                 let wasRecording = controller.state.isRecording
                 await controller.toggle()
+                // A press blocked on a not-ready speech model sets the
+                // controller's one-shot gate notice; the DashboardView shell
+                // observes it and raises the "can't record yet" dialog.
                 if !wasRecording && controller.state.isRecording { onStart() }
             }
         } label: {
@@ -1102,10 +1133,11 @@ private struct PrivacyBanner: View {
 
 // MARK: - Speech-model gate banner
 
-/// Shown when the user tried to record before the speech model was on disk
-/// (`RecordingController.recordingAwaitingSpeechModel`): says plainly that
-/// recording becomes available once the download finishes, tracks the live
-/// phase, and — the moment the model is ready — offers the Start button the
+/// Shown when the user pressed record before the speech model was ready
+/// (`RecordingController.recordingAwaitingSpeechModel`). ADR-009's gate blocks
+/// every not-ready sub-state, so this callout tracks all of them — the live
+/// download percent, the "preparing" load, or a download/load failure with a
+/// Retry — and, the moment the model is ready, offers the Start button the
 /// original click was aiming for.
 private struct SpeechModelGateBanner: View {
     @Environment(RecordingController.self) private var controller
@@ -1166,7 +1198,10 @@ private struct SpeechModelGateBanner: View {
         case .downloading: return "Downloading the speech model"
         case .loading: return "Preparing the speech model"
         case .ready: return "Speech model ready"
-        case .failed: return "Speech model download failed"
+        // Covers a failed load too, not only a failed download — with the
+        // loading/load-failed hole closed (ADR-009), a load failure now routes
+        // to this callout as well, and "download failed" would misname it.
+        case .failed: return "Speech model isn't ready"
         }
     }
 
@@ -1187,10 +1222,11 @@ private struct SpeechModelGateBanner: View {
     private var trailing: some View {
         switch controller.speechModelState {
         case .downloading(let fraction):
+            let progress = ModelDownloadProgress(fraction: fraction)
             HStack(spacing: 8) {
-                ProgressView(value: fraction)
+                ProgressView(value: progress.fraction)
                     .frame(width: 140)
-                Text("\(Int(fraction * 100))%")
+                Text("\(progress.percent)%")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -1302,15 +1338,32 @@ private struct ModelStatusBanner: View {
         switch controller.summaryModelState {
         case .notDownloaded:
             downloadButton("Download")
-        case .partiallyDownloaded(let bytes):
+        case .partiallyDownloaded:
+            // No "X of Y on disk" here: the resumable partial's byte count is
+            // untrustworthy for display (staging can exceed the total — ADR-007).
+            // The Resume action is the whole affordance; it skips what's on disk.
             HStack(spacing: 8) {
-                Text("\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) of \(SummaryModelManager.modelDisplaySize) on disk")
+                Text("Download incomplete")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 downloadButton("Resume download")
             }
+        case .paused:
+            // The user paused this download (SP-003 US-10): Resume clears the
+            // persisted intent and picks up where it left off, skipping the
+            // shards already on disk.
+            HStack(spacing: 8) {
+                Text("Paused")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                resumeButton
+            }
         case .downloading(let fraction):
-            downloadProgress(fraction)
+            // A Pause control rides alongside the live progress (SP-003 US-10).
+            HStack(spacing: 8) {
+                downloadProgress(fraction)
+                pauseButton
+            }
         case .loading:
             loadingIndicator
         case .ready:
@@ -1322,13 +1375,37 @@ private struct ModelStatusBanner: View {
         }
     }
 
+    private var pauseButton: some View {
+        Button {
+            Task { await controller.pauseSummaryDownload() }
+        } label: {
+            Label("Pause", systemImage: "pause.circle")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private var resumeButton: some View {
+        Button {
+            Task { await controller.resumeSummaryDownload() }
+        } label: {
+            Label("Resume download", systemImage: "arrow.down.circle")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
     // MARK: Shared status elements
 
     private func downloadProgress(_ fraction: Double) -> some View {
-        HStack(spacing: 8) {
-            ProgressView(value: fraction)
+        // Single honest source for both the bar and the number (ADR-007): the
+        // clamped fraction can't drive the bar past full, and the percent can't
+        // read over 100. Shared by the speech and summary rows.
+        let progress = ModelDownloadProgress(fraction: fraction)
+        return HStack(spacing: 8) {
+            ProgressView(value: progress.fraction)
                 .frame(width: 140)
-            Text("\(Int(fraction * 100))%")
+            Text("\(progress.percent)%")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
@@ -1622,9 +1699,10 @@ private struct SummaryGenerationProgressView: View {
         VStack(spacing: 12) {
             switch controller.summaryModelState {
             case .downloading(let fraction):
-                ProgressView(value: fraction)
+                let progress = ModelDownloadProgress(fraction: fraction)
+                ProgressView(value: progress.fraction)
                     .frame(maxWidth: 280)
-                Text("Downloading summary model… \(Int(fraction * 100))%")
+                Text("Downloading summary model… \(progress.percent)%")
                     .font(.headline)
                 Text("One-time \(SummaryModelManager.modelDisplaySize) download. The summary is generated as soon as it finishes.")
                     .font(.subheadline)
@@ -1676,7 +1754,15 @@ private struct SummaryModelControl: View {
 
             if showsDownloadButton {
                 Button {
-                    Task { await controller.downloadSummaryModel() }
+                    Task {
+                        // A paused download resumes (clearing the persisted
+                        // intent); every other state is a fresh/retry download.
+                        if case .paused = controller.summaryModelState {
+                            await controller.resumeSummaryDownload()
+                        } else {
+                            await controller.downloadSummaryModel()
+                        }
+                    }
                 } label: {
                     Label(downloadButtonTitle, systemImage: "arrow.down.circle")
                 }
@@ -1699,11 +1785,15 @@ private struct SummaryModelControl: View {
         switch controller.summaryModelState {
         case .notDownloaded:
             return "Summary model not downloaded · \(SummaryModelManager.modelDisplaySize)"
-        case .partiallyDownloaded(let bytes):
-            let done = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-            return "Download incomplete · \(done) of \(SummaryModelManager.modelDisplaySize) on disk"
+        case .partiallyDownloaded:
+            // No "X of Y on disk": the partial's disk sum overflowed the total
+            // ("8.93 GB of 8.3 GB") because it counted staging; the Resume
+            // button is the honest affordance (ADR-007).
+            return "Download incomplete · resume to finish"
+        case .paused:
+            return "Download paused · resume to finish"
         case .downloading(let fraction):
-            return "Downloading summary model… \(Int(fraction * 100))%"
+            return "Downloading summary model… \(ModelDownloadProgress(fraction: fraction).percent)%"
         case .loading:
             return "Loading summary model…"
         case .ready:
@@ -1715,19 +1805,19 @@ private struct SummaryModelControl: View {
 
     private var showsDownloadButton: Bool {
         switch controller.summaryModelState {
-        case .notDownloaded, .partiallyDownloaded, .failed, .downloading:
+        case .notDownloaded, .partiallyDownloaded, .paused, .failed, .downloading:
             return true
         case .loading, .ready:
             return false
         }
     }
 
-    /// A failed download reads as a retry, an interrupted one as a resume —
-    /// not a from-scratch download.
+    /// A failed download reads as a retry, an interrupted or paused one as a
+    /// resume — not a from-scratch download.
     private var downloadButtonTitle: String {
         switch controller.summaryModelState {
         case .failed: return "Retry download"
-        case .partiallyDownloaded: return "Resume download"
+        case .partiallyDownloaded, .paused: return "Resume download"
         default: return "Download model"
         }
     }
