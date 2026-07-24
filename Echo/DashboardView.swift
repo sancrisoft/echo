@@ -1102,10 +1102,11 @@ private struct PrivacyBanner: View {
 
 // MARK: - Speech-model gate banner
 
-/// Shown when the user tried to record before the speech model was on disk
-/// (`RecordingController.recordingAwaitingSpeechModel`): says plainly that
-/// recording becomes available once the download finishes, tracks the live
-/// phase, and — the moment the model is ready — offers the Start button the
+/// Shown when the user pressed record before the speech model was ready
+/// (`RecordingController.recordingAwaitingSpeechModel`). ADR-009's gate blocks
+/// every not-ready sub-state, so this callout tracks all of them — the live
+/// download percent, the "preparing" load, or a download/load failure with a
+/// Retry — and, the moment the model is ready, offers the Start button the
 /// original click was aiming for.
 private struct SpeechModelGateBanner: View {
     @Environment(RecordingController.self) private var controller
@@ -1166,7 +1167,10 @@ private struct SpeechModelGateBanner: View {
         case .downloading: return "Downloading the speech model"
         case .loading: return "Preparing the speech model"
         case .ready: return "Speech model ready"
-        case .failed: return "Speech model download failed"
+        // Covers a failed load too, not only a failed download — with the
+        // loading/load-failed hole closed (ADR-009), a load failure now routes
+        // to this callout as well, and "download failed" would misname it.
+        case .failed: return "Speech model isn't ready"
         }
     }
 

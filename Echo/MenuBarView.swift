@@ -149,8 +149,10 @@ struct MenuBarView: View {
             Button {
                 Task {
                     await controller.toggle()
-                    // Gated on the speech-model download: the dashboard
-                    // carries the live progress and the "ready" hand-off.
+                    // Blocked on a not-ready speech model — downloading,
+                    // preparing, or a failed download/load (ADR-009): route to
+                    // the dashboard callout for the live phase and the "ready"
+                    // hand-off, never a false recording face here.
                     if controller.recordingAwaitingSpeechModel { openDashboard() }
                 }
             } label: {

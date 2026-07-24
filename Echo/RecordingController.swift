@@ -154,8 +154,8 @@ final class RecordingController {
     /// the "you pressed record too early" framing goes away.
     func dismissSpeechModelGate() { recordingAwaitingSpeechModel = false }
 
-    /// One-shot per app run: the record-while-not-downloaded gate uses the
-    /// wait to get both capture-permission prompts out of the way.
+    /// One-shot per app run: the record gesture primes both capture-permission
+    /// prompts exactly once, ahead of the readiness check (ADR-009).
     private var capturePermissionsPrimed = false
 
     var isRecording: Bool { state.isRecording }
@@ -219,21 +219,41 @@ final class RecordingController {
     func start() async {
         guard !state.isRecording else { return }
 
-        // Recording without the speech model would capture audio the session
-        // can't transcribe. When the model still needs its download, don't
-        // start: surface the progress in the dashboard instead, and use the
-        // wait to get the one-time setup done — kick the download (idempotent;
-        // also retries a failed load) and raise both capture-permission
-        // prompts. A cache-only load is not gated: it resolves in seconds and
-        // `pipeline.start` below awaits it as it always has.
-        if await pipeline.needsModelDownload {
+        // Permissions are a gesture effect, not a download-wait effect
+        // (ADR-009): raise the mic + system-audio prompts here — before the
+        // readiness check and awaited — so the OS dialogs are tied to the
+        // user's intent to record, never to a background download, and settle
+        // before either the gate message or real capture. Once per run
+        // (guarded). A brand-new user with no speech model yet sees the prompts
+        // and then the "can't record yet" gate — the accepted order (OQ5).
+        await primeCapturePermissions()
+
+        // Recording readiness is "the speech model is LOADED and transcribing-
+        // capable", not merely present on disk (ADR-009). Gate on the observed
+        // lifecycle: still downloading, still loading, or a failed download/load
+        // must NOT enter a recording state. The old `needsModelDownload` gate
+        // (absent-only) let the loading and load-failed cases slip straight to
+        // `markStarted`, flipping `isRecording` before (or despite) the load
+        // resolving — the hole this closes. Reading `speechModelState`
+        // synchronously is authoritative: it becomes `.ready` only after the
+        // pipeline reports the load finished, and the speech model never
+        // unloads once ready.
+        switch RecordingGateDecision.decide(speechModelState) {
+        case .blocked(let message):
+            // Don't start: surface the sub-state-accurate callout on the
+            // dashboard (the menu bar routes here off this same flag) and make
+            // sure the download/load is running. `prepare()` is idempotent and
+            // also retries a failed load, so a record press on a failed model
+            // IS the retry gesture. No `markStarted` — the record button must
+            // not lie on any surface.
+            Self.log.info("Record gesture blocked — speech model not ready: \(message, privacy: .public)")
             recordingAwaitingSpeechModel = true
             Task { await prepare() }
-            primeCapturePermissions()
             return
+        case .record:
+            recordingAwaitingSpeechModel = false
         }
 
-        recordingAwaitingSpeechModel = false
         sessionGeneration += 1
         state.status = "Requesting permissions…"
 
@@ -271,17 +291,16 @@ final class RecordingController {
     }
 
     /// Raises the microphone and system-audio permission prompts sequentially
-    /// (one dialog at a time) so both are settled before the first real
-    /// session. Denials are not handled here: the session start paths already
-    /// surface them (`MicrophoneCapture.start` aborts the session; the system
-    /// tap fails with its own error).
-    private func primeCapturePermissions() {
+    /// (one dialog at a time) and awaits them, so both are settled before the
+    /// gate check and any real capture — no permission probe ever races a live
+    /// capture session. Denials are not handled here: the session start paths
+    /// already surface them (`MicrophoneCapture.start` aborts the session; the
+    /// system tap fails with its own error).
+    private func primeCapturePermissions() async {
         guard !capturePermissionsPrimed else { return }
         capturePermissionsPrimed = true
-        Task {
-            _ = await MicrophoneCapture.requestPermission()
-            await SystemAudioCapture.primePermission()
-        }
+        _ = await MicrophoneCapture.requestPermission()
+        await SystemAudioCapture.primePermission()
     }
 
     func retrySummary() async {
