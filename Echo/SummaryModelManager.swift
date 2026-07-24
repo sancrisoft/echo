@@ -42,16 +42,23 @@ enum SummaryModelState: Equatable {
     /// that used to fill this overflowed the total ("8.93 GB of 8.3 GB") — see
     /// ADR-007.
     case partiallyDownloaded
+    /// The user deliberately paused the background download (SP-003 US-10).
+    /// Distinct from `.partiallyDownloaded` (a crash-interrupted download that
+    /// SHOULD auto-resume): a pause is a persisted intent the eager/launch
+    /// download must NOT silently override, so the UI shows "Paused · Resume"
+    /// and the background fetch leaves it alone until the user resumes.
+    case paused
     case downloading(Double)   // fraction ∈ [0, 1]
     case loading
     case ready
     case failed(String)
 
-    /// Download/load in flight — the trigger buttons disable on this.
+    /// Download/load in flight — the trigger buttons disable on this. A paused
+    /// download is at rest (its Resume affordance must stay enabled).
     var isBusy: Bool {
         switch self {
         case .downloading, .loading: return true
-        case .notDownloaded, .partiallyDownloaded, .ready, .failed: return false
+        case .notDownloaded, .partiallyDownloaded, .paused, .ready, .failed: return false
         }
     }
 }
@@ -114,23 +121,28 @@ actor SummaryModelManager {
     private let snapshotExistsCheck: @Sendable () -> Bool
     private let scheduler: any IdleReleaseScheduling
     private let idleTimeout: Duration
+    /// Persists the user's pause/resume intent for the background download
+    /// (SP-003 US-10). A real file in production; an in-memory fake under test.
+    private let pauseStore: DownloadPauseStore
 
     /// Designated initializer. All parameters default to the real MLX / HubApi /
     /// disk / Task-based implementations, so production call sites remain
-    /// `SummaryModelManager()`; tests inject counting fakes and a manual
-    /// release scheduler.
+    /// `SummaryModelManager()`; tests inject counting fakes, a manual release
+    /// scheduler, and an in-memory pause store.
     init(
         loader: @escaping EngineLoader = SummaryModelManager.liveLoader,
         downloader: @escaping SnapshotDownloader = SummaryModelManager.liveDownloader,
         snapshotExists: @escaping @Sendable () -> Bool = SummaryModelManager.liveSnapshotExists,
         scheduler: any IdleReleaseScheduling = TaskIdleReleaseScheduler(),
-        idleTimeout: Duration = SummaryModelManager.summaryModelIdleTimeout
+        idleTimeout: Duration = SummaryModelManager.summaryModelIdleTimeout,
+        pauseStore: DownloadPauseStore = FileDownloadPauseStore()
     ) {
         self.loader = loader
         self.downloader = downloader
         self.snapshotExistsCheck = snapshotExists
         self.scheduler = scheduler
         self.idleTimeout = idleTimeout
+        self.pauseStore = pauseStore
     }
 
     // MARK: - Work scope (ADR-008 lifecycle)
@@ -237,7 +249,40 @@ actor SummaryModelManager {
         progress: @Sendable @escaping (String, Double) -> Void
     ) async throws {
         if engine != nil { return }
+        // A user-paused download must not be silently resumed by the eager
+        // background fetch or the record-start prefetch — the intent is
+        // persisted, so this holds on the next launch too (SP-003 US-10). An
+        // explicit summary generation runs through `ensureReady` →
+        // `downloadIfNeeded`, which is deliberately NOT gated here: a summary
+        // the user set in motion still fetches the model it needs.
+        if pauseStore.isPaused { return }
         try await downloadIfNeeded(progress: progress)
+    }
+
+    // MARK: - Pause / resume (SP-003 US-10)
+
+    /// Whether the user paused the background summary download. Persisted, so it
+    /// answers truthfully on a fresh launch too — which is what stops the eager
+    /// launch download from silently resuming a pause across a quit.
+    var isDownloadPaused: Bool { pauseStore.isPaused }
+
+    /// Pauses the background download. Records the intent (persisted) BEFORE
+    /// cancelling the in-flight transfer, so a joined awaiter's `catch` can tell
+    /// this cancellation from a real failure — `isDownloadPaused` is already
+    /// true by the time the `CancellationError` propagates (SP-003: cancel ≠
+    /// failure). Completed shards stay on disk; a later resume re-runs the
+    /// download and the snapshot skips whatever is already complete (no
+    /// multi-GB re-fetch).
+    func pauseDownload() {
+        pauseStore.setPaused(true)
+        downloadTask?.cancel()
+    }
+
+    /// Clears the paused intent so the download may run again. The caller
+    /// re-runs `ensureDownloaded` (the single shared transfer), which resumes
+    /// from the files already on disk rather than restarting from zero.
+    func resumeDownload() {
+        pauseStore.setPaused(false)
     }
 
     /// Whether a complete snapshot is already on disk — cheap enough to paint
@@ -486,6 +531,58 @@ nonisolated final class TaskIdleReleaseScheduler: IdleReleaseScheduling, @unchec
         defer { lock.unlock() }
         task?.cancel()
         task = nil
+    }
+}
+
+/// Persists the user's "pause the summary download" intent so neither the eager
+/// launch download nor the record-start prefetch silently resumes it — on this
+/// launch or the next (SP-003 US-10). Behind a protocol so tests use an
+/// in-memory fake; production uses a tiny JSON file in the single data root
+/// (never UserDefaults — 2026-07-13 decision), mirroring `AppSettings`.
+nonisolated protocol DownloadPauseStore: Sendable {
+    var isPaused: Bool { get }
+    func setPaused(_ paused: Bool)
+}
+
+/// The production pause store: a one-field JSON file under `EchoPaths`.
+/// Reads/writes are synchronous and cheap (called on the manager actor); a
+/// missing or unreadable file reads as "not paused", so a first run — or a
+/// deleted data folder — starts un-paused.
+nonisolated final class FileDownloadPauseStore: DownloadPauseStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private let fileURL: URL
+
+    init(fileURL: URL = EchoPaths.summaryDownloadStateFile) {
+        self.fileURL = fileURL
+    }
+
+    /// Every field defaults so a missing key (older file, or none) decodes.
+    private struct Stored: Codable { var paused = false }
+
+    var isPaused: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let data = try? Data(contentsOf: fileURL),
+              let stored = try? JSONDecoder().decode(Stored.self, from: data)
+        else { return false }
+        return stored.paused
+    }
+
+    func setPaused(_ paused: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let data = try JSONEncoder().encode(Stored(paused: paused))
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            SummaryModelManager.log.error(
+                "Writing summary-download pause state failed: \(error.localizedDescription, privacy: .public)"
+            )
+        }
     }
 }
 

@@ -335,9 +335,42 @@ final class RecordingController {
             // can be processed right away instead of on the next launch.
             kickSummaryBackfill()
         } catch {
-            summaryModelState = .failed(error.localizedDescription)
-            if !state.isRecording { state.updateStatus("") }
+            await applyDownloadFailureOrPause(error)
         }
+    }
+
+    /// Pauses the background summary-model download (SP-003 US-10). Records the
+    /// intent (persisted, so the eager download won't silently resume it now or
+    /// on the next launch) and cancels the in-flight transfer; completed shards
+    /// stay on disk. Only meaningful while actively downloading — a pause is not
+    /// a failure, so the state lands on `.paused`, never `.failed`.
+    func pauseSummaryDownload() async {
+        guard case .downloading = summaryModelState else { return }
+        await summaryModelManager.pauseDownload()
+        summaryModelState = .paused
+        if !state.isRecording { state.updateStatus("") }
+    }
+
+    /// Resumes a paused summary-model download (SP-003 US-10): clears the paused
+    /// intent, then re-runs the single shared download, which skips whatever is
+    /// already complete on disk (no re-fetch of finished shards) and lands back
+    /// in `.downloading` → `.ready`.
+    func resumeSummaryDownload() async {
+        await summaryModelManager.resumeDownload()
+        await downloadSummaryModel()
+    }
+
+    /// Routes a download-path error to the honest state: a pause cancelled the
+    /// transfer (`isDownloadPaused` was set before the cancel) → `.paused`, never
+    /// `.failed`; anything else is a real download failure (SP-003: cancel ≠
+    /// failure).
+    private func applyDownloadFailureOrPause(_ error: Error) async {
+        if await summaryModelManager.isDownloadPaused {
+            summaryModelState = .paused
+        } else {
+            summaryModelState = .failed(error.localizedDescription)
+        }
+        if !state.isRecording { state.updateStatus("") }
     }
 
     /// Fetches the summary model's files while a recording runs (download
@@ -351,13 +384,20 @@ final class RecordingController {
         if case .ready = summaryModelState { return }
         Task { [weak self] in
             guard let self else { return }
+            // Respect a user pause: the record-start prefetch is a background
+            // fetch (SP-003 US-10), so it leaves a paused download alone. The
+            // post-stop summary's own load still fetches what it needs.
+            if await self.summaryModelManager.isDownloadPaused {
+                self.summaryModelState = .paused
+                return
+            }
             do {
                 try await self.summaryModelManager.ensureDownloaded { [weak self] phase, fraction in
                     Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
                 }
                 self.summaryModelState = .ready
             } catch {
-                self.summaryModelState = .failed(error.localizedDescription)
+                await self.applyDownloadFailureOrPause(error)
             }
         }
     }
@@ -376,6 +416,13 @@ final class RecordingController {
     private func startEagerSummaryDownloadIfNeeded() async {
         guard !summaryModelState.isBusy else { return }
         if case .ready = summaryModelState { return }
+        // A pause the user set (this run or a previous one — the intent is
+        // persisted) must survive the launch: don't auto-resume it (SP-003
+        // US-10). Reflect it so the dashboard offers Resume, not Download.
+        if await summaryModelManager.isDownloadPaused {
+            summaryModelState = .paused
+            return
+        }
         do {
             try await summaryModelManager.ensureDownloaded { [weak self] phase, fraction in
                 Task { @MainActor in self?.applySummaryModelProgress(phase, fraction) }
@@ -387,8 +434,7 @@ final class RecordingController {
             // of on the next launch.
             kickSummaryBackfill()
         } catch {
-            summaryModelState = .failed(error.localizedDescription)
-            if !state.isRecording { state.updateStatus("") }
+            await applyDownloadFailureOrPause(error)
         }
     }
 
@@ -536,6 +582,11 @@ final class RecordingController {
     private func refreshSummaryModelState() async {
         if await summaryModelManager.cachedModelExists() {
             summaryModelState = .ready
+        } else if await summaryModelManager.isDownloadPaused {
+            // The user paused in a previous run: the persisted intent wins over
+            // the crash-interrupted heuristic below, so we offer "Resume" and
+            // the eager launch download leaves it alone (SP-003 US-10).
+            summaryModelState = .paused
         } else if await summaryModelManager.partialDownloadBytes() != nil {
             // A quit mid-download left resumable files behind: offer "Resume"
             // instead of a from-scratch "Download". Only the existence of a

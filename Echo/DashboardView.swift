@@ -1317,8 +1317,22 @@ private struct ModelStatusBanner: View {
                     .foregroundStyle(.secondary)
                 downloadButton("Resume download")
             }
+        case .paused:
+            // The user paused this download (SP-003 US-10): Resume clears the
+            // persisted intent and picks up where it left off, skipping the
+            // shards already on disk.
+            HStack(spacing: 8) {
+                Text("Paused")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                resumeButton
+            }
         case .downloading(let fraction):
-            downloadProgress(fraction)
+            // A Pause control rides alongside the live progress (SP-003 US-10).
+            HStack(spacing: 8) {
+                downloadProgress(fraction)
+                pauseButton
+            }
         case .loading:
             loadingIndicator
         case .ready:
@@ -1328,6 +1342,26 @@ private struct ModelStatusBanner: View {
                 Task { await controller.downloadSummaryModel() }
             }
         }
+    }
+
+    private var pauseButton: some View {
+        Button {
+            Task { await controller.pauseSummaryDownload() }
+        } label: {
+            Label("Pause", systemImage: "pause.circle")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private var resumeButton: some View {
+        Button {
+            Task { await controller.resumeSummaryDownload() }
+        } label: {
+            Label("Resume download", systemImage: "arrow.down.circle")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     // MARK: Shared status elements
@@ -1689,7 +1723,15 @@ private struct SummaryModelControl: View {
 
             if showsDownloadButton {
                 Button {
-                    Task { await controller.downloadSummaryModel() }
+                    Task {
+                        // A paused download resumes (clearing the persisted
+                        // intent); every other state is a fresh/retry download.
+                        if case .paused = controller.summaryModelState {
+                            await controller.resumeSummaryDownload()
+                        } else {
+                            await controller.downloadSummaryModel()
+                        }
+                    }
                 } label: {
                     Label(downloadButtonTitle, systemImage: "arrow.down.circle")
                 }
@@ -1717,6 +1759,8 @@ private struct SummaryModelControl: View {
             // ("8.93 GB of 8.3 GB") because it counted staging; the Resume
             // button is the honest affordance (ADR-007).
             return "Download incomplete · resume to finish"
+        case .paused:
+            return "Download paused · resume to finish"
         case .downloading(let fraction):
             return "Downloading summary model… \(ModelDownloadProgress(fraction: fraction).percent)%"
         case .loading:
@@ -1730,19 +1774,19 @@ private struct SummaryModelControl: View {
 
     private var showsDownloadButton: Bool {
         switch controller.summaryModelState {
-        case .notDownloaded, .partiallyDownloaded, .failed, .downloading:
+        case .notDownloaded, .partiallyDownloaded, .paused, .failed, .downloading:
             return true
         case .loading, .ready:
             return false
         }
     }
 
-    /// A failed download reads as a retry, an interrupted one as a resume —
-    /// not a from-scratch download.
+    /// A failed download reads as a retry, an interrupted or paused one as a
+    /// resume — not a from-scratch download.
     private var downloadButtonTitle: String {
         switch controller.summaryModelState {
         case .failed: return "Retry download"
-        case .partiallyDownloaded: return "Resume download"
+        case .partiallyDownloaded, .paused: return "Resume download"
         default: return "Download model"
         }
     }

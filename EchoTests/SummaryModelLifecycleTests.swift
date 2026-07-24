@@ -175,7 +175,10 @@ struct SummaryModelLifecycleTests {
             loader: loader.load,
             downloader: downloader.download,
             snapshotExists: { snapshot.exists },
-            scheduler: scheduler
+            scheduler: scheduler,
+            // Hermetic pause store: never read the real on-disk pause file, so
+            // a pause left over from manual app use can't perturb these tests.
+            pauseStore: InMemoryPauseStore()
         )
     }
 
