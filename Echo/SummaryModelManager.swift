@@ -22,9 +22,12 @@ import os
 enum SummaryModelState: Equatable {
     case notDownloaded
     /// An interrupted download left resumable files on disk (a quit
-    /// mid-download); carries the bytes already there so the UI can offer
-    /// "Resume" instead of a from-scratch "Download".
-    case partiallyDownloaded(bytesOnDisk: Int64)
+    /// mid-download), so the UI offers "Resume" instead of a from-scratch
+    /// "Download". Carries no byte figure: the only trustworthy count is the
+    /// downloader's own fraction, absent at rest, and the recursive disk sum
+    /// that used to fill this overflowed the total ("8.93 GB of 8.3 GB") — see
+    /// ADR-007.
+    case partiallyDownloaded
     case downloading(Double)   // fraction ∈ [0, 1]
     case loading
     case ready
@@ -126,8 +129,11 @@ actor SummaryModelManager {
 
     /// Bytes an interrupted download already put on disk (complete files plus
     /// the Hub's resumable `*.incomplete` partials under `.cache/`), or nil
-    /// when nothing is there. Powers the banner's "Resume download — X of
-    /// 8.3 GB done"; a resumed download skips all of it.
+    /// when nothing is there. Consumed only as a boolean "is there a resumable
+    /// partial" signal — the number itself must never reach the UI: it sums
+    /// staging alongside committed files and can exceed the committed total, so
+    /// it cannot back a percentage or an "X of Y" readout (ADR-007). A resumed
+    /// download skips whatever is already on disk regardless.
     func partialDownloadBytes() -> Int64? {
         guard !cachedModelExists() else { return nil }
         guard let enumerator = FileManager.default.enumerator(

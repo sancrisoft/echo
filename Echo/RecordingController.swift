@@ -478,10 +478,12 @@ final class RecordingController {
     private func refreshSummaryModelState() async {
         if await summaryModelManager.cachedModelExists() {
             summaryModelState = .ready
-        } else if let bytes = await summaryModelManager.partialDownloadBytes() {
+        } else if await summaryModelManager.partialDownloadBytes() != nil {
             // A quit mid-download left resumable files behind: offer "Resume"
-            // instead of a from-scratch "Download".
-            summaryModelState = .partiallyDownloaded(bytesOnDisk: bytes)
+            // instead of a from-scratch "Download". Only the existence of a
+            // partial matters here — its byte count is untrustworthy for
+            // display (ADR-007), so the state carries none.
+            summaryModelState = .partiallyDownloaded
         } else {
             summaryModelState = .notDownloaded
         }
@@ -495,9 +497,11 @@ final class RecordingController {
         }
         // The popover's status line tells the same truth while idle. During a
         // recording it shows the live word count instead — the banner and the
-        // model control carry the progress there.
+        // model control carry the progress there. The percent goes through the
+        // clamped projection so this line (and the menu bar that mirrors it)
+        // can never print past 100% (ADR-007).
         if !state.isRecording {
-            let percent = Int(fraction * 100)
+            let percent = ModelDownloadProgress(fraction: fraction).percent
             state.updateStatus(phase.hasPrefix("Downloading") ? "\(phase) \(percent)%" : phase)
         }
     }

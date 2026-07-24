@@ -1187,10 +1187,11 @@ private struct SpeechModelGateBanner: View {
     private var trailing: some View {
         switch controller.speechModelState {
         case .downloading(let fraction):
+            let progress = ModelDownloadProgress(fraction: fraction)
             HStack(spacing: 8) {
-                ProgressView(value: fraction)
+                ProgressView(value: progress.fraction)
                     .frame(width: 140)
-                Text("\(Int(fraction * 100))%")
+                Text("\(progress.percent)%")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -1302,9 +1303,12 @@ private struct ModelStatusBanner: View {
         switch controller.summaryModelState {
         case .notDownloaded:
             downloadButton("Download")
-        case .partiallyDownloaded(let bytes):
+        case .partiallyDownloaded:
+            // No "X of Y on disk" here: the resumable partial's byte count is
+            // untrustworthy for display (staging can exceed the total — ADR-007).
+            // The Resume action is the whole affordance; it skips what's on disk.
             HStack(spacing: 8) {
-                Text("\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) of \(SummaryModelManager.modelDisplaySize) on disk")
+                Text("Download incomplete")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 downloadButton("Resume download")
@@ -1325,10 +1329,14 @@ private struct ModelStatusBanner: View {
     // MARK: Shared status elements
 
     private func downloadProgress(_ fraction: Double) -> some View {
-        HStack(spacing: 8) {
-            ProgressView(value: fraction)
+        // Single honest source for both the bar and the number (ADR-007): the
+        // clamped fraction can't drive the bar past full, and the percent can't
+        // read over 100. Shared by the speech and summary rows.
+        let progress = ModelDownloadProgress(fraction: fraction)
+        return HStack(spacing: 8) {
+            ProgressView(value: progress.fraction)
                 .frame(width: 140)
-            Text("\(Int(fraction * 100))%")
+            Text("\(progress.percent)%")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
@@ -1622,9 +1630,10 @@ private struct SummaryGenerationProgressView: View {
         VStack(spacing: 12) {
             switch controller.summaryModelState {
             case .downloading(let fraction):
-                ProgressView(value: fraction)
+                let progress = ModelDownloadProgress(fraction: fraction)
+                ProgressView(value: progress.fraction)
                     .frame(maxWidth: 280)
-                Text("Downloading summary model… \(Int(fraction * 100))%")
+                Text("Downloading summary model… \(progress.percent)%")
                     .font(.headline)
                 Text("One-time \(SummaryModelManager.modelDisplaySize) download. The summary is generated as soon as it finishes.")
                     .font(.subheadline)
@@ -1699,11 +1708,13 @@ private struct SummaryModelControl: View {
         switch controller.summaryModelState {
         case .notDownloaded:
             return "Summary model not downloaded · \(SummaryModelManager.modelDisplaySize)"
-        case .partiallyDownloaded(let bytes):
-            let done = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-            return "Download incomplete · \(done) of \(SummaryModelManager.modelDisplaySize) on disk"
+        case .partiallyDownloaded:
+            // No "X of Y on disk": the partial's disk sum overflowed the total
+            // ("8.93 GB of 8.3 GB") because it counted staging; the Resume
+            // button is the honest affordance (ADR-007).
+            return "Download incomplete · resume to finish"
         case .downloading(let fraction):
-            return "Downloading summary model… \(Int(fraction * 100))%"
+            return "Downloading summary model… \(ModelDownloadProgress(fraction: fraction).percent)%"
         case .loading:
             return "Loading summary model…"
         case .ready:
