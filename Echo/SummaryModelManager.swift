@@ -80,7 +80,7 @@ actor SummaryModelManager {
     /// summary (the model stays warm across a burst), short enough that the app
     /// returns to its light baseline soon after the user is done. Tuned later
     /// against the manual RSS measurements (SP-003 open question 4).
-    static let summaryModelIdleTimeout: Duration = .seconds(120)
+    static let summaryModelIdleTimeout: Duration = .seconds(60)
 
     /// The repo also carries a bf16 vision sidecar (optiq/optiq_vision.safetensors,
     /// ~105 MB) that the text path neither downloads nor loads: these globs
