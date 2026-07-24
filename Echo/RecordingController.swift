@@ -150,6 +150,15 @@ final class RecordingController {
     /// Cleared when a session actually starts or the callout is dismissed.
     private(set) var recordingAwaitingSpeechModel = false
 
+    /// One-shot request (set on every record press blocked by a not-ready
+    /// speech model) for the dashboard to raise the explanatory "can't record
+    /// yet" dialog. Distinct from the sticky flag above — that one drives the
+    /// persistent progress banner and stays set, so it can't re-trigger the
+    /// modal on a repeat press. Consumed and cleared by `DashboardView`; the
+    /// dashboard is the stable host (a menu-bar popover would dismiss the
+    /// alert as it closes), so the menu bar routes here by opening the window.
+    var pendingSpeechModelGateNotice = false
+
     /// The gate callout's dismiss. The download itself keeps running — only
     /// the "you pressed record too early" framing goes away.
     func dismissSpeechModelGate() { recordingAwaitingSpeechModel = false }
@@ -248,6 +257,9 @@ final class RecordingController {
             // not lie on any surface.
             Self.log.info("Record gesture blocked — speech model not ready: \(message, privacy: .public)")
             recordingAwaitingSpeechModel = true
+            // Fire the one-shot so the dashboard raises the dialog on THIS press
+            // (the sticky flag above already being set can't re-trigger it).
+            pendingSpeechModelGateNotice = true
             Task { await prepare() }
             return
         case .record:

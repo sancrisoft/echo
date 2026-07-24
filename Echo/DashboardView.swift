@@ -71,6 +71,12 @@ struct DashboardView: View {
     /// meeting's title (with its back chevron).
     @State private var opened: OpenedDetail?
 
+    /// Drives the "can't start recording yet" dialog. Hosted here on the stable
+    /// window (not the menu-bar popover, which would dismiss an alert as it
+    /// closes) so both surfaces route through it; its CTA just closes the
+    /// dialog, leaving the live download status visible in the banners behind.
+    @State private var showGateAlert = false
+
     var body: some View {
         // A plain HStack instead of NavigationSplitView: on this macOS the
         // split view's columns carry a rigid AppKit fitting height of roughly
@@ -99,6 +105,10 @@ struct DashboardView: View {
         .onAppear {
             controller.kickSummaryBackfill()
             consumePendingLiveDetailOpen()
+            // The menu bar opens this window on a gated press; the notice was
+            // set before the window existed, so onChange can't catch it —
+            // consume it here as the window appears.
+            consumeSpeechModelGateNotice()
         }
         // The window may already be open when the menu bar's Stop asks for the
         // live detail — onAppear won't re-fire then, so follow the flag too.
@@ -109,6 +119,18 @@ struct DashboardView: View {
         // lives on the meetings list, so any open detail must step aside.
         .onChange(of: controller.recordingAwaitingSpeechModel) { _, gated in
             if gated { opened = nil }
+        }
+        // Raise the "can't record yet" dialog on each blocked press. The
+        // one-shot fires even when the sticky gate flag was already set (a
+        // repeat press), and covers the case where the window was already open.
+        .onChange(of: controller.pendingSpeechModelGateNotice) { _, pending in
+            if pending { consumeSpeechModelGateNotice() }
+        }
+        .alert("Can't start recording yet", isPresented: $showGateAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(RecordingGateDecision.decide(controller.speechModelState).message
+                ?? "The speech model isn't ready yet.")
         }
         #if DEBUG
         // Dev-only verification loop: with ECHO_SNAPSHOT_PATH set (and the
@@ -240,6 +262,12 @@ struct DashboardView: View {
         if case .ready = controller.state.summaryState { summaryDone = true } else { summaryDone = false }
         opened = OpenedDetail(target: .live, tab: summaryDone ? .summary : .transcript)
     }
+
+    private func consumeSpeechModelGateNotice() {
+        guard controller.pendingSpeechModelGateNotice else { return }
+        controller.pendingSpeechModelGateNotice = false
+        showGateAlert = true
+    }
 }
 
 /// The display title for the in-progress session: the auto title it will be
@@ -305,6 +333,9 @@ private struct RecordToolbarButton: View {
             Task {
                 let wasRecording = controller.state.isRecording
                 await controller.toggle()
+                // A press blocked on a not-ready speech model sets the
+                // controller's one-shot gate notice; the DashboardView shell
+                // observes it and raises the "can't record yet" dialog.
                 if !wasRecording && controller.state.isRecording { onStart() }
             }
         } label: {
