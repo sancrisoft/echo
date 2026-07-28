@@ -8,12 +8,12 @@
 //  ---------------
 //  The single-pass summarizer sends the whole transcript in one prompt. That
 //  does not scale: a one-hour meeting is ~12-15K tokens, three hours >40K, and
-//  extraction quality degrades ("lost in the middle") well before Gemma's 256K
-//  context is full — and a 40K-token KV cache on a 12B model costs GB on top of
-//  the 8.3 GB of weights (total budget ≤12 GB). So long transcripts are cut into
-//  bounded chunks (SPEC-02), each mapped to structured facts independently, the
-//  facts merged deterministically in Swift, and a final grounded prose pass
-//  writes the short/detailed summaries.
+//  extraction quality degrades ("lost in the middle") well before Qwen3.5 4B's
+//  262K context is full — and a 40K-token KV cache still costs a GB or more on
+//  top of the ~3.3 GB of weights (SP-004's summarizing budget: ≤ ~4.5 GB). So
+//  long transcripts are cut into bounded chunks (SPEC-02), each mapped to
+//  structured facts independently, the facts merged deterministically in Swift,
+//  and a final grounded prose pass writes the short/detailed summaries.
 //
 //  This file holds the *pure, engine-free* half of that pipeline: the value
 //  contracts and the deterministic merge. The LLM orchestration lives in

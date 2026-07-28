@@ -33,8 +33,11 @@ actor SummarizationPipeline {
     /// At or below this transcript-token estimate we stay single-pass; above it
     /// we map-reduce. Chosen to match SPEC-02's default `hardMaxTokens` (8_000):
     /// a transcript this small is a single chunk anyway, so single-pass adds no
-    /// risk, while larger ones both blow the KV-cache memory budget on a 12B
-    /// model and lose extraction quality in an over-full context (SPEC-05 §2).
+    /// risk, while larger ones lose extraction quality in an over-full context
+    /// ("lost in the middle", SPEC-05 §2). On the 4B model an 8K-token KV cache
+    /// is comfortable headroom rather than the memory ceiling it was on the
+    /// retired 12B — the budget stands on quality grounds alone; retuning it is
+    /// a separate, measured decision deferred past SP-004 (out of scope there).
     /// Uses SPEC-02's heuristic estimator (a real tokenizer is a later seam).
     nonisolated static let singlePassBudget = 8_000
 
@@ -875,7 +878,7 @@ enum SummarizationError: LocalizedError {
         case .modelUnavailable(let message):
             return "The summary model is unavailable: \(message)"
         case .emptyModelResponse:
-            return "Gemma returned an empty summary."
+            return "The summary model returned an empty summary."
         }
     }
 }

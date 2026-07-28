@@ -4,11 +4,11 @@
 //
 //  Downloads (once), caches, and loads the summary LLM. The snapshot lives
 //  under EchoPaths.modelsDirectory — a user-level path shared by all
-//  worktrees and app relaunches, so the ~8.3 GB download happens exactly one
+//  worktrees and app relaunches, so the ~3.3 GB download happens exactly one
 //  time. Loading produces a TextGenerating engine backed by MLX (in-process;
 //  no server subprocess, no HTTP, no Homebrew).
 //
-//  Memory lifecycle (ADR-008): the 8.3 GB weights are brought into RAM only
+//  Memory lifecycle (ADR-008): the ~3.3 GB weights are brought into RAM only
 //  for active summary work and released after a short idle timeout — never
 //  merely because the download finished or the app launched. `withEngine`
 //  (or the `acquireEngine`/`releaseEngine` pair it wraps) counts work in
@@ -69,12 +69,13 @@ actor SummaryModelManager {
 
     static let modelID = "mlx-community/Qwen3.5-4B-OptiQ-4bit"
     /// Human name for the models banner ("which model is this and why").
-    static let modelDisplayName = "Gemma 4 12B"
+    static let modelDisplayName = "Qwen3.5 4B"
     /// Shown next to "Ready" in the UI; the on-disk size of the text-path
-    /// snapshot (two weight shards + configs + tokenizer).
-    static let modelDisplaySize = "8.3 GB"
+    /// snapshot (a single weight file + configs + tokenizer), measured from a
+    /// complete download. Display string only — never a progress input (ADR-007).
+    static let modelDisplaySize = "3.3 GB"
 
-    /// Idle window after the last summary generation before the ~8.3 GB weights
+    /// Idle window after the last summary generation before the ~3.3 GB weights
     /// are released from RAM (ADR-008). Provisional starting value for SP-003
     /// open question 2: long enough to span a regenerate or a quick follow-up
     /// summary (the model stays warm across a burst), short enough that the app
@@ -82,13 +83,19 @@ actor SummaryModelManager {
     /// against the manual RSS measurements (SP-003 open question 4).
     static let summaryModelIdleTimeout: Duration = .seconds(60)
 
-    /// The repo also carries a bf16 vision sidecar (optiq/optiq_vision.safetensors,
-    /// ~105 MB) that the text path neither downloads nor loads: these globs
-    /// match the weight shards (`model-*.safetensors`) and the top-level
-    /// configs/tokenizer, and cannot match anything under optiq/.
+    /// The repo also carries bf16 sidecars under optiq/ (mtp.safetensors and
+    /// optiq_vision.safetensors) that the text path neither downloads nor
+    /// loads: these globs match the weight file (`model.safetensors`) and the
+    /// top-level configs/tokenizer, and cannot match anything under optiq/.
     private static let downloadGlobs = ["model*.safetensors", "*.json"]
 
-    private static let minimumFreeDiskBytes: Int64 = 15 * 1_000_000_000
+    /// Free-disk floor for starting the download. The retired 12B's 15 GB
+    /// floor gave its ~8.9 GB snapshot roughly 1.7× headroom (fetch plus Hub
+    /// staging); this is the same ratio applied to the new ~3.3 GB download.
+    /// Rescaled deliberately: a floor still sized for the 12B would block the
+    /// ~3.3 GB migration on exactly the full disks it is about to relieve
+    /// (SP-004 story 18).
+    private static let minimumFreeDiskBytes: Int64 = 6 * 1_000_000_000
 
     private var engine: (any TextGenerating)?
     private var loadTask: Task<any TextGenerating, Error>?
@@ -232,7 +239,7 @@ actor SummaryModelManager {
 
     /// Downloads the snapshot if it isn't complete on disk WITHOUT loading the
     /// weights — the eager first-launch download and the recording-start
-    /// prefetch, which must never put the 12B weights in memory while Whisper is
+    /// prefetch, which must never put the 4B weights in memory while Whisper is
     /// transcribing live. Joins any in-flight download; a no-op once the
     /// snapshot (or the engine) exists.
     func ensureDownloaded(
@@ -360,7 +367,7 @@ actor SummaryModelManager {
     // MARK: - Live seams (real MLX / HubApi / disk)
 
     /// The real MLX load: bounds the buffer cache so idle memory between
-    /// generations stays small relative to the 12B weights, loads the
+    /// generations stays small relative to the 4B weights, loads the
     /// container, and wraps it in the streaming engine.
     static let liveLoader: EngineLoader = { directory in
         MLX.GPU.set(cacheLimit: 20 * 1024 * 1024)
@@ -619,7 +626,8 @@ nonisolated final class FileDownloadPauseStore: DownloadPauseStore, @unchecked S
 /// Bridges the tokenizer stack Echo already ships (ArgmaxCore's vendored
 /// swift-transformers, surfaced as TokenizerWrapper) into MLXLMCommon's
 /// Tokenizer. Chat templating is deliberately unsupported: the wrapper does
-/// not expose it, and MLXTextEngine builds the Gemma turn format itself.
+/// not expose it, and MLXTextEngine builds the ChatML turn format itself
+/// (ADR-010).
 nonisolated struct EchoTokenizerLoader: TokenizerLoader {
     func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
         let wrapper = try await AutoTokenizerWrapper.from(modelFolder: directory)
@@ -668,7 +676,7 @@ nonisolated enum SummaryModelError: LocalizedError {
         switch self {
         case .insufficientDiskSpace(let freeBytes):
             let free = ByteCountFormatter.string(fromByteCount: freeBytes, countStyle: .file)
-            return "Not enough disk space to download the summary model (~8.3 GB needed, \(free) free). Free up space and retry."
+            return "Not enough disk space to download the summary model (~3.3 GB needed, \(free) free). Free up space and retry."
         case .downloadFailed(let message):
             return "Could not download the summary model: \(message)"
         case .loadFailed(let message):

@@ -329,8 +329,8 @@ final class RecordingController {
 
     /// Explicit download from the dashboard's model controls (the same download
     /// runs implicitly on the first summary if the user never pressed a button).
-    /// Download only — NEVER load: pulling the 12B into RAM merely because the
-    /// user pressed "Download" is the ~8.4 GB "doing nothing" bug (ADR-008). The
+    /// Download only — NEVER load: pulling the 4B into RAM merely because the
+    /// user pressed "Download" is the ~3 GB "doing nothing" bug (ADR-008). The
     /// weights come into memory only for active summary work and are released
     /// after a short idle period, so here "Ready" means "snapshot on disk" and
     /// the first summary pays the load.
@@ -386,7 +386,7 @@ final class RecordingController {
     }
 
     /// Fetches the summary model's files while a recording runs (download
-    /// only — the 12B weights must never load into RAM while Whisper is
+    /// only — the 4B weights must never load into RAM while Whisper is
     /// transcribing live; the post-stop `ensureReady` does the load). Joins
     /// any in-flight download, so at most one transfer ever runs. A failure
     /// only paints the banner: the stop path and its own retry buttons own
@@ -417,7 +417,7 @@ final class RecordingController {
     /// Eagerly downloads the summary model on first launch, sequenced BEHIND the
     /// speech-model preload (`init` chains this after `prepare()` returns): on a
     /// fresh install the ~626 MB speech download — the one that gates recording —
-    /// wins the bandwidth first and never co-saturates the link with this ~8.3 GB
+    /// wins the bandwidth first and never co-saturates the link with this ~3.3 GB
     /// one (OQ6 resolved; SP-003 "Speech-model download has priority"). Download
     /// only, never loads (ADR-008); a no-op once the snapshot is on disk or a
     /// transfer is already in flight (the manager dedups to one download, and an
@@ -673,7 +673,7 @@ final class RecordingController {
     }
 
     /// Runs `body` with a summary engine, counting the generation as active LLM
-    /// work so the manager keeps the ~8.3 GB model warm for its whole duration
+    /// work so the manager keeps the ~3.3 GB model warm for its whole duration
     /// and arms the idle release only once this returns (ADR-008). The engine is
     /// acquired on the manager actor; `body` runs here on the main actor with
     /// its streaming, guards, and persistence unchanged. Release is un-missable
@@ -709,7 +709,7 @@ final class RecordingController {
         state.markSummaryGenerating()
 
         do {
-            // First run downloads (~8.3 GB, once — resuming whatever the
+            // First run downloads (~3.3 GB, once — resuming whatever the
             // recording-start prefetch already fetched) and loads the model;
             // later runs reuse the warm engine. The work scope counts this
             // generation so the model is released only after it finishes and
@@ -752,7 +752,7 @@ final class RecordingController {
                         await library.attachSummary(latest, description: description, to: meetingID)
                     }
                 } else {
-                    state.markSummaryUnavailable("Gemma returned an empty summary.")
+                    state.markSummaryUnavailable("The summary model returned an empty summary.")
                 }
             }
         } catch {

@@ -1722,7 +1722,7 @@ private struct SummaryGenerationProgressView: View {
                     .controlSize(.large)
                 Text("Generating summary…")
                     .font(.headline)
-                Text("Gemma is reading \(subject) locally.")
+                Text("Echo is reading \(subject) locally.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

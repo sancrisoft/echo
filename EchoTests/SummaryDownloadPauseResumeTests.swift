@@ -2,7 +2,7 @@
 //  SummaryDownloadPauseResumeTests.swift
 //  EchoTests
 //
-//  User-controllable pause/resume of the large (8.3 GB) background summary-model
+//  User-controllable pause/resume of the large multi-GB background summary-model
 //  download (SP-003 US-10), asserted through the manager's public API with
 //  counting fakes and an in-memory pause store — no real MLX, network, disk, or
 //  clock (SP-003 Testing Decisions, layer 3).
