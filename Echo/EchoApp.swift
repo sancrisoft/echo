@@ -13,6 +13,20 @@ enum EchoWindow {
 
 @main
 struct EchoApp: App {
+    init() {
+        // Reclaim the retired summary model's snapshot (ADR-011): every
+        // launch, scoped to exactly the retired repo directories, non-fatal,
+        // no dialog. Detached at utility priority so deleting a multi-GB tree
+        // never competes with startup on the main thread. "Before or
+        // alongside the new model's download" (SP-004) holds without any
+        // sequencing: the eager summary download is chained behind the
+        // speech-model preload (RecordingController.init), while this fires
+        // immediately.
+        Task.detached(priority: .utility) {
+            RetiredModelCleanup.run()
+        }
+    }
+
     /// Single shared session controller for both the menu bar and the dashboard.
     @State private var controller = RecordingController()
     /// Persisted UI state (e.g. the dismissed privacy banner). Loaded once from
