@@ -88,16 +88,6 @@ actor SummaryModelManager {
     /// configs/tokenizer, and cannot match anything under optiq/.
     private static let downloadGlobs = ["model*.safetensors", "*.json"]
 
-    /// Files that must exist for the cache to count as complete; the weight
-    /// shards are validated against the index's weight_map on top of these.
-    private static let requiredFiles = [
-        "config.json",
-        "generation_config.json",
-        "tokenizer.json",
-        "tokenizer_config.json",
-        "model.safetensors.index.json",
-    ]
-
     private static let minimumFreeDiskBytes: Int64 = 15 * 1_000_000_000
 
     private var engine: (any TextGenerating)?
@@ -287,7 +277,7 @@ actor SummaryModelManager {
 
     /// Whether a complete snapshot is already on disk — cheap enough to paint
     /// the UI state without touching the network or loading weights. Delegates
-    /// to the injected check (real disk scan in production).
+    /// to the injected check (manifest ∧ files-on-disk in production, ADR-012).
     func cachedModelExists() -> Bool {
         snapshotExistsCheck()
     }
@@ -381,10 +371,14 @@ actor SummaryModelManager {
         return MLXTextEngine(container: container)
     }
 
-    /// The real Hub snapshot download (repo-metadata fraction + stall-retry).
+    /// The real Hub snapshot download (repo-metadata fraction + stall-retry),
+    /// plus the completeness manifest recorded at completion (ADR-012) — part
+    /// of the downloader seam so test fakes stand in for both halves at once.
     static let liveDownloader: SnapshotDownloader = { progress in
         try SummaryModelManager.checkDiskSpace()
         progress("Downloading summary model…", 0)
+        let hub = HubApiWrapper(downloadBase: EchoPaths.modelsDirectory)
+        let repo = HubApiWrapper.Repo(id: SummaryModelManager.modelID)
         // The bar must not snap back to zero on a stall retry — remember the
         // fraction the download actually reached (callbacks arrive on
         // URLSession worker threads, hence the lock).
@@ -399,9 +393,7 @@ actor SummaryModelManager {
                     progress("Download stalled — retrying…", reached.value)
                 }
             ) { noteProgress in
-                let hub = HubApiWrapper(downloadBase: EchoPaths.modelsDirectory)
-                let repo = HubApiWrapper.Repo(id: SummaryModelManager.modelID)
-                return try await hub.snapshot(
+                try await hub.snapshot(
                     from: repo,
                     matching: SummaryModelManager.downloadGlobs
                 ) { snapshotProgress in
@@ -413,11 +405,62 @@ actor SummaryModelManager {
         } catch {
             throw SummaryModelError.downloadFailed(error.localizedDescription)
         }
+
+        // A pause cancels the download task, and the Hub snapshot then
+        // RETURNS early between files instead of throwing — never record a
+        // manifest for a transfer that didn't finish; completeness stays
+        // honestly incomplete and the resume re-enters here.
+        if Task.isCancelled { return }
+
+        // Record what "complete" means for this snapshot (ADR-012): the file
+        // set the downloader itself resolves — getFilenames(matching:) is the
+        // exact resolution hub.snapshot ran on, so no repo layout fact lives
+        // in code. Resolved against the repo (not a directory listing) on
+        // purpose: a listing measures what arrived, not what the load needs,
+        // and would bless a snapshot whose stale staging metadata let a file
+        // go missing. Verify-then-write keeps a recorded manifest meaning "a
+        // download genuinely completed here".
+        do {
+            let resolved = try await hub.getFilenames(
+                from: repo,
+                matching: SummaryModelManager.downloadGlobs
+            )
+            let manifest = SnapshotManifest(
+                modelID: SummaryModelManager.modelID,
+                files: resolved.sorted()
+            )
+            guard manifest.allFilesCommitted(in: SummaryModelManager.snapshotDirectory) else {
+                throw SnapshotVerificationFailed()
+            }
+            try manifest.write(to: SummaryModelManager.manifestFileURL)
+        } catch {
+            // Fail-safe direction: no manifest was recorded, so the snapshot
+            // keeps reading incomplete and a retry re-verifies cheaply (the
+            // Hub skips files already on disk).
+            throw SummaryModelError.downloadFailed(error.localizedDescription)
+        }
     }
 
-    /// The real on-disk snapshot check (required files + every weight shard).
+    /// The snapshot pass returned but a resolved file is still missing on
+    /// disk — observed once with stale staging metadata after an interrupted
+    /// download. Retrying is cheap (complete files are skipped) and heals it.
+    private struct SnapshotVerificationFailed: LocalizedError {
+        var errorDescription: String? {
+            "The downloaded model files did not pass verification. Retry to resume the download."
+        }
+    }
+
+    /// The real on-disk snapshot check: manifest ∧ files-on-disk (ADR-012).
+    /// Layout-agnostic (no hardcoded file list, no sharding-index parse) and
+    /// offline — Echo never needs the network to know it already has the
+    /// model. A snapshot predating the manifest mechanism reads incomplete
+    /// until the next online pass no-ops per committed file and records one.
     static let liveSnapshotExists: @Sendable () -> Bool = {
-        cachedSnapshotExists()
+        SnapshotManifest.snapshotComplete(
+            forModelID: modelID,
+            in: snapshotDirectory,
+            manifestAt: manifestFileURL
+        )
     }
 
     private final class LockedFraction: @unchecked Sendable {
@@ -445,32 +488,17 @@ actor SummaryModelManager {
             .localRepoLocation(HubApiWrapper.Repo(id: modelID))
     }
 
-    /// The real "is a complete snapshot on disk" check backing `liveSnapshotExists`.
-    private static func cachedSnapshotExists() -> Bool {
-        let directory = snapshotDirectory
-        let fm = FileManager.default
-        for file in requiredFiles {
-            guard fm.fileExists(atPath: directory.appending(path: file).path) else { return false }
-        }
-        guard let shards = weightShards(in: directory) else { return false }
-        for shard in shards {
-            guard fm.fileExists(atPath: directory.appending(path: shard).path) else { return false }
-        }
-        return true
-    }
-
-    /// Distinct shard filenames from model.safetensors.index.json's
-    /// weight_map, or nil if the index is missing/unreadable.
-    private static func weightShards(in directory: URL) -> Set<String>? {
-        let indexURL = directory.appending(path: "model.safetensors.index.json")
-        guard
-            let data = try? Data(contentsOf: indexURL),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let weightMap = object["weight_map"] as? [String: String]
-        else {
-            return nil
-        }
-        return Set(weightMap.values)
+    /// Where the completeness manifest lives (ADR-012): beside the models
+    /// tree, NOT inside the Hub-managed snapshot directory — HubApi's
+    /// offline-mode snapshot pass validates every repo file matching the
+    /// download globs and fails on one without a `.metadata` sidecar, so a
+    /// foreign JSON planted in the repo directory would poison offline
+    /// resume. One file, scoped to the model by the record's own modelID: a
+    /// model swap makes the old record read as absent, and the new model's
+    /// first completed download supersedes it.
+    private static var manifestFileURL: URL {
+        EchoPaths.modelsDirectory
+            .appending(path: "summary-model-manifest.json", directoryHint: .notDirectory)
     }
 
     private static func checkDiskSpace() throws {
@@ -490,9 +518,11 @@ actor SummaryModelManager {
 typealias EngineLoader = @Sendable (_ directory: URL) async throws -> any TextGenerating
 
 /// Downloads the snapshot to disk, reporting `(phase, fraction)` progress. The
-/// real implementation drives HubApi; a test fake counts transfers and never
-/// touches the network. `progress` is `@escaping` because the live downloader
-/// hands it to the stall-retry's `onRetry` and the Hub snapshot callback.
+/// real implementation drives HubApi and, on completion, records the
+/// completeness manifest the snapshot check consults (ADR-012); a test fake
+/// counts transfers, flips its snapshot flag, and never touches the network.
+/// `progress` is `@escaping` because the live downloader hands it to the
+/// stall-retry's `onRetry` and the Hub snapshot callback.
 typealias SnapshotDownloader = @Sendable (_ progress: @escaping @Sendable (String, Double) -> Void) async throws -> Void
 
 /// Schedules (and cancels) the summary model's idle-timeout release. Extracted
