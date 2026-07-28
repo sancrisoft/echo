@@ -67,7 +67,7 @@ actor SummaryModelManager {
 
     static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "SummaryModelManager")
 
-    static let modelID = "mlx-community/gemma-4-12B-it-qat-OptiQ-4bit"
+    static let modelID = "mlx-community/Qwen3.5-4B-OptiQ-4bit"
     /// Human name for the models banner ("which model is this and why").
     static let modelDisplayName = "Gemma 4 12B"
     /// Shown next to "Ready" in the UI; the on-disk size of the text-path
