@@ -24,6 +24,10 @@ struct EchoApp: App {
         // immediately.
         Task.detached(priority: .utility) {
             RetiredModelCleanup.run()
+            // Bound the error trace log's disk footprint: drop daily files
+            // older than the retention window. Same fire-and-forget slot —
+            // non-fatal, never competes with startup on the main thread.
+            await ErrorTrace.shared.prune()
         }
     }
 

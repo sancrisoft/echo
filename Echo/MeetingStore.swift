@@ -15,11 +15,8 @@
 //
 
 import Foundation
-import os
 
 actor MeetingStore {
-
-    private static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "MeetingStore")
 
     /// Root under which every meeting folder lives. `let` + `Sendable` so
     /// `directory(for:)` can read it from a `nonisolated` context (the sidecar
@@ -132,10 +129,12 @@ actor MeetingStore {
             do {
                 metas.append(try decode(MeetingMeta.self, from: entry.appending(path: Filename.meta)))
             } catch {
-                Self.log.error("""
-                Skipping unreadable meeting folder \(entry.lastPathComponent, privacy: .public): \
-                \(error.localizedDescription, privacy: .public)
-                """)
+                ErrorTrace.record(
+                    "Skipping unreadable meeting folder",
+                    error: error,
+                    category: "MeetingStore",
+                    metadata: ["folder": entry.lastPathComponent]
+                )
             }
         }
         return metas.sorted { $0.startedAt > $1.startedAt }

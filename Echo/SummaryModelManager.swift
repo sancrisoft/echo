@@ -616,8 +616,10 @@ nonisolated final class FileDownloadPauseStore: DownloadPauseStore, @unchecked S
             let data = try JSONEncoder().encode(Stored(paused: paused))
             try data.write(to: fileURL, options: .atomic)
         } catch {
-            SummaryModelManager.log.error(
-                "Writing summary-download pause state failed: \(error.localizedDescription, privacy: .public)"
+            ErrorTrace.record(
+                "Writing summary-download pause state failed",
+                error: error,
+                category: "SummaryModelManager"
             )
         }
     }
