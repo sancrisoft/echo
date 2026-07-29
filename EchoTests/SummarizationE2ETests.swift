@@ -9,14 +9,18 @@
 //
 
 import Foundation
+// For the Tokenizer protocol's members on the loader seam's return value —
+// the target builds with MemberImportVisibility, so the transitive import
+// via Echo is not enough.
+import MLXLMCommon
 import Testing
 @testable import Echo
 
 private let acceptanceEnabled = ProcessInfo.processInfo.environment["ECHO_ACCEPTANCE"] == "1"
 
-// .serialized: this suite now has two model-driven tests. Swift Testing
+// .serialized: this suite has several model-driven tests. Swift Testing
 // parallelizes tests within a process by default (even with
-// -parallel-testing-enabled NO), and two generations sharing the Metal device
+// -parallel-testing-enabled NO), and generations sharing the Metal device
 // contend; run them one at a time.
 @Suite("Summarization E2E", .enabled(if: acceptanceEnabled), .serialized)
 struct SummarizationE2ETests {
@@ -51,6 +55,44 @@ struct SummarizationE2ETests {
                 end: TimeInterval(index * 6 + 5)
             )
         }
+    }
+
+    /// SP-004 open question 2, first half (ADR-010): the ChatML turn markers
+    /// must encode as SINGLE special-token ids through the vendored tokenizer
+    /// bridge — a tokenizer that split them into text fragments would degrade
+    /// every summary without erroring. `<|im_end|>` must encode to 248046
+    /// (its id in the snapshot's tokenizer.json added_tokens — NOT 248044,
+    /// which is `<|endoftext|>`), and it must BE the tokenizer's declared
+    /// eos_token: this repo's generation_config.json carries only sampling
+    /// params, so the end-of-turn stop the model factory resolves comes from
+    /// tokenizer_config.json — the tie between "the marker the template
+    /// closes turns with" and "the id generation stops on". Needs only the
+    /// snapshot on disk, so this runs the download-only manager path — no
+    /// weights in RAM. Deliberately does NOT assert `cachedModelExists()`:
+    /// the current completeness check reads this repo as forever-incomplete
+    /// (its weight index references the never-downloaded optiq/ vision
+    /// sidecar) — that seam is ADR-012's, covered by its own slice.
+    @Test("ChatML turn markers encode as single special tokens")
+    func chatMLMarkersEncodeAsSingleTokens() async throws {
+        let manager = SummaryModelManager()
+        try await manager.ensureDownloaded { phase, fraction in
+            print("[E2E] \(phase) \(Int(fraction * 100))%")
+        }
+
+        // The manager derives its snapshot via HubApi's models/<org>/<repo>
+        // layout (the invariant SummaryModelPathsTests pins); the tokenizer
+        // loads through the SAME loader path production generation uses.
+        let snapshot = EchoPaths.modelsDirectory
+            .appending(path: "models")
+            .appending(path: SummaryModelManager.modelID)
+        let tokenizer = try await EchoTokenizerLoader().load(from: snapshot)
+
+        let imStart = tokenizer.encode(text: "<|im_start|>", addSpecialTokens: false)
+        let imEnd = tokenizer.encode(text: "<|im_end|>", addSpecialTokens: false)
+        print("[E2E] <|im_start|> -> \(imStart)  <|im_end|> -> \(imEnd)  eosToken -> \(tokenizer.eosToken ?? "nil")")
+        #expect(imStart.count == 1)
+        #expect(imEnd == [248046])
+        #expect(tokenizer.eosToken == "<|im_end|>")
     }
 
     @Test("real model produces a grounded streamed summary")
@@ -233,5 +275,35 @@ struct SummarizationE2ETests {
         // Grounding trap: the onboarding-guide action has no owner in the text.
         let onboardingActions = summary.actionItems.filter { $0.task.lowercased().contains("onboarding") }
         #expect(onboardingActions.allSatisfy { $0.owner == nil })
+    }
+
+    /// SP-004 open question 2, second half: thinking stays disabled
+    /// end-to-end. The template pre-fills an empty think block, so the model
+    /// must continue in answer mode — never re-open a think channel. Asserted
+    /// on the RAW stream (the pipeline's line validator drops non-JSON lines,
+    /// so a summary-level check could pass while the model silently burned
+    /// its token budget on reasoning).
+    @Test("generation emits no thinking text")
+    func generationEmitsNoThinkingText() async throws {
+        let manager = SummaryModelManager()
+        let engine = try await manager.ensureReady { phase, fraction in
+            print("[E2E] \(phase) \(Int(fraction * 100))%")
+        }
+
+        var params = GenerationParams()
+        params.maxTokens = 200
+        var output = ""
+        for try await chunk in engine.stream(
+            system: "You take meeting notes. Reply with one short sentence.",
+            user: "The team agreed to ship the Atlas beta on Friday. What was decided?",
+            params: params
+        ) {
+            output += chunk
+        }
+
+        print("[E2E] think-probe output: \(output)")
+        #expect(!output.isEmpty)
+        #expect(!output.contains("<think>"))
+        #expect(!output.contains("</think>"))
     }
 }

@@ -55,7 +55,7 @@ struct ModelDownloadProgressTests {
     /// impossible even when the raw fraction arrives past 1.
     @Test(arguments: [0.0, 0.5, 1.0, 1.076, 12.0, .infinity, -0.5] as [Double])
     func derivedBytesNeverExceedTotal(raw: Double) {
-        let total: Int64 = 8_300_000_000  // the summary model's ~8.3 GB nominal size
+        let total: Int64 = 8_300_000_000  // the historical overflow's total (ADR-007)
         let downloaded = ModelDownloadProgress(fraction: raw).downloadedBytes(ofTotal: total)
         #expect(downloaded >= 0)
         #expect(downloaded <= total)

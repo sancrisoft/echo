@@ -4,11 +4,11 @@
 //
 //  Downloads (once), caches, and loads the summary LLM. The snapshot lives
 //  under EchoPaths.modelsDirectory — a user-level path shared by all
-//  worktrees and app relaunches, so the ~8.3 GB download happens exactly one
+//  worktrees and app relaunches, so the ~3.3 GB download happens exactly one
 //  time. Loading produces a TextGenerating engine backed by MLX (in-process;
 //  no server subprocess, no HTTP, no Homebrew).
 //
-//  Memory lifecycle (ADR-008): the 8.3 GB weights are brought into RAM only
+//  Memory lifecycle (ADR-008): the ~3.3 GB weights are brought into RAM only
 //  for active summary work and released after a short idle timeout — never
 //  merely because the download finished or the app launched. `withEngine`
 //  (or the `acquireEngine`/`releaseEngine` pair it wraps) counts work in
@@ -67,14 +67,15 @@ actor SummaryModelManager {
 
     static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "SummaryModelManager")
 
-    static let modelID = "mlx-community/gemma-4-12B-it-qat-OptiQ-4bit"
+    static let modelID = "mlx-community/Qwen3.5-4B-OptiQ-4bit"
     /// Human name for the models banner ("which model is this and why").
-    static let modelDisplayName = "Gemma 4 12B"
+    static let modelDisplayName = "Qwen3.5 4B"
     /// Shown next to "Ready" in the UI; the on-disk size of the text-path
-    /// snapshot (two weight shards + configs + tokenizer).
-    static let modelDisplaySize = "8.3 GB"
+    /// snapshot (a single weight file + configs + tokenizer), measured from a
+    /// complete download. Display string only — never a progress input (ADR-007).
+    static let modelDisplaySize = "3.3 GB"
 
-    /// Idle window after the last summary generation before the ~8.3 GB weights
+    /// Idle window after the last summary generation before the ~3.3 GB weights
     /// are released from RAM (ADR-008). Provisional starting value for SP-003
     /// open question 2: long enough to span a regenerate or a quick follow-up
     /// summary (the model stays warm across a burst), short enough that the app
@@ -82,23 +83,19 @@ actor SummaryModelManager {
     /// against the manual RSS measurements (SP-003 open question 4).
     static let summaryModelIdleTimeout: Duration = .seconds(60)
 
-    /// The repo also carries a bf16 vision sidecar (optiq/optiq_vision.safetensors,
-    /// ~105 MB) that the text path neither downloads nor loads: these globs
-    /// match the weight shards (`model-*.safetensors`) and the top-level
-    /// configs/tokenizer, and cannot match anything under optiq/.
+    /// The repo also carries bf16 sidecars under optiq/ (mtp.safetensors and
+    /// optiq_vision.safetensors) that the text path neither downloads nor
+    /// loads: these globs match the weight file (`model.safetensors`) and the
+    /// top-level configs/tokenizer, and cannot match anything under optiq/.
     private static let downloadGlobs = ["model*.safetensors", "*.json"]
 
-    /// Files that must exist for the cache to count as complete; the weight
-    /// shards are validated against the index's weight_map on top of these.
-    private static let requiredFiles = [
-        "config.json",
-        "generation_config.json",
-        "tokenizer.json",
-        "tokenizer_config.json",
-        "model.safetensors.index.json",
-    ]
-
-    private static let minimumFreeDiskBytes: Int64 = 15 * 1_000_000_000
+    /// Free-disk floor for starting the download. The retired 12B's 15 GB
+    /// floor gave its ~8.9 GB snapshot roughly 1.7× headroom (fetch plus Hub
+    /// staging); this is the same ratio applied to the new ~3.3 GB download.
+    /// Rescaled deliberately: a floor still sized for the 12B would block the
+    /// ~3.3 GB migration on exactly the full disks it is about to relieve
+    /// (SP-004 story 18).
+    private static let minimumFreeDiskBytes: Int64 = 6 * 1_000_000_000
 
     private var engine: (any TextGenerating)?
     private var loadTask: Task<any TextGenerating, Error>?
@@ -242,7 +239,7 @@ actor SummaryModelManager {
 
     /// Downloads the snapshot if it isn't complete on disk WITHOUT loading the
     /// weights — the eager first-launch download and the recording-start
-    /// prefetch, which must never put the 12B weights in memory while Whisper is
+    /// prefetch, which must never put the 4B weights in memory while Whisper is
     /// transcribing live. Joins any in-flight download; a no-op once the
     /// snapshot (or the engine) exists.
     func ensureDownloaded(
@@ -287,7 +284,7 @@ actor SummaryModelManager {
 
     /// Whether a complete snapshot is already on disk — cheap enough to paint
     /// the UI state without touching the network or loading weights. Delegates
-    /// to the injected check (real disk scan in production).
+    /// to the injected check (manifest ∧ files-on-disk in production, ADR-012).
     func cachedModelExists() -> Bool {
         snapshotExistsCheck()
     }
@@ -370,7 +367,7 @@ actor SummaryModelManager {
     // MARK: - Live seams (real MLX / HubApi / disk)
 
     /// The real MLX load: bounds the buffer cache so idle memory between
-    /// generations stays small relative to the 12B weights, loads the
+    /// generations stays small relative to the 4B weights, loads the
     /// container, and wraps it in the streaming engine.
     static let liveLoader: EngineLoader = { directory in
         MLX.GPU.set(cacheLimit: 20 * 1024 * 1024)
@@ -381,10 +378,14 @@ actor SummaryModelManager {
         return MLXTextEngine(container: container)
     }
 
-    /// The real Hub snapshot download (repo-metadata fraction + stall-retry).
+    /// The real Hub snapshot download (repo-metadata fraction + stall-retry),
+    /// plus the completeness manifest recorded at completion (ADR-012) — part
+    /// of the downloader seam so test fakes stand in for both halves at once.
     static let liveDownloader: SnapshotDownloader = { progress in
         try SummaryModelManager.checkDiskSpace()
         progress("Downloading summary model…", 0)
+        let hub = HubApiWrapper(downloadBase: EchoPaths.modelsDirectory)
+        let repo = HubApiWrapper.Repo(id: SummaryModelManager.modelID)
         // The bar must not snap back to zero on a stall retry — remember the
         // fraction the download actually reached (callbacks arrive on
         // URLSession worker threads, hence the lock).
@@ -399,9 +400,7 @@ actor SummaryModelManager {
                     progress("Download stalled — retrying…", reached.value)
                 }
             ) { noteProgress in
-                let hub = HubApiWrapper(downloadBase: EchoPaths.modelsDirectory)
-                let repo = HubApiWrapper.Repo(id: SummaryModelManager.modelID)
-                return try await hub.snapshot(
+                try await hub.snapshot(
                     from: repo,
                     matching: SummaryModelManager.downloadGlobs
                 ) { snapshotProgress in
@@ -413,11 +412,62 @@ actor SummaryModelManager {
         } catch {
             throw SummaryModelError.downloadFailed(error.localizedDescription)
         }
+
+        // A pause cancels the download task, and the Hub snapshot then
+        // RETURNS early between files instead of throwing — never record a
+        // manifest for a transfer that didn't finish; completeness stays
+        // honestly incomplete and the resume re-enters here.
+        if Task.isCancelled { return }
+
+        // Record what "complete" means for this snapshot (ADR-012): the file
+        // set the downloader itself resolves — getFilenames(matching:) is the
+        // exact resolution hub.snapshot ran on, so no repo layout fact lives
+        // in code. Resolved against the repo (not a directory listing) on
+        // purpose: a listing measures what arrived, not what the load needs,
+        // and would bless a snapshot whose stale staging metadata let a file
+        // go missing. Verify-then-write keeps a recorded manifest meaning "a
+        // download genuinely completed here".
+        do {
+            let resolved = try await hub.getFilenames(
+                from: repo,
+                matching: SummaryModelManager.downloadGlobs
+            )
+            let manifest = SnapshotManifest(
+                modelID: SummaryModelManager.modelID,
+                files: resolved.sorted()
+            )
+            guard manifest.allFilesCommitted(in: SummaryModelManager.snapshotDirectory) else {
+                throw SnapshotVerificationFailed()
+            }
+            try manifest.write(to: SummaryModelManager.manifestFileURL)
+        } catch {
+            // Fail-safe direction: no manifest was recorded, so the snapshot
+            // keeps reading incomplete and a retry re-verifies cheaply (the
+            // Hub skips files already on disk).
+            throw SummaryModelError.downloadFailed(error.localizedDescription)
+        }
     }
 
-    /// The real on-disk snapshot check (required files + every weight shard).
+    /// The snapshot pass returned but a resolved file is still missing on
+    /// disk — observed once with stale staging metadata after an interrupted
+    /// download. Retrying is cheap (complete files are skipped) and heals it.
+    private struct SnapshotVerificationFailed: LocalizedError {
+        var errorDescription: String? {
+            "The downloaded model files did not pass verification. Retry to resume the download."
+        }
+    }
+
+    /// The real on-disk snapshot check: manifest ∧ files-on-disk (ADR-012).
+    /// Layout-agnostic (no hardcoded file list, no sharding-index parse) and
+    /// offline — Echo never needs the network to know it already has the
+    /// model. A snapshot predating the manifest mechanism reads incomplete
+    /// until the next online pass no-ops per committed file and records one.
     static let liveSnapshotExists: @Sendable () -> Bool = {
-        cachedSnapshotExists()
+        SnapshotManifest.snapshotComplete(
+            forModelID: modelID,
+            in: snapshotDirectory,
+            manifestAt: manifestFileURL
+        )
     }
 
     private final class LockedFraction: @unchecked Sendable {
@@ -445,32 +495,17 @@ actor SummaryModelManager {
             .localRepoLocation(HubApiWrapper.Repo(id: modelID))
     }
 
-    /// The real "is a complete snapshot on disk" check backing `liveSnapshotExists`.
-    private static func cachedSnapshotExists() -> Bool {
-        let directory = snapshotDirectory
-        let fm = FileManager.default
-        for file in requiredFiles {
-            guard fm.fileExists(atPath: directory.appending(path: file).path) else { return false }
-        }
-        guard let shards = weightShards(in: directory) else { return false }
-        for shard in shards {
-            guard fm.fileExists(atPath: directory.appending(path: shard).path) else { return false }
-        }
-        return true
-    }
-
-    /// Distinct shard filenames from model.safetensors.index.json's
-    /// weight_map, or nil if the index is missing/unreadable.
-    private static func weightShards(in directory: URL) -> Set<String>? {
-        let indexURL = directory.appending(path: "model.safetensors.index.json")
-        guard
-            let data = try? Data(contentsOf: indexURL),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let weightMap = object["weight_map"] as? [String: String]
-        else {
-            return nil
-        }
-        return Set(weightMap.values)
+    /// Where the completeness manifest lives (ADR-012): beside the models
+    /// tree, NOT inside the Hub-managed snapshot directory — HubApi's
+    /// offline-mode snapshot pass validates every repo file matching the
+    /// download globs and fails on one without a `.metadata` sidecar, so a
+    /// foreign JSON planted in the repo directory would poison offline
+    /// resume. One file, scoped to the model by the record's own modelID: a
+    /// model swap makes the old record read as absent, and the new model's
+    /// first completed download supersedes it.
+    private static var manifestFileURL: URL {
+        EchoPaths.modelsDirectory
+            .appending(path: "summary-model-manifest.json", directoryHint: .notDirectory)
     }
 
     private static func checkDiskSpace() throws {
@@ -490,9 +525,11 @@ actor SummaryModelManager {
 typealias EngineLoader = @Sendable (_ directory: URL) async throws -> any TextGenerating
 
 /// Downloads the snapshot to disk, reporting `(phase, fraction)` progress. The
-/// real implementation drives HubApi; a test fake counts transfers and never
-/// touches the network. `progress` is `@escaping` because the live downloader
-/// hands it to the stall-retry's `onRetry` and the Hub snapshot callback.
+/// real implementation drives HubApi and, on completion, records the
+/// completeness manifest the snapshot check consults (ADR-012); a test fake
+/// counts transfers, flips its snapshot flag, and never touches the network.
+/// `progress` is `@escaping` because the live downloader hands it to the
+/// stall-retry's `onRetry` and the Hub snapshot callback.
 typealias SnapshotDownloader = @Sendable (_ progress: @escaping @Sendable (String, Double) -> Void) async throws -> Void
 
 /// Schedules (and cancels) the summary model's idle-timeout release. Extracted
@@ -589,7 +626,8 @@ nonisolated final class FileDownloadPauseStore: DownloadPauseStore, @unchecked S
 /// Bridges the tokenizer stack Echo already ships (ArgmaxCore's vendored
 /// swift-transformers, surfaced as TokenizerWrapper) into MLXLMCommon's
 /// Tokenizer. Chat templating is deliberately unsupported: the wrapper does
-/// not expose it, and MLXTextEngine builds the Gemma turn format itself.
+/// not expose it, and MLXTextEngine builds the ChatML turn format itself
+/// (ADR-010).
 nonisolated struct EchoTokenizerLoader: TokenizerLoader {
     func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
         let wrapper = try await AutoTokenizerWrapper.from(modelFolder: directory)
@@ -638,7 +676,7 @@ nonisolated enum SummaryModelError: LocalizedError {
         switch self {
         case .insufficientDiskSpace(let freeBytes):
             let free = ByteCountFormatter.string(fromByteCount: freeBytes, countStyle: .file)
-            return "Not enough disk space to download the summary model (~8.3 GB needed, \(free) free). Free up space and retry."
+            return "Not enough disk space to download the summary model (~3.3 GB needed, \(free) free). Free up space and retry."
         case .downloadFailed(let message):
             return "Could not download the summary model: \(message)"
         case .loadFailed(let message):

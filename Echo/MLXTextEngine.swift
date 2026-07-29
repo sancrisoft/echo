@@ -7,12 +7,13 @@
 //
 //  Prompt construction is manual. The vendored tokenizer surface Echo already
 //  ships (ArgmaxCore's TokenizerWrapper) exposes encode/decode but not
-//  applyChatTemplate, and Gemma templates historically fold the system prompt
-//  into the first user turn — building the turn string ourselves keeps the
-//  system prompt's survival guaranteed and inspectable. The format below is
-//  transcribed from the model repo's chat_template.jinja
-//  (mlx-community/gemma-4-12B-it-qat-OptiQ-4bit) for the exact case we use:
-//  one system + one user message, generation prompt, thinking disabled.
+//  applyChatTemplate, and chat templates historically fold or drop the system
+//  prompt for some models (Gemma among them) — building the turn string
+//  ourselves keeps the system prompt's survival guaranteed and inspectable
+//  (ADR-010). The format below is ChatML, transcribed from the model repo's
+//  chat_template.jinja (mlx-community/Qwen3.5-4B-OptiQ-4bit) for the exact
+//  case we use: one system + one user message, generation prompt, thinking
+//  disabled.
 //
 
 import Foundation
@@ -56,7 +57,7 @@ nonisolated final class MLXTextEngine: TextGenerating {
         params: GenerationParams,
         into continuation: AsyncThrowingStream<String, Error>.Continuation
     ) async throws {
-        let prompt = Self.gemmaPrompt(system: system, user: user)
+        let prompt = Self.chatMLPrompt(system: system, user: user)
         // Belt-and-braces check that the system prompt survived templating —
         // the historical Gemma failure mode this guards against is a template
         // that silently drops the system turn.
@@ -65,8 +66,8 @@ nonisolated final class MLXTextEngine: TextGenerating {
 
         try await container.perform { (context: ModelContext) in
             // addSpecialTokens: false — the template string already carries
-            // <bos> and the turn markers; letting the tokenizer prepend its
-            // own BOS would double it.
+            // its own turn markers, and Qwen defines no BOS at all; letting
+            // the tokenizer inject specials would corrupt the prompt.
             let tokens = context.tokenizer.encode(text: prompt, addSpecialTokens: false)
             let input = LMInput(tokens: MLXArray(tokens))
             let stream = try MLXLMCommon.generate(
@@ -102,18 +103,20 @@ nonisolated final class MLXTextEngine: TextGenerating {
         )
     }
 
-    /// Gemma-4 turn format for [system, user] + generation prompt, per the
+    /// ChatML turn format for [system, user] + generation prompt, per the
     /// model repo's chat_template.jinja: system and user content are trimmed,
-    /// each turn is `<|turn>role\n…<turn|>\n`, and with thinking disabled the
-    /// generation prompt pre-fills an empty thought channel so the model
-    /// starts emitting answer content directly. Generation stops on the ids in
-    /// the repo's generation_config.json (includes the end-of-turn token),
-    /// which the model factory loads automatically.
-    static func gemmaPrompt(system: String, user: String) -> String {
+    /// each turn is `<|im_start|>role\n…<|im_end|>\n`, no BOS anywhere (Qwen
+    /// prepends none), and with thinking disabled the generation prompt
+    /// pre-fills an EMPTY `<think>` block so the model starts emitting answer
+    /// content directly. Generation stops on the tokenizer's declared
+    /// end-of-turn token (`<|im_end|>`, tokenizer_config.json's eos_token —
+    /// this repo's generation_config.json carries only sampling params),
+    /// which the model factory resolves automatically.
+    static func chatMLPrompt(system: String, user: String) -> String {
         let sys = system.trimmingCharacters(in: .whitespacesAndNewlines)
         let usr = user.trimmingCharacters(in: .whitespacesAndNewlines)
-        return "<bos><|turn>system\n\(sys)<turn|>\n"
-            + "<|turn>user\n\(usr)<turn|>\n"
-            + "<|turn>model\n<|channel>thought\n<channel|>"
+        return "<|im_start|>system\n\(sys)<|im_end|>\n"
+            + "<|im_start|>user\n\(usr)<|im_end|>\n"
+            + "<|im_start|>assistant\n<think>\n\n</think>\n\n"
     }
 }
