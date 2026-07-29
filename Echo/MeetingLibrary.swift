@@ -11,7 +11,6 @@
 
 import Foundation
 import Observation
-import os
 
 /// What the sidebar has selected. `.live` is the pinned "recording in progress"
 /// row (only present while recording); `.meeting` is a saved meeting.
@@ -29,8 +28,6 @@ enum LibrarySection: Hashable, Sendable {
 @Observable
 @MainActor
 final class MeetingLibrary {
-
-    private static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "MeetingLibrary")
 
     /// A meeting sits in Trash for this long before it is permanently removed.
     static let trashRetention: TimeInterval = 30 * 24 * 60 * 60   // 30 days
@@ -94,7 +91,14 @@ final class MeetingLibrary {
         for meta in all {
             if let trashedAt = meta.trashedAt, trashedAt < cutoff {
                 do { try await store.delete(meta.id) }
-                catch { Self.log.error("Purging expired trash failed: \(error.localizedDescription, privacy: .public)") }
+                catch {
+                    ErrorTrace.record(
+                        "Purging expired trash failed",
+                        error: error,
+                        category: "MeetingLibrary",
+                        metadata: ["meetingID": meta.id.uuidString]
+                    )
+                }
             } else {
                 survivors.append(meta)
             }
@@ -139,7 +143,7 @@ final class MeetingLibrary {
             selection = .meeting(meta.id)
             return meta.id
         } catch {
-            Self.log.error("Saving meeting failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record("Saving meeting failed", error: error, category: "MeetingLibrary")
             return nil
         }
     }
@@ -152,7 +156,12 @@ final class MeetingLibrary {
             try await store.attachSummary(summary, description: description, to: id)
             await refresh()
         } catch {
-            Self.log.error("Attaching summary failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record(
+                "Attaching summary failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
         }
     }
 
@@ -163,7 +172,12 @@ final class MeetingLibrary {
         do {
             return try await store.loadRecord(id)
         } catch {
-            Self.log.error("Loading meeting failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record(
+                "Loading meeting failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
             return nil
         }
     }
@@ -207,7 +221,12 @@ final class MeetingLibrary {
             if selection == .meeting(id) { selection = nil }
             await refresh()
         } catch {
-            Self.log.error("Deleting meeting failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record(
+                "Deleting meeting failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
         }
     }
 
@@ -215,7 +234,14 @@ final class MeetingLibrary {
     func emptyTrash() async {
         for meta in trashedMetas {
             do { try await store.delete(meta.id) }
-            catch { Self.log.error("Emptying trash failed: \(error.localizedDescription, privacy: .public)") }
+            catch {
+                ErrorTrace.record(
+                    "Emptying trash failed",
+                    error: error,
+                    category: "MeetingLibrary",
+                    metadata: ["meetingID": meta.id.uuidString]
+                )
+            }
         }
         if case .meeting(let id)? = selection, trashedMetas.contains(where: { $0.id == id }) {
             selection = nil
@@ -235,7 +261,12 @@ final class MeetingLibrary {
             try await store.updateMeta(meta)
             await refresh()
         } catch {
-            Self.log.error("Updating meeting failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record(
+                "Updating meeting failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": meta.id.uuidString]
+            )
         }
     }
 

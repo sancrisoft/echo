@@ -478,7 +478,7 @@ actor TranscriptionPipeline {
             phase?(.ready)
             await state?.updateStatus("")
         } catch {
-            Self.log.error("Model load failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record("Speech model load failed", error: error, category: "TranscriptionPipeline")
             phase?(.failed(error.localizedDescription))
             await state?.updateStatus("Couldn't load speech model: \(error.localizedDescription)")
         }
@@ -692,7 +692,12 @@ actor TranscriptionPipeline {
             let results = try await whisper.transcribe(audioArray: snapshot.audio, decodeOptions: options)
             segment = partialSegment(from: results, channel: channel, offset: snapshot.offset, stats: snapshot.stats)
         } catch {
-            Self.log.error("\(channel.rawValue, privacy: .public) partial transcribe failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record(
+                "Partial transcribe failed",
+                error: error,
+                category: "TranscriptionPipeline",
+                metadata: ["channel": channel.rawValue]
+            )
             segment = nil
         }
 
@@ -739,7 +744,12 @@ actor TranscriptionPipeline {
             options.language = language
             results = try await whisper.transcribe(audioArray: chunk, decodeOptions: options)
         } catch {
-            Self.log.error("\(channel.rawValue, privacy: .public) transcribe failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record(
+                "Transcribe failed",
+                error: error,
+                category: "TranscriptionPipeline",
+                metadata: ["channel": channel.rawValue]
+            )
             return
         }
         for segment in transcriptSegments(from: results, channel: channel, offset: offset, stats: stats) {
@@ -804,7 +814,12 @@ actor TranscriptionPipeline {
             detectedLanguages[channel] = detection.language
             return detection.language
         } catch {
-            Self.log.error("\(channel.rawValue, privacy: .public) language detection failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record(
+                "Language detection failed",
+                error: error,
+                category: "TranscriptionPipeline",
+                metadata: ["channel": channel.rawValue]
+            )
             return nil
         }
     }

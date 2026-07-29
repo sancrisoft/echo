@@ -116,7 +116,11 @@ final class SystemAudioCapture: AudioCaptureSource {
             self?.handle(inInputData)
         }
         guard procStatus == noErr, let proc else {
-            Self.log.error("CreateIOProcID failed status=\(procStatus, privacy: .public)")
+            ErrorTrace.record(
+                "CreateIOProcID failed",
+                category: "SystemAudioCapture",
+                metadata: ["status": String(procStatus)]
+            )
             throw CaptureError.ioProcFailed(procStatus)
         }
         ioProcID = proc

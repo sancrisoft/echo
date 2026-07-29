@@ -13,13 +13,10 @@
 
 import Foundation
 import Observation
-import os
 
 @Observable
 @MainActor
 final class AppSettings {
-
-    private static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "AppSettings")
 
     /// The on-disk payload. Every field defaults so a missing key (older file,
     /// or none at all) decodes cleanly.
@@ -51,7 +48,7 @@ final class AppSettings {
         do {
             return try JSONDecoder().decode(Stored.self, from: data)
         } catch {
-            log.error("Reading settings failed, using defaults: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record("Reading settings failed, using defaults", error: error, category: "AppSettings")
             return Stored()
         }
     }
@@ -67,7 +64,7 @@ final class AppSettings {
             encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
             try encoder.encode(stored).write(to: fileURL, options: .atomic)
         } catch {
-            Self.log.error("Writing settings failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record("Writing settings failed", error: error, category: "AppSettings")
         }
     }
 }

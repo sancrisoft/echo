@@ -69,7 +69,12 @@ nonisolated enum RetiredModelCleanup {
             } catch {
                 // Non-fatal by design: reclaiming disk is never worth an error
                 // surface. The next launch's run is the retry.
-                log.error("Retired model cleanup failed for \(repoID, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                ErrorTrace.record(
+                    "Retired model cleanup failed",
+                    error: error,
+                    category: "RetiredModelCleanup",
+                    metadata: ["repo": repoID]
+                )
             }
         }
     }

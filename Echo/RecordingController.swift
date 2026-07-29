@@ -567,17 +567,23 @@ final class RecordingController {
                             backfillFailedIDs.insert(meta.id)
                         }
                     } else {
-                        Self.log.error("Summary backfill: empty summary for \(meta.id.uuidString, privacy: .public)")
+                        ErrorTrace.record(
+                            "Summary backfill produced an empty summary",
+                            category: "RecordingController",
+                            metadata: ["meetingID": meta.id.uuidString]
+                        )
                         backfillFailedIDs.insert(meta.id)
                     }
                     return false
                 }
                 if shouldStop { return }
             } catch {
-                Self.log.error("""
-                Summary backfill failed for \(meta.id.uuidString, privacy: .public): \
-                \(error.localizedDescription, privacy: .public)
-                """)
+                ErrorTrace.record(
+                    "Summary backfill failed",
+                    error: error,
+                    category: "RecordingController",
+                    metadata: ["meetingID": meta.id.uuidString]
+                )
                 // A model-level failure would fail every remaining meeting
                 // too; the meeting itself is not at fault, so it stays
                 // eligible for the next trigger.
@@ -1019,9 +1025,7 @@ final class RecordingController {
                 try await self.mic.start()
                 Self.log.info("Mic capture restarted on the new input device")
             } catch {
-                Self.log.error("""
-                Mic restart failed: \(error.localizedDescription, privacy: .public)
-                """)
+                ErrorTrace.record("Mic restart failed", error: error, category: "RecordingController")
                 self.handleInputLifecycleEvent(.micCaptureFailed)
             }
         }

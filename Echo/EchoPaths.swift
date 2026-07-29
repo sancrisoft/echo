@@ -45,6 +45,13 @@ nonisolated enum EchoPaths {
         appSupportDirectory.appending(path: "Meetings", directoryHint: .isDirectory)
     }
 
+    /// ~/Library/Application Support/Echo/Logs — persistent error trace log
+    /// (NDJSON, one file per UTC day). `ErrorTraceLog` owns creation on first
+    /// write and pruning at launch, so this accessor stays side-effect free.
+    static var logsDirectory: URL {
+        appSupportDirectory.appending(path: "Logs", directoryHint: .isDirectory)
+    }
+
     /// ~/Library/Application Support/Echo/settings.json — small persisted UI
     /// state (e.g. whether the privacy banner was dismissed). Lives in the
     /// single data root instead of UserDefaults, per the 2026-07-13 decision.
@@ -99,7 +106,12 @@ nonisolated enum EchoPaths {
                 try fm.moveItem(at: source, to: destination)
                 log.info("Migrated legacy model cache \(repoPath, privacy: .public) into Application Support/Echo/Models")
             } catch {
-                log.error("Legacy cache migration failed for \(repoPath, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                ErrorTrace.record(
+                    "Legacy cache migration failed",
+                    error: error,
+                    category: "EchoPaths",
+                    metadata: ["repo": repoPath]
+                )
             }
         }
     }
