@@ -204,6 +204,25 @@ final class MeetingLibrary {
         await store.deleteRetainedAudio(for: id)
     }
 
+    /// The retained-audio files currently in the meeting's folder (SP-005 S4:
+    /// a launch-resumed pass re-reads them from disk — the audio is the
+    /// checkpoint, ADR-016).
+    func retainedAudioFiles(for id: UUID) async -> [AudioChannel: URL] {
+        await store.retainedAudioFiles(for: id)
+    }
+
+    /// Meetings pending finalization, newest first (retained-audio presence,
+    /// ADR-016) — feeds the launch resume and the backfill's eligibility check.
+    func pendingFinalizationMeetingIDs() async -> [UUID] {
+        await store.pendingFinalizationMeetingIDs()
+    }
+
+    /// Deletes orphaned retention staging from a previous run (disposable by
+    /// design — never adopted, so no meeting references it).
+    func sweepRetentionStaging() async {
+        await store.sweepRetentionStaging()
+    }
+
     // MARK: - Mutations
 
     /// Renames a meeting (user-editable title). Trims whitespace and ignores an

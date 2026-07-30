@@ -223,6 +223,44 @@ actor MeetingStore {
         !retainedAudioFiles(for: id).isEmpty
     }
 
+    /// Meetings still pending finalization, newest first — the launch-resume
+    /// work queue (ADR-016: crash-resume is a directory scan). Classified
+    /// purely by retained-audio presence. Trashed meetings are excluded: the
+    /// user set them aside, and their retention is deleted with the folder
+    /// (a restore surfaces them to the next launch's scan).
+    func pendingFinalizationMeetingIDs() -> [UUID] {
+        listMetas()
+            .filter { !$0.isTrashed && isPendingFinalization($0.id) }
+            .map(\.id)
+    }
+
+    /// Hidden sibling of the meeting folders where a live session stages its
+    /// retention before the meeting persists (SP-005). One source of truth
+    /// for the writer's destination and the launch sweep.
+    nonisolated static let retentionStagingDirectoryName = ".retention-staging"
+
+    nonisolated var retentionStagingDirectory: URL {
+        root.appending(path: Self.retentionStagingDirectoryName, directoryHint: .isDirectory)
+    }
+
+    /// Deletes the whole retention-staging tree — session folders a quit or
+    /// crash orphaned. Staged audio is disposable by design: it was never
+    /// adopted, so no meeting points at it and no pending marker involves it
+    /// (ADR-016). Meeting folders are never touched (the staging root is a
+    /// named target, not a sweep of the meetings tree). A failure is
+    /// non-fatal — logged, retried next launch.
+    func sweepRetentionStaging() {
+        let staging = retentionStagingDirectory
+        guard FileManager.default.fileExists(atPath: staging.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: staging)
+        } catch {
+            Self.log.error("""
+            Retention-staging sweep failed: \(error.localizedDescription, privacy: .public)
+            """)
+        }
+    }
+
     /// Moves staged retention files into the meeting's folder, arming the
     /// pending marker. Runs only after the live transcript persisted (the
     /// floor exists first), so a folder with retained audio always also has
