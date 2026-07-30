@@ -127,8 +127,20 @@ final class RecordingController {
     // Per-session (built in `startEchoHandling`): wraps a fresh engine stage
     // and applies the mode machine's current mode to the audio path.
     private var switchingStage: SwitchingAECStage?
+    // Per-session (built in `start`): retains the session's pipeline-ingested
+    // audio for the post-stop final re-transcription pass (SP-005, ADR-013).
+    // Subordinate to recording: it disables itself on failure and nothing in
+    // the capture path ever awaits its health.
+    private var retainedWriter: RetainedAudioWriter?
     private let summarizer = SummarizationPipeline()
     private let summaryModelManager = SummaryModelManager()
+    /// SP-005 S5 (ADR-015): the optional final-pass model's tier/download/
+    /// completeness lifecycle. Never consulted by recording readiness.
+    private let finalPassModelManager = FinalPassModelManager()
+    /// SP-005 S4 (ADR-014/ADR-016): owns finalization admission — one pass at
+    /// a time, never while recording or during summary work, bounded retries,
+    /// launch-time resume. The UI reads its queue/current state (S6).
+    let finalization = FinalizationCoordinator()
     private var sessionGeneration = 0
     /// Dashboard-facing lifecycle of the summary model (download/load/ready).
     /// Owned here so the UI never talks to the manager actor directly.
@@ -136,6 +148,11 @@ final class RecordingController {
     /// Same for the speech model — fed by the pipeline's phase handler. Starts
     /// as `.loading` because `prepare()` kicks the (cache-first) load at init.
     private(set) var speechModelState: SpeechModelState = .loading
+    /// And for the optional final-pass model (SP-005 S6, story 16) — fed by
+    /// the manager's state handler, which reflects the real tier/disk state
+    /// the moment it is wired in `init`. The dashboard hides the row entirely
+    /// on the `.notNeeded` tier and while nothing needs attention.
+    private(set) var finalPassModelState: FinalPassModelState = .notNeeded(.reuseLive)
 
     /// One-shot request (set by the menu bar's Stop) for the dashboard to open
     /// straight onto the just-stopped meeting, so the streaming summary — and
@@ -193,11 +210,58 @@ final class RecordingController {
             }
         }
 
+        // SP-005 S4: the coordinator's work is injected here (it owns WHEN a
+        // pass runs; the controller owns HOW). `prepareForPass` releases any
+        // idle-warm summary model so it is never resident while a pass
+        // decodes; terminal convergence deletes the pending marker (ADR-016);
+        // a concluded resumed pass kicks the backfill for its summary.
+        finalization.runPass = { [weak self] meetingID, shouldYield in
+            guard let self else { return .failed }
+            return await self.performFinalizationPass(for: meetingID, shouldYield: shouldYield)
+        }
+        finalization.prepareForPass = { [summaryModelManager] in
+            await summaryModelManager.unload()
+        }
+        finalization.convergeTerminally = { [weak self] meetingID in
+            await self?.library.deleteRetainedAudio(for: meetingID)
+        }
+        finalization.onPassConcluded = { [weak self] meetingID in
+            guard let self else { return }
+            // A deferred or launch-resumed pass may just have replaced the
+            // transcript of the meeting whose segments are still the live
+            // in-memory state (a just-stopped meeting whose pass was
+            // preempted): re-read from disk so an open detail — and a later
+            // retrySummary — shows the final transcript (SP-005 S6).
+            self.refreshLiveSegments(for: meetingID)
+            self.kickSummaryBackfill()
+        }
+
         // Warm up the speech model at launch so pressing record is instant,
+        // then resume finalizations a quit or crash interrupted (SP-005 S4 —
+        // the passes themselves queue behind the coordinator's admission),
         // then eagerly fetch the summary model — chained AFTER the speech
         // preload so a fresh install's bandwidth goes to the record-gating
         // speech download first and the two never co-saturate the link (OQ6).
-        Task { await prepare(); await startEagerSummaryDownloadIfNeeded() }
+        // The optional final-pass model (ADR-015) fetches LAST — behind the
+        // record-gating speech download and the summary model — and defers
+        // while a recording is active or a pass is running/pending (ADR-014:
+        // the 947 MB transfer never competes with a pass either). It never
+        // gates recording (ADR-009).
+        Task {
+            // Wire the final-pass model's dashboard row first (cheap): the
+            // handler reflects the manager's current state immediately, so
+            // the row never sits on the placeholder default.
+            await finalPassModelManager.setStateHandler { [weak self] state in
+                Task { @MainActor in self?.finalPassModelState = state }
+            }
+            await prepare()
+            await resumePendingFinalizations()
+            await startEagerSummaryDownloadIfNeeded()
+            await finalPassModelManager.initialize(deferWhile: { @MainActor [weak self] in
+                guard let self else { return false }
+                return self.isRecording || self.finalization.isBusy
+            })
+        }
         // Paint the summary-model control from the on-disk cache state.
         Task { await refreshSummaryModelState() }
         // Catch up on summaries a quit interrupted (or that never ran): scan
@@ -267,7 +331,26 @@ final class RecordingController {
         }
 
         sessionGeneration += 1
+        // Recording preempts all post-meeting model work (ADR-014): a running
+        // pass sees this signal at its next decode-window check and yields;
+        // no new pass or summary sequencing starts until stop. Signalled
+        // before any capture setup so the yield begins immediately, and
+        // always balanced — every path out of a started session goes through
+        // `stop(summarize:)`, which signals the stop.
+        finalization.noteRecordingStarted()
         state.status = "Requesting permissions…"
+
+        // SP-005 (ADR-013): retain this session's ingested audio for the
+        // post-stop final pass. Staged under a hidden sibling of the meeting
+        // folders (same volume, so adoption at stop is a rename) — the
+        // meeting folder itself doesn't exist until the live transcript
+        // persists, and retained audio may only appear there after the floor
+        // does (ADR-016).
+        retainedWriter = RetainedAudioWriter(
+            directory: EchoPaths.meetingsDirectory
+                .appending(path: MeetingStore.retentionStagingDirectoryName, directoryHint: .isDirectory)
+                .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        )
 
         let aecStage = startEchoHandling()
         wireCallbacks(aecStage: aecStage)
@@ -317,14 +400,35 @@ final class RecordingController {
 
     func retrySummary() async {
         guard !state.isRecording else { return }
-        // The segments stay in `state.segments` until the next recording, and
-        // `lastSavedMeetingID` still points at the meeting they were saved as, so
-        // a successful retry attaches to that same meeting.
+        // Ground the retry in the PERSISTED transcript when the meeting saved:
+        // the final pass may have replaced the on-disk segments since the
+        // in-memory ones were captured (SP-005 S6), and a summary must never
+        // be grounded in words the disk no longer holds. A session that never
+        // persisted (no meeting folder) falls back to the in-memory segments,
+        // exactly as before. `lastSavedMeetingID` still points at the meeting,
+        // so a successful retry attaches to that same meeting.
+        var transcript = state.segments
+        if let id = lastSavedMeetingID, let record = await library.loadRecord(id) {
+            transcript = record.segments
+        }
         await generateSummary(
-            from: state.segments,
+            from: transcript,
             sessionGeneration: sessionGeneration,
             meetingID: lastSavedMeetingID
         )
+    }
+
+    /// Reloads `state.segments` from disk when `meetingID` is the meeting the
+    /// live in-memory state still mirrors (SP-005 S6 swap-in). A no-op for any
+    /// other meeting and during a recording — a live session owns its segments
+    /// (`replaceSegments` re-checks after the load's suspension too).
+    private func refreshLiveSegments(for meetingID: UUID) {
+        guard meetingID == lastSavedMeetingID, !state.isRecording else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            guard let record = await self.library.loadRecord(meetingID) else { return }
+            self.state.replaceSegments(record.segments)
+        }
     }
 
     /// Explicit download from the dashboard's model controls (the same download
@@ -515,14 +619,24 @@ final class RecordingController {
             default: break
             }
 
+            // A meeting pending finalization is not summary-eligible (SP-005,
+            // ADR-016): its transcript is about to be replaced, so a summary
+            // now would be grounded in the wrong words. It becomes eligible
+            // when its pass concludes — success OR terminal failure — and the
+            // coordinator kicks this backfill at that moment. Re-read per
+            // iteration: the marker is on-disk state a concluding pass clears.
+            let pending = Set(await library.pendingFinalizationMeetingIDs())
+
             // A user-requested meeting front-runs the newest-first scan;
             // consumed exactly once so the loop then resumes normal order.
             let requested = requestedSummaryID.flatMap { id in
-                library.metas.first { $0.id == id && !$0.hasSummary }
+                library.metas.first { $0.id == id && !$0.hasSummary && !pending.contains(id) }
             }
             requestedSummaryID = nil
             guard let meta = requested
-                ?? library.metas.first(where: { !$0.hasSummary && !backfillFailedIDs.contains($0.id) })
+                ?? library.metas.first(where: {
+                    !$0.hasSummary && !backfillFailedIDs.contains($0.id) && !pending.contains($0.id)
+                })
             else { return }
 
             guard let record = await library.loadRecord(meta.id), !record.segments.isEmpty else {
@@ -634,6 +748,10 @@ final class RecordingController {
     }
 
     private func stop(summarize: Bool) async {
+        // Take the session's retention writer: callbacks hold their own
+        // reference, and the finalization task below owns it from here.
+        let writer = retainedWriter
+        retainedWriter = nil
         // First: no input-device event or in-flight restart may revive the
         // mic once teardown begins.
         await stopInputDeviceHandling()
@@ -651,8 +769,18 @@ final class RecordingController {
         // Capture before `markStopped` clears it — the meeting's real start.
         let startedAt = state.startedAt ?? Date()
         state.markStopped()
+        // The post-stop pipeline (this meeting's pass → its summary) opens
+        // here; deferred passes stay held until it closes (ADR-014). Every
+        // path below balances it with one `notePostStopWorkFinished()`.
+        finalization.noteRecordingStopped()
 
-        guard summarize else { return }
+        guard summarize else {
+            // An aborted session start: nothing persists, so the staged
+            // retention has no meeting to belong to.
+            if let writer { Task { await writer.discard() } }
+            finalization.notePostStopWorkFinished()
+            return
+        }
 
         // Persist BEFORE the summary runs (SPEC-03 criterion 1): a crash in the
         // LLM must never lose the transcript. Empty transcripts are not saved.
@@ -668,7 +796,42 @@ final class RecordingController {
         // `state.summaryState` and the open detail follows it live.
         Task { [weak self] in
             guard let self else { return }
-            await self.generateSummary(from: transcript, sessionGeneration: generation, meetingID: meetingID)
+            // SP-005 post-stop sequence (ADR-014, serial by dependency): the
+            // final pass runs first, on the speech model alone, and only then
+            // may summary work begin — grounded in the final transcript when
+            // the pass succeeded, in the live floor when it terminally
+            // couldn't (ADR-016).
+            var summaryInput = transcript
+            if let meetingID, let writer {
+                switch await self.runFinalizationPass(for: meetingID, writer: writer) {
+                case .replaced(let final):
+                    summaryInput = final
+                    // SP-005 S6 swap-in: an open detail of this just-stopped
+                    // meeting renders the in-memory live segments — surface
+                    // the final set that now exists on disk. Generation-
+                    // guarded: a session that started meanwhile owns
+                    // `state.segments` (and `replaceSegments` re-checks
+                    // `isRecording` itself).
+                    if generation == self.sessionGeneration {
+                        self.state.replaceSegments(final)
+                    }
+                case .floorStands, nil:
+                    break   // the live floor stands — the summary grounds in it
+                case .deferred:
+                    // A new recording preempted the pass: the meeting stays
+                    // pending (backfill-excluded), its pass resumes after
+                    // that recording stops, and the summary follows THAT
+                    // pass's conclusion. This pipeline is done.
+                    self.finalization.notePostStopWorkFinished()
+                    return
+                }
+            } else if let writer {
+                // The meeting never persisted — retention has nothing to
+                // finalize against.
+                await writer.discard()
+            }
+            await self.generateSummary(from: summaryInput, sessionGeneration: generation, meetingID: meetingID)
+            self.finalization.notePostStopWorkFinished()
             // A stop is also a natural catch-up point: the model is warm, and
             // any meeting still missing its summary (one whose backfill was
             // aborted when this session began, or this very meeting if its
@@ -676,6 +839,128 @@ final class RecordingController {
             // relaunch.
             self.kickSummaryBackfill()
         }
+    }
+
+    // MARK: - Final re-transcription pass (SP-005 S1/S4)
+
+    /// The stop path's finalization: stage → adopt (arming the ADR-016
+    /// pending marker) → hand the meeting to the coordinator, which runs the
+    /// pass under the admission rule (ADR-014) with bounded retries
+    /// (ADR-016). Returns the awaited outcome, or `nil` when no pass could be
+    /// armed for this meeting (retention disabled mid-session, nothing
+    /// captured, or adoption failed) — the live transcript stands either way.
+    private func runFinalizationPass(
+        for meetingID: UUID,
+        writer: RetainedAudioWriter
+    ) async -> FinalizationCoordinator.StopOutcome? {
+        let staged = await writer.finish()
+        guard !staged.isEmpty else {
+            // Retention was disabled mid-session (or nothing was captured):
+            // no final pass for this meeting, the live transcript stands.
+            await writer.discard()
+            return nil
+        }
+        guard await library.adoptRetainedAudio(staged, for: meetingID) != nil else {
+            await writer.discard()
+            return nil
+        }
+        // The staged files just moved out; drop the empty staging folder.
+        await writer.discard()
+        return await finalization.finalizeStopped(meetingID)
+    }
+
+    /// One pass attempt — the mechanics the coordinator's `runPass` seam
+    /// invokes (the coordinator owns WHEN; this owns HOW): read the retained
+    /// files (the audio is the checkpoint, so a launch-resumed attempt needs
+    /// nothing else), window-decode on the tiered model, atomically replace
+    /// the transcript, and delete exactly this meeting's retained files on
+    /// success. Any failure leaves the live transcript byte-identical and the
+    /// retained audio in place (the coordinator decides retry vs terminal).
+    private func performFinalizationPass(
+        for meetingID: UUID,
+        shouldYield: @escaping @Sendable () -> Bool
+    ) async -> FinalizationCoordinator.PassResult {
+        let retained = await library.retainedAudioFiles(for: meetingID)
+        guard !retained.isEmpty else {
+            // The pending marker vanished under us (meeting deleted, or a
+            // cleanup raced) — nothing to finalize.
+            Self.log.error("Final pass found no retained audio for \(meetingID.uuidString, privacy: .public)")
+            return .failed
+        }
+        do {
+            let final = try await FinalizationPass.run(
+                retainedFiles: retained,
+                model: TieredFinalPassModelProvider(
+                    manager: finalPassModelManager,
+                    fallback: LivePipelineModelProvider(pipeline: pipeline),
+                    onServed: { [weak self] choice in
+                        // Degraded-pass honesty (SP-005 S6): worth a caption
+                        // only when a full-tier machine fell back to the live
+                        // model — the floor tier reusing it is by design.
+                        let fallback = choice == .liveModel && FinalPassTier.current == .fullLargeV3
+                        Task { @MainActor [weak self] in
+                            self?.finalization.noteServedModel(
+                                isFallbackOnFullTier: fallback,
+                                for: meetingID
+                            )
+                        }
+                    }
+                ),
+                shouldYield: shouldYield,
+                onProgress: { [weak self] fraction in
+                    // The single ADR-007 fraction, hopped to the main actor;
+                    // the coordinator's forward-only guard absorbs any
+                    // out-of-order Task delivery.
+                    Task { @MainActor [weak self] in
+                        self?.finalization.noteProgress(fraction, for: meetingID)
+                    }
+                }
+            )
+            // The live transcript was non-empty (it persisted); a final pass
+            // that decoded nothing is a failed pass, not a better transcript.
+            guard !final.isEmpty else {
+                Self.log.error("Final pass produced no segments — live transcript stands, retained audio kept")
+                return .failed
+            }
+            guard await library.replaceTranscript(final, for: meetingID) else { return .failed }
+            await library.deleteRetainedAudio(for: meetingID)
+            Self.log.info("""
+            Final pass succeeded for meeting \(meetingID.uuidString, privacy: .public): \
+            \(final.count, privacy: .public) segments, retained audio deleted
+            """)
+            return .replaced(final)
+        } catch FinalizationPass.PassError.preempted {
+            Self.log.info("""
+            Final pass deferred for meeting \(meetingID.uuidString, privacy: .public) — \
+            a recording started (resumes after stop)
+            """)
+            return .preempted
+        } catch {
+            Self.log.error("""
+            Final pass failed for meeting \(meetingID.uuidString, privacy: .public) — \
+            live transcript stands, retained audio kept: \
+            \(error.localizedDescription, privacy: .public)
+            """)
+            return .failed
+        }
+    }
+
+    /// SP-005 S4 launch resume (ADR-016: crash-resume is a directory scan):
+    /// sweep staging a previous run orphaned, then enqueue every meeting
+    /// whose folder still holds retained audio, newest first. The coordinator
+    /// runs them one at a time — never while recording, never alongside
+    /// summary work.
+    private func resumePendingFinalizations() async {
+        // A session started before this ran (unlikely — it is chained right
+        // after the model preload): its staging is live, so skip the sweep;
+        // pending meetings still enqueue and simply defer until stop.
+        if !isRecording {
+            await library.sweepRetentionStaging()
+        }
+        let pending = await library.pendingFinalizationMeetingIDs()
+        guard !pending.isEmpty else { return }
+        Self.log.info("Resuming \(pending.count, privacy: .public) pending finalization(s) from retained audio")
+        finalization.requestResume(of: pending)
     }
 
     /// Runs `body` with a summary engine, counting the generation as active LLM
@@ -691,13 +976,25 @@ final class RecordingController {
         progress: @Sendable @escaping (String, Double) -> Void,
         _ body: (any TextGenerating) async throws -> T
     ) async throws -> T {
-        let engine = try await summaryModelManager.acquireEngine(progress: progress)
+        // ADR-014 admission: summary work and a final pass are never resident
+        // together. Waits until no pass is decoding; while held, the
+        // coordinator starts none. Balanced on every exit below.
+        await finalization.beginSummaryWork()
+        let engine: any TextGenerating
+        do {
+            engine = try await summaryModelManager.acquireEngine(progress: progress)
+        } catch {
+            finalization.endSummaryWork()
+            throw error
+        }
         do {
             let result = try await body(engine)
             await summaryModelManager.releaseEngine()
+            finalization.endSummaryWork()
             return result
         } catch {
             await summaryModelManager.releaseEngine()
+            finalization.endSummaryWork()
             throw error
         }
     }
@@ -786,6 +1083,11 @@ final class RecordingController {
         mic.onLevel = { [state] level in
             Task { @MainActor in state.pushInput(level) }
         }
+        // The retention tee (SP-005, ADR-013) mirrors ingest exactly: the
+        // same post-AEC/post-downmix samples and the same declared gaps, in
+        // the same task, so the retained timeline can't diverge from the
+        // live clock. Captured directly — the callbacks never touch `self`.
+        let writer = retainedWriter
         mic.onSamples = { [pipeline] frames in
             // Every batch feeds the gap tracker at arrival; the first one
             // after a mic outage closes the episode and carries the measured
@@ -800,6 +1102,8 @@ final class RecordingController {
             Task {
                 if let gap { await pipeline.noteCaptureGap(seconds: gap, on: .microphone) }
                 await pipeline.ingest(cleaned, from: .microphone)
+                if let gap { await writer?.noteGap(seconds: gap, on: .microphone) }
+                await writer?.append(cleaned, to: .microphone)
             }
         }
         system.onLevel = { [state] level in
@@ -809,7 +1113,10 @@ final class RecordingController {
             // Read-only fan-out (ADR-002): the far end gets a value copy; the
             // Team ingest path below must stay byte-identical to today.
             aecStage.feedFarEnd(frames)
-            Task { await pipeline.ingest(frames, from: .system) }
+            Task {
+                await pipeline.ingest(frames, from: .system)
+                await writer?.append(frames, to: .system)
+            }
         }
     }
 

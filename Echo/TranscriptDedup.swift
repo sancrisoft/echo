@@ -56,6 +56,25 @@ struct EchoDedupPolicy {
         return nil
     }
 
+    /// SP-005: the SAME policy re-run over a complete final segment set (the
+    /// final pass re-segments both channels, so ADR-003's guarantees must be
+    /// re-established on the new boundaries). Every mic segment is checked
+    /// against the batch's whole Team set — which makes batch dedup only ever
+    /// stronger than live: a Team counterpart that live transcribed too late
+    /// to be in the "recent" window at the mic segment's arrival is present
+    /// and matchable here. The opposite risk — a long merged mic segment
+    /// spanning a short Team segment dilutes Jaccard below threshold and the
+    /// bleed survives — is keep-on-doubt working as designed (ADR-003: false
+    /// deletions are strictly worse); the SP-001 echo fixtures re-run through
+    /// the final pass are the real-audio check.
+    ///
+    /// Order-preserving; Team segments always pass (the policy's asymmetry).
+    func dedupe(final segments: [TranscriptSegment]) -> [TranscriptSegment] {
+        let team = segments.filter { $0.channel == .system }
+        guard !team.isEmpty else { return segments }
+        return segments.filter { suppressionMatch(for: $0, against: team) == nil }
+    }
+
     private static func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
         let union = a.union(b)
         guard !union.isEmpty else { return 0 }

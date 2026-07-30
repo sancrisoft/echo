@@ -178,10 +178,16 @@ actor TranscriptionPipeline {
 
     // MARK: - Models
 
-    /// WhisperKit model variant (quantized large-v3 — good accuracy/size balance).
+    /// WhisperKit model variant. Despite the folder id, this checkpoint is
+    /// large-v3-TURBO (the v20240930 4-layer-decoder release), mixed-bit
+    /// quantized to 626 MB — never rename the id, it is the on-disk contract.
     private let modelVariant = "large-v3-v20240930_626MB"
-    /// Human name + size for the models banner.
-    static let modelDisplayName = "Whisper large-v3"
+    /// Human name + size for the models banner. Honest surfaces (SP-005 user
+    /// story 17): the display name says "turbo" because that is what runs —
+    /// plain "large-v3" would claim an accuracy class the live model isn't.
+    /// The full large-v3 exists only as the final-pass model
+    /// (`FinalPassModelManager.modelDisplayName`).
+    static let modelDisplayName = "Whisper large-v3-turbo"
     static let modelDisplaySize = "626 MB"
 
     /// Reports model-lifecycle transitions to the controller for the models
@@ -200,9 +206,13 @@ actor TranscriptionPipeline {
     private var loaded = false
     private var loadTask: Task<Void, Never>?
     private var detectedLanguages: [AudioChannel: String] = [:]
-    private static let allowedTranscriptionLanguages: Set<String> = ["en", "es"]
+    /// Shared with the final pass (SP-005): live and final decodes restrict
+    /// to the same language whitelist.
+    static let allowedTranscriptionLanguages: Set<String> = ["en", "es"]
 
-    private let decodeOptions: DecodingOptions = {
+    /// The live path's decode options — also the final pass's v0 baseline
+    /// (SP-005 S1; later slices diverge on retries/temperature fallback).
+    static let liveDecodeOptions: DecodingOptions = {
         var options = DecodingOptions()
         options.verbose = false
         options.task = .transcribe
@@ -256,7 +266,7 @@ actor TranscriptionPipeline {
         self.gateDiagnostics = gateDiagnostics
     }
 
-    private func speaker(for channel: AudioChannel) -> Speaker {
+    private static func speaker(for channel: AudioChannel) -> Speaker {
         channel == .microphone ? .me : .teammates
     }
 
@@ -327,7 +337,7 @@ actor TranscriptionPipeline {
         let windowStart = sampleCount - windowCount
         let audio = Array(buffer.samples[windowStart..<sampleCount])
         let stats = AudioStats.compute(from: audio)
-        guard shouldTranscribe(stats, from: channel) else { return nil }
+        guard Self.shouldTranscribe(stats, from: channel) else { return nil }
 
         nextPartialRequestID += 1
         let requestID = nextPartialRequestID
@@ -553,6 +563,20 @@ actor TranscriptionPipeline {
         await state?.clearPartials(sessionGeneration: sessionGeneration)
     }
 
+    // MARK: - Final-pass decode seam (SP-005 S1)
+
+    /// Lends the already-loaded live WhisperKit instance to a final-pass
+    /// decode (ADR-015's floor tier: the pass adds no model to memory). The
+    /// narrow seam `LivePipelineModelProvider` is built on — the final pass
+    /// never reaches into the pipeline's buffers, clocks, or session state,
+    /// and nothing here can disturb live behavior.
+    func withModelForFinalPass<T: Sendable>(
+        _ body: @Sendable (WhisperKit) async throws -> T
+    ) async throws -> T {
+        guard loaded, let whisper else { throw FinalizationPass.PassError.modelUnavailable }
+        return try await body(whisper)
+    }
+
     // MARK: - Ingestion
 
     func ingest(_ frames: [Float], from channel: AudioChannel) async {
@@ -687,7 +711,7 @@ actor TranscriptionPipeline {
                 await finishPartial(for: channel, snapshot: snapshot, segment: nil)
                 return
             }
-            var options = decodeOptions
+            var options = Self.liveDecodeOptions
             options.language = language
             let results = try await whisper.transcribe(audioArray: snapshot.audio, decodeOptions: options)
             segment = partialSegment(from: results, channel: channel, offset: snapshot.offset, stats: snapshot.stats)
@@ -740,7 +764,7 @@ actor TranscriptionPipeline {
         let results: [TranscriptionResult]
         do {
             guard let language = await restrictedLanguage(for: chunk, from: channel, using: whisper) else { return }
-            var options = decodeOptions
+            var options = Self.liveDecodeOptions
             options.language = language
             results = try await whisper.transcribe(audioArray: chunk, decodeOptions: options)
         } catch {
@@ -752,7 +776,7 @@ actor TranscriptionPipeline {
             )
             return
         }
-        for segment in transcriptSegments(from: results, channel: channel, offset: offset, stats: stats) {
+        for segment in Self.transcriptSegments(from: results, channel: channel, offset: offset, stats: stats) {
             await state?.append(segment)
         }
     }
@@ -763,19 +787,21 @@ actor TranscriptionPipeline {
         offset: TimeInterval,
         stats: AudioStats
     ) -> TranscriptSegment? {
-        let segments = transcriptSegments(from: results, channel: channel, offset: offset, stats: stats)
+        let segments = Self.transcriptSegments(from: results, channel: channel, offset: offset, stats: stats)
         guard let first = segments.first, let last = segments.last else { return nil }
 
         return TranscriptSegment(
             channel: channel,
-            speaker: speaker(for: channel),
+            speaker: Self.speaker(for: channel),
             text: segments.map(\.text).joined(separator: " "),
             start: first.start,
             end: last.end
         )
     }
 
-    private func transcriptSegments(
+    /// Static (pure) so the final pass (SP-005) assembles and filters its
+    /// segments through exactly the live path's logic.
+    static func transcriptSegments(
         from results: [TranscriptionResult],
         channel: AudioChannel,
         offset: TimeInterval,
@@ -824,7 +850,7 @@ actor TranscriptionPipeline {
         }
     }
 
-    private func cleaned(
+    private static func cleaned(
         _ text: String,
         channel: AudioChannel,
         segment: TranscriptionSegment,
@@ -852,7 +878,7 @@ actor TranscriptionPipeline {
         return value
     }
 
-    private func isLikelyNoiseTranscription(
+    private static func isLikelyNoiseTranscription(
         _ text: String,
         channel: AudioChannel,
         segment: TranscriptionSegment,
@@ -876,7 +902,7 @@ actor TranscriptionPipeline {
         return false
     }
 
-    private func isLikelyWhisperBoilerplate(
+    private static func isLikelyWhisperBoilerplate(
         _ text: String,
         segment: TranscriptionSegment,
         audio: AudioStats
@@ -901,7 +927,7 @@ actor TranscriptionPipeline {
         return short && (!audio.hasClearSpeech || lowConfidence)
     }
 
-    private func normalizedWords(_ text: String) -> [String] {
+    private static func normalizedWords(_ text: String) -> [String] {
         text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
@@ -912,11 +938,11 @@ actor TranscriptionPipeline {
     /// high ambient noise can be loud, but it should not become transcript text.
     /// Delegates to the term-level evaluation in `GateDiagnostics.swift` so the
     /// per-chunk diagnostics (SP-002 US-12) describe this exact decision.
-    private func shouldTranscribe(_ stats: AudioStats, from channel: AudioChannel) -> Bool {
+    private static func shouldTranscribe(_ stats: AudioStats, from channel: AudioChannel) -> Bool {
         GateDecisionRecord.verdict(for: stats, on: channel) == .transcribe
     }
 
-    private func unsupportedLetterRatio(in text: String) -> Double {
+    private static func unsupportedLetterRatio(in text: String) -> Double {
         let allowedLetters = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZáéíóúüñÁÉÍÓÚÜÑ")
         var totalLetters = 0
         var unsupportedLetters = 0

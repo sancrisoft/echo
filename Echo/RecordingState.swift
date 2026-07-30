@@ -216,6 +216,16 @@ final class RecordingState {
         segments.insert(segment, at: index)
     }
 
+    /// SP-005 S6: the final pass atomically replaced the just-stopped
+    /// meeting's persisted transcript while its live segments were still on
+    /// screen — swap in the final set so an open detail (and a later
+    /// `retrySummary`) shows the transcript that actually exists on disk.
+    /// Never during a recording: a live session owns its segments.
+    func replaceSegments(_ finalSegments: [TranscriptSegment]) {
+        guard !isRecording else { return }
+        segments = finalSegments
+    }
+
     func beginPartialSession(_ sessionGeneration: Int) {
         partialSessionGeneration = sessionGeneration
         partialSegments.removeAll()

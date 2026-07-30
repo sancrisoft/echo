@@ -861,7 +861,13 @@ private struct MeetingRow: View {
             .buttonStyle(.plain)
             .help("View transcript")
 
-            StatusPill(meta: meta, isActive: isActive, isBackfilling: isBackfilling, summaryState: summaryState)
+            StatusPill(
+                meta: meta,
+                isActive: isActive,
+                isBackfilling: isBackfilling,
+                summaryState: summaryState,
+                finalization: finalizationStatus
+            )
 
             quickActions
         }
@@ -907,6 +913,21 @@ private struct MeetingRow: View {
         var parts = ["\(date)", "\(minutes) min"]
         if let words = meta.wordCount { parts.append("\(words.formatted()) words") }
         return parts.joined(separator: "  ·  ")
+    }
+
+    /// This meeting's finalizing state for the row pill (SP-005 S6, stories
+    /// 8/15): the running pass shows the honest fraction — unless a recording
+    /// is active, when the pass is yielding and must read as waiting, never
+    /// as a spinner pretending to work.
+    private var finalizationStatus: StatusPill.Finalization? {
+        let finalization = controller.finalization
+        if finalization.currentMeetingID == meta.id {
+            return controller.state.isRecording
+                ? .waiting
+                : .finalizing(finalization.finalizationProgress)
+        }
+        if finalization.queuedMeetingIDs.contains(meta.id) { return .waiting }
+        return nil
     }
 
     private func export(as format: MeetingExportFormat) {
@@ -1051,10 +1072,18 @@ private struct TrashRow: View {
 }
 
 private struct StatusPill: View {
+    /// The row's finalizing state (SP-005 S6): a running pass with its honest
+    /// fraction, or a queued/deferred pass waiting its turn.
+    enum Finalization: Equatable {
+        case finalizing(Double?)
+        case waiting
+    }
+
     let meta: MeetingMeta
     let isActive: Bool
     let isBackfilling: Bool
     let summaryState: SummaryState
+    var finalization: Finalization? = nil
 
     var body: some View {
         let style = style
@@ -1074,6 +1103,18 @@ private struct StatusPill: View {
     }
 
     private var style: (text: String, color: Color, systemImage: String, spins: Bool) {
+        // Finalization first: while a pass runs (or waits) the meeting has no
+        // summary yet, and "Finalizing" is the honest answer to "what is Echo
+        // doing with this meeting right now" (SP-005 S6).
+        switch finalization {
+        case .finalizing(let fraction):
+            let percent = ModelDownloadProgress(fraction: fraction ?? 0).percent
+            return ("Finalizing \(percent)%", .echoIndigo, "clock", true)
+        case .waiting:
+            return ("Waiting to finalize", .secondary, "clock", false)
+        case nil:
+            break
+        }
         if isActive {
             switch summaryState {
             case .generating, .streaming:
@@ -1278,6 +1319,17 @@ private struct ModelStatusBanner: View {
                     name: "Summary · \(SummaryModelManager.modelDisplayName) · \(SummaryModelManager.modelDisplaySize)",
                     purpose: "Writes the meeting notes after each recording"
                 ) { summaryStatus }
+                // The optional final-pass model (SP-005 story 16): a row only
+                // while it is genuinely doing something or honestly failed —
+                // hidden on the tier that never needs it, quiet once ready.
+                if finalPassNeedsAttention {
+                    Divider()
+                    row(
+                        icon: "waveform.badge.magnifyingglass",
+                        name: "Accuracy · \(FinalPassModelManager.modelDisplayName) · \(FinalPassModelManager.modelDisplaySize)",
+                        purpose: "Re-transcribes each meeting after it ends — optional, never blocks recording"
+                    ) { finalPassStatus }
+                }
             }
             .padding(12)
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -1286,13 +1338,46 @@ private struct ModelStatusBanner: View {
         }
     }
 
-    /// Both models ready → the banner disappears entirely.
+    /// Both required models ready and the optional one quiet → the banner
+    /// disappears entirely.
     private var needsAttention: Bool {
+        if finalPassNeedsAttention { return true }
         if case .ready = controller.speechModelState,
            case .ready = controller.summaryModelState {
             return false
         }
         return true
+    }
+
+    /// The final-pass model earns a row only while downloading (honest
+    /// fraction) or failed (honest line). `.notNeeded` (8 GB tier), `.absent`
+    /// (download not started yet), and `.ready` all stay quiet — an optional
+    /// model at rest needs no chrome.
+    private var finalPassNeedsAttention: Bool {
+        switch controller.finalPassModelState {
+        case .downloading, .failed: return true
+        case .notNeeded, .absent, .ready: return false
+        }
+    }
+
+    @ViewBuilder
+    private var finalPassStatus: some View {
+        switch controller.finalPassModelState {
+        case .downloading(let fraction):
+            downloadProgress(fraction)
+        case .failed(let message):
+            // No Retry button: acquisition is once per launch by design (the
+            // manager resumes the transfer on the next launch, skipping the
+            // files already on disk), and recording never depends on it.
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: 280, alignment: .trailing)
+        case .notNeeded, .absent, .ready:
+            EmptyView()
+        }
     }
 
     private func row(
@@ -1536,6 +1621,10 @@ private struct MeetingDetailScreen: View {
         VStack(spacing: 0) {
             DetailTabBar(selection: $selectedTab)
 
+            // SP-005 S6 (stories 8, 9, 14): the meeting's finalization state
+            // as a thin strip — the transcript below stays fully readable.
+            FinalizationNotice(meetingID: finalizationMeetingID)
+
             switch target {
             case .live:
                 LiveMeetingDetail(selectedTab: $selectedTab)
@@ -1552,6 +1641,94 @@ private struct MeetingDetailScreen: View {
         }
         // Escape returns to the list.
         .onExitCommand(perform: onClose)
+    }
+
+    /// The saved meeting this detail is about — for the live target that is
+    /// the just-stopped meeting (nil while recording or before a save, when
+    /// no finalization state can exist for it yet).
+    private var finalizationMeetingID: UUID? {
+        switch target {
+        case .live: return controller.library.activeMeetingID
+        case .saved(let id): return id
+        }
+    }
+}
+
+/// The finalization status strip under the detail's tab bar (SP-005 S6).
+/// Non-blocking by design (story 9): it renders above the transcript, never
+/// over it, and disappears when the meeting has no finalization state.
+///   - Running pass → "Finalizing transcript…" with the real fraction (the
+///     coordinator's single ADR-007 source), plus the degraded-model caption
+///     when a full-tier machine fell back to the live model.
+///   - Queued, or deferred behind an active recording → "Waiting to finalize…".
+///   - Terminal failure this run (ADR-016) → the calm floor notice (story 14).
+private struct FinalizationNotice: View {
+    @Environment(RecordingController.self) private var controller
+    let meetingID: UUID?
+
+    var body: some View {
+        if let meetingID {
+            let finalization = controller.finalization
+            if finalization.currentMeetingID == meetingID, !controller.state.isRecording {
+                let progress = ModelDownloadProgress(fraction: finalization.finalizationProgress ?? 0)
+                strip(tint: .echoIndigo, icon: "wand.and.stars") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Finalizing transcript… \(progress.percent)%")
+                            .font(.callout.weight(.medium))
+                        Text(finalization.currentPassUsesFallbackModel
+                            ? "Re-transcribing with full context, using the standard model for this pass. You can keep reading meanwhile."
+                            : "Re-transcribing the meeting with full context. You can keep reading meanwhile.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 12)
+                    ProgressView(value: progress.fraction)
+                        .frame(width: 140)
+                }
+            } else if isWaiting(meetingID, finalization) {
+                strip(tint: .secondary, icon: "clock") {
+                    Text("Waiting to finalize…")
+                        .font(.callout.weight(.medium))
+                    Text(controller.state.isRecording
+                        ? "The transcript will be finalized after the current recording stops."
+                        : "This meeting's transcript will be finalized shortly.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 12)
+                }
+            } else if finalization.terminalFailureIDs.contains(meetingID) {
+                strip(tint: .orange, icon: "info.circle") {
+                    Text("Transcript finalization didn't complete — showing the live transcript.")
+                        .font(.callout.weight(.medium))
+                    Spacer(minLength: 12)
+                }
+            }
+        }
+    }
+
+    /// Queued behind other work — or the running pass is yielding to an
+    /// active recording (story 15), which must read as waiting, not progress.
+    private func isWaiting(_ id: UUID, _ finalization: FinalizationCoordinator) -> Bool {
+        finalization.queuedMeetingIDs.contains(id)
+            || (finalization.currentMeetingID == id && controller.state.isRecording)
+    }
+
+    private func strip(
+        tint: Color,
+        icon: String,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+            content()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 24)
+        .padding(.top, 10)
     }
 }
 
@@ -1638,9 +1815,7 @@ private struct LiveMeetingDetail: View {
                 ContentUnavailableView(
                     controller.state.isRecording ? "Summary after recording" : "No summary yet",
                     systemImage: "sparkles",
-                    description: Text(controller.state.isRecording
-                        ? "Echo will generate this once the recording stops."
-                        : "Start and stop a recording to generate meeting notes.")
+                    description: Text(idleSummaryDescription)
                 )
                 SummaryModelControl(onRetrySummary: retrySummaryAction)
             }
@@ -1675,6 +1850,21 @@ private struct LiveMeetingDetail: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// Honest idle copy (SP-005 S6): while the just-stopped meeting's final
+    /// pass runs or waits, the summary is deliberately held back — say so
+    /// instead of implying nothing is coming.
+    private var idleSummaryDescription: String {
+        if controller.state.isRecording {
+            return "Echo will generate this once the recording stops."
+        }
+        if let id = controller.library.activeMeetingID,
+           controller.finalization.currentMeetingID == id
+            || controller.finalization.queuedMeetingIDs.contains(id) {
+            return "Echo will generate this once the transcript finishes finalizing."
+        }
+        return "Start and stop a recording to generate meeting notes."
     }
 
     /// Re-runs the just-stopped session's summary — only while its segments
@@ -1856,14 +2046,28 @@ private struct PastMeetingDetail: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        // Keyed on `hasSummary` (the view's `.id(id)` already resets identity
-        // per meeting): when the launch backfill attaches a summary while this
-        // detail is open, the record reloads and the summary appears in place.
-        .task(id: controller.library.meta(for: id)?.hasSummary ?? false) {
+        // Composite reload key (the view's `.id(id)` already resets identity
+        // per meeting): `hasSummary` catches the backfill attaching a summary
+        // while this detail is open; `isFinalizing` flipping back to false
+        // catches this meeting's final pass concluding — the record re-reads
+        // and the final transcript swaps in without reselection (SP-005 S6).
+        .task(id: reloadKey) {
             isLoading = true
             record = await controller.library.loadRecord(id)
             isLoading = false
         }
+    }
+
+    private struct ReloadKey: Equatable {
+        let hasSummary: Bool
+        let isFinalizing: Bool
+    }
+
+    private var reloadKey: ReloadKey {
+        ReloadKey(
+            hasSummary: controller.library.meta(for: id)?.hasSummary ?? false,
+            isFinalizing: controller.finalization.currentMeetingID == id
+        )
     }
 
     @ViewBuilder
