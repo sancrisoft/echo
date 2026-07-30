@@ -168,6 +168,42 @@ final class MeetingLibrary {
         }
     }
 
+    // MARK: - Finalization passthroughs (SP-005 S1)
+
+    /// Moves the session's staged retention files into the meeting folder,
+    /// arming the pending-finalization marker (ADR-016). Returns the adopted
+    /// URLs, or `nil` on failure (logged; the pass is skipped and the live
+    /// transcript stands).
+    func adoptRetainedAudio(_ staged: [AudioChannel: URL], for id: UUID) async -> [AudioChannel: URL]? {
+        do {
+            return try await store.adoptRetainedAudio(staged, for: id)
+        } catch {
+            Self.log.error("Adopting retained audio failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Atomically replaces a meeting's transcript with the final segment set
+    /// (ADR-016) and refreshes the headers so the re-derived counts reach the
+    /// list. Returns whether the replace landed — a failure leaves the live
+    /// transcript byte-identical (logged).
+    func replaceTranscript(_ segments: [TranscriptSegment], for id: UUID) async -> Bool {
+        do {
+            try await store.replaceTranscript(segments, for: id)
+            await refresh()
+            return true
+        } catch {
+            Self.log.error("Replacing transcript failed — live transcript stands: \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    /// Deletes exactly the meeting's retained-audio files (named targets,
+    /// never a sweep). Failures are non-fatal and logged by the store.
+    func deleteRetainedAudio(for id: UUID) async {
+        await store.deleteRetainedAudio(for: id)
+    }
+
     // MARK: - Mutations
 
     /// Renames a meeting (user-editable title). Trims whitespace and ignores an

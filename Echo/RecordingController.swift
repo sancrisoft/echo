@@ -127,6 +127,11 @@ final class RecordingController {
     // Per-session (built in `startEchoHandling`): wraps a fresh engine stage
     // and applies the mode machine's current mode to the audio path.
     private var switchingStage: SwitchingAECStage?
+    // Per-session (built in `start`): retains the session's pipeline-ingested
+    // audio for the post-stop final re-transcription pass (SP-005, ADR-013).
+    // Subordinate to recording: it disables itself on failure and nothing in
+    // the capture path ever awaits its health.
+    private var retainedWriter: RetainedAudioWriter?
     private let summarizer = SummarizationPipeline()
     private let summaryModelManager = SummaryModelManager()
     private var sessionGeneration = 0
@@ -268,6 +273,18 @@ final class RecordingController {
 
         sessionGeneration += 1
         state.status = "Requesting permissions…"
+
+        // SP-005 (ADR-013): retain this session's ingested audio for the
+        // post-stop final pass. Staged under a hidden sibling of the meeting
+        // folders (same volume, so adoption at stop is a rename) — the
+        // meeting folder itself doesn't exist until the live transcript
+        // persists, and retained audio may only appear there after the floor
+        // does (ADR-016).
+        retainedWriter = RetainedAudioWriter(
+            directory: EchoPaths.meetingsDirectory
+                .appending(path: ".retention-staging", directoryHint: .isDirectory)
+                .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        )
 
         let aecStage = startEchoHandling()
         wireCallbacks(aecStage: aecStage)
@@ -628,6 +645,10 @@ final class RecordingController {
     }
 
     private func stop(summarize: Bool) async {
+        // Take the session's retention writer: callbacks hold their own
+        // reference, and the finalization task below owns it from here.
+        let writer = retainedWriter
+        retainedWriter = nil
         // First: no input-device event or in-flight restart may revive the
         // mic once teardown begins.
         await stopInputDeviceHandling()
@@ -646,7 +667,12 @@ final class RecordingController {
         let startedAt = state.startedAt ?? Date()
         state.markStopped()
 
-        guard summarize else { return }
+        guard summarize else {
+            // An aborted session start: nothing persists, so the staged
+            // retention has no meeting to belong to.
+            if let writer { Task { await writer.discard() } }
+            return
+        }
 
         // Persist BEFORE the summary runs (SPEC-03 criterion 1): a crash in the
         // LLM must never lose the transcript. Empty transcripts are not saved.
@@ -662,13 +688,84 @@ final class RecordingController {
         // `state.summaryState` and the open detail follows it live.
         Task { [weak self] in
             guard let self else { return }
-            await self.generateSummary(from: transcript, sessionGeneration: generation, meetingID: meetingID)
+            // SP-005 post-stop sequence (ADR-014, serial by dependency): the
+            // final pass runs first, on the speech model alone, and only then
+            // may summary work begin — grounded in the final transcript when
+            // the pass succeeded, in the live floor when it didn't.
+            var summaryInput = transcript
+            if let meetingID, let writer {
+                if let final = await self.runFinalizationPass(for: meetingID, writer: writer) {
+                    summaryInput = final
+                }
+            } else if let writer {
+                // The meeting never persisted — retention has nothing to
+                // finalize against.
+                await writer.discard()
+            }
+            await self.generateSummary(from: summaryInput, sessionGeneration: generation, meetingID: meetingID)
             // A stop is also a natural catch-up point: the model is warm, and
             // any meeting still missing its summary (one whose backfill was
             // aborted when this session began, or this very meeting if its
             // generation just failed) gets an attempt without waiting for a
             // relaunch.
             self.kickSummaryBackfill()
+        }
+    }
+
+    // MARK: - Final re-transcription pass (SP-005 S1)
+
+    /// Runs the v0 final pass for the just-persisted meeting: stage → adopt
+    /// (arming the ADR-016 pending marker) → window-decode on the live model →
+    /// atomic replace → delete exactly this meeting's retained files. Returns
+    /// the final segments on success so the summary grounds in them; `nil` on
+    /// any failure, which leaves the live transcript byte-identical and keeps
+    /// the retained audio (S4 adds launch-time resume and bounded retries —
+    /// v0 only logs).
+    private func runFinalizationPass(
+        for meetingID: UUID,
+        writer: RetainedAudioWriter
+    ) async -> [TranscriptSegment]? {
+        let staged = await writer.finish()
+        guard !staged.isEmpty else {
+            // Retention was disabled mid-session (or nothing was captured):
+            // no final pass for this meeting, the live transcript stands.
+            await writer.discard()
+            return nil
+        }
+        guard let retained = await library.adoptRetainedAudio(staged, for: meetingID) else {
+            await writer.discard()
+            return nil
+        }
+        // The staged files just moved out; drop the empty staging folder.
+        await writer.discard()
+
+        Self.log.info("Final pass starting for meeting \(meetingID.uuidString, privacy: .public)")
+        do {
+            let final = try await FinalizationPass.run(
+                retainedFiles: retained,
+                model: LivePipelineModelProvider(pipeline: pipeline),
+                shouldYield: { false }   // S4 wires recording preemption here (ADR-014)
+            )
+            // The live transcript was non-empty (it persisted); a final pass
+            // that decoded nothing is a failed pass, not a better transcript.
+            guard !final.isEmpty else {
+                Self.log.error("Final pass produced no segments — live transcript stands, retained audio kept")
+                return nil
+            }
+            guard await library.replaceTranscript(final, for: meetingID) else { return nil }
+            await library.deleteRetainedAudio(for: meetingID)
+            Self.log.info("""
+            Final pass succeeded for meeting \(meetingID.uuidString, privacy: .public): \
+            \(final.count, privacy: .public) segments, retained audio deleted
+            """)
+            return final
+        } catch {
+            Self.log.error("""
+            Final pass failed for meeting \(meetingID.uuidString, privacy: .public) — \
+            live transcript stands, retained audio kept: \
+            \(error.localizedDescription, privacy: .public)
+            """)
+            return nil
         }
     }
 
@@ -780,6 +877,11 @@ final class RecordingController {
         mic.onLevel = { [state] level in
             Task { @MainActor in state.pushInput(level) }
         }
+        // The retention tee (SP-005, ADR-013) mirrors ingest exactly: the
+        // same post-AEC/post-downmix samples and the same declared gaps, in
+        // the same task, so the retained timeline can't diverge from the
+        // live clock. Captured directly — the callbacks never touch `self`.
+        let writer = retainedWriter
         mic.onSamples = { [pipeline] frames in
             // Every batch feeds the gap tracker at arrival; the first one
             // after a mic outage closes the episode and carries the measured
@@ -794,6 +896,8 @@ final class RecordingController {
             Task {
                 if let gap { await pipeline.noteCaptureGap(seconds: gap, on: .microphone) }
                 await pipeline.ingest(cleaned, from: .microphone)
+                if let gap { await writer?.noteGap(seconds: gap, on: .microphone) }
+                await writer?.append(cleaned, to: .microphone)
             }
         }
         system.onLevel = { [state] level in
@@ -803,7 +907,10 @@ final class RecordingController {
             // Read-only fan-out (ADR-002): the far end gets a value copy; the
             // Team ingest path below must stay byte-identical to today.
             aecStage.feedFarEnd(frames)
-            Task { await pipeline.ingest(frames, from: .system) }
+            Task {
+                await pipeline.ingest(frames, from: .system)
+                await writer?.append(frames, to: .system)
+            }
         }
     }
 

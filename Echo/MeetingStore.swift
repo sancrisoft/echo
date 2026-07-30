@@ -166,6 +166,107 @@ actor MeetingStore {
         try FileManager.default.removeItem(at: directory)
     }
 
+    // MARK: - Final-pass transcript replacement (SP-005, ADR-016)
+
+    /// Atomically replaces a meeting's transcript with the complete final
+    /// segment set and re-derives the meta fields that describe it (segment
+    /// and word counts). Transcript first, meta after — mirroring `save`'s
+    /// meta-last discipline, so the stale-meta window is display-only. Every
+    /// write is the store's temp-file-plus-rename (`writeJSON`), so any
+    /// failure leaves the live transcript byte-identical (the floor stands).
+    func replaceTranscript(_ segments: [TranscriptSegment], for id: UUID) throws {
+        let directory = directory(for: id)
+        let metaURL = directory.appending(path: Filename.meta)
+        // Load the meta up front: a missing/corrupt meeting fails here,
+        // before the transcript is touched.
+        var meta = try decode(MeetingMeta.self, from: metaURL)
+
+        try writeJSON(segments, to: directory.appending(path: Filename.transcript))
+
+        meta.segmentCount = segments.count
+        meta.wordCount = MeetingMeta.wordCount(of: segments)
+        try writeJSON(meta, to: metaURL)
+    }
+
+    // MARK: - Retained audio (SP-005, ADR-013/ADR-016)
+
+    /// Canonical name of a channel's retained-audio file inside its meeting
+    /// folder. One source of truth for the retention writer, the pending
+    /// query, and the cleanup targets.
+    nonisolated static func retainedAudioFileName(for channel: AudioChannel) -> String {
+        switch channel {
+        case .microphone: return "retained-mic.m4a"
+        case .system: return "retained-system.m4a"
+        }
+    }
+
+    /// The retained-audio files currently present in a meeting's folder.
+    func retainedAudioFiles(for id: UUID) -> [AudioChannel: URL] {
+        let directory = directory(for: id)
+        var files: [AudioChannel: URL] = [:]
+        for channel in [AudioChannel.microphone, .system] {
+            let url = directory.appending(
+                path: Self.retainedAudioFileName(for: channel),
+                directoryHint: .notDirectory
+            )
+            if FileManager.default.fileExists(atPath: url.path) {
+                files[channel] = url
+            }
+        }
+        return files
+    }
+
+    /// ADR-016: presence of retained audio in the meeting folder IS the
+    /// pending-finalization marker — no separate state file or meta flag
+    /// to desync from what is actually on disk.
+    func isPendingFinalization(_ id: UUID) -> Bool {
+        !retainedAudioFiles(for: id).isEmpty
+    }
+
+    /// Moves staged retention files into the meeting's folder, arming the
+    /// pending marker. Runs only after the live transcript persisted (the
+    /// floor exists first), so a folder with retained audio always also has
+    /// a transcript to fall back on. All-or-nothing: a failure undoes any
+    /// file already moved in — a partial channel set must never read as
+    /// pending, or a resumed pass would finalize half a meeting.
+    func adoptRetainedAudio(_ staged: [AudioChannel: URL], for id: UUID) throws -> [AudioChannel: URL] {
+        let directory = directory(for: id)
+        var adopted: [AudioChannel: URL] = [:]
+        do {
+            for (channel, source) in staged {
+                let destination = directory.appending(
+                    path: Self.retainedAudioFileName(for: channel),
+                    directoryHint: .notDirectory
+                )
+                try FileManager.default.moveItem(at: source, to: destination)
+                adopted[channel] = destination
+            }
+        } catch {
+            for url in adopted.values {
+                try? FileManager.default.removeItem(at: url)
+            }
+            throw error
+        }
+        return adopted
+    }
+
+    /// Deletes exactly this meeting's retained-audio files — named targets,
+    /// never a directory sweep (SP-005 NFR Reliability): sibling files and
+    /// sidecars are untouched. A per-file failure is non-fatal (logged; a
+    /// later pass or launch retries the cleanup).
+    func deleteRetainedAudio(for id: UUID) {
+        for url in retainedAudioFiles(for: id).values {
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                Self.log.error("""
+                Retained-audio cleanup failed for \(url.lastPathComponent, privacy: .public): \
+                \(error.localizedDescription, privacy: .public)
+                """)
+            }
+        }
+    }
+
     // MARK: - JSON helpers
 
     /// Atomic write (temp file in the same folder + rename): a crash or a
