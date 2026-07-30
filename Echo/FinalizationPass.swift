@@ -95,6 +95,66 @@ nonisolated enum FinalPassWindowPlan {
     }
 }
 
+/// The finalizing UI's single progress source (SP-005 S6, ADR-007): decoded
+/// audio time over the total retained duration across both channels — never a
+/// second independently-maintained number. Positions are absolute sample
+/// offsets on each channel's retained timeline, so silent regions the speech
+/// selector skipped count as instantly decoded the moment a window lands past
+/// them; `finishChannel` accounts for trailing silence after the last speech
+/// region. The fraction is monotonic, in [0, 1], and reaches exactly 1.0 when
+/// every channel is fully accounted for. Pure value — table-tested without
+/// audio (SP-005 Testing Decisions, layer 1).
+nonisolated struct FinalPassProgress: Sendable {
+
+    private let totals: [Double]
+    private var positions: [Double]
+    private var reported: Double
+
+    /// One entry per channel: that channel's total retained samples. No
+    /// retained audio at all means nothing to decode — complete immediately,
+    /// so the fraction still ends at 1.0.
+    init(channelTotalSamples: [Int]) {
+        totals = channelTotalSamples.map { Double(max(0, $0)) }
+        positions = Array(repeating: 0, count: totals.count)
+        reported = totals.reduce(0, +) > 0 ? 0 : 1
+    }
+
+    /// The fraction the UI shows — monotonic, never past 1.
+    var fraction: Double { reported }
+
+    /// A decode window on `channel` finished, covering the channel's timeline
+    /// through `samplePosition` (the window's absolute upper bound).
+    /// Everything before it — including skipped silent regions — counts as
+    /// decoded. Backward positions and out-of-range channels are ignored, so
+    /// the fraction can never regress.
+    @discardableResult
+    mutating func advance(channel: Int, decodedThrough samplePosition: Int) -> Double {
+        guard positions.indices.contains(channel) else { return reported }
+        positions[channel] = min(max(positions[channel], Double(samplePosition)), totals[channel])
+        return recompute()
+    }
+
+    /// `channel`'s window loop completed: any trailing silence after its last
+    /// speech region counts as decoded, so the channel contributes its full
+    /// share and the overall fraction ends at exactly 1.0.
+    @discardableResult
+    mutating func finishChannel(_ channel: Int) -> Double {
+        guard positions.indices.contains(channel) else { return reported }
+        positions[channel] = totals[channel]
+        return recompute()
+    }
+
+    private mutating func recompute() -> Double {
+        let total = totals.reduce(0, +)
+        guard total > 0 else {
+            reported = 1
+            return reported
+        }
+        reported = max(reported, min(1, positions.reduce(0, +) / total))
+        return reported
+    }
+}
+
 /// Prior-text chaining state for one channel (SP-005 S3): the rolling token
 /// tail of what decoded so far, handed to the next window as
 /// `DecodingOptions.promptTokens`. Pure value — table-tested without a model.
@@ -275,22 +335,42 @@ nonisolated enum FinalizationPass {
     /// Re-transcribes every retained channel and returns the complete final
     /// segment set, timeline-ordered, ready for the atomic replace. Throws on
     /// any failure — the caller leaves the live transcript standing and keeps
-    /// the retained audio (ADR-016).
+    /// the retained audio (ADR-016). `onProgress` receives the single ADR-007
+    /// fraction (monotonic, ends at 1.0 on a completed decode) after every
+    /// decode window; a pass that fails or defers simply stops reporting.
     static func run(
         retainedFiles: [AudioChannel: URL],
         model: some FinalPassModelProviding,
-        shouldYield: @Sendable () -> Bool = { false }
+        shouldYield: @Sendable () -> Bool = { false },
+        onProgress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> [TranscriptSegment] {
-        var segments: [TranscriptSegment] = []
         // Deterministic channel order; the sort below owns the timeline.
-        for channel in [AudioChannel.microphone, .system] {
-            guard let url = retainedFiles[channel] else { continue }
+        let channels = [AudioChannel.microphone, .system].compactMap { channel in
+            retainedFiles[channel].map { (channel: channel, url: $0) }
+        }
+        // One accumulator over both channels' retained durations drives every
+        // fraction the UI sees (ADR-007 — no second counter). Totals come
+        // from the files' own lengths; a file this header read can't open
+        // reads 0 here and throws honestly in `transcribeChannel` below.
+        var progress = FinalPassProgress(channelTotalSamples: channels.map {
+            (try? AVAudioFile(forReading: $0.url)).map { Int($0.length) } ?? 0
+        })
+        onProgress(progress.fraction)
+
+        var segments: [TranscriptSegment] = []
+        for (index, entry) in channels.enumerated() {
             segments += try await transcribeChannel(
-                url: url,
-                channel: channel,
+                url: entry.url,
+                channel: entry.channel,
                 model: model,
-                shouldYield: shouldYield
+                shouldYield: shouldYield,
+                onWindowDecoded: { decodedThrough in
+                    onProgress(progress.advance(channel: index, decodedThrough: decodedThrough))
+                }
             )
+            // Trailing silence after the channel's last speech region counts
+            // as instantly decoded — the channel contributes its full share.
+            onProgress(progress.finishChannel(index))
         }
         let ordered = segments.sorted { $0.start < $1.start }
         // ADR-003 re-applied over the complete final set (SP-005): the batch
@@ -306,7 +386,8 @@ nonisolated enum FinalizationPass {
         url: URL,
         channel: AudioChannel,
         model: some FinalPassModelProviding,
-        shouldYield: @Sendable () -> Bool
+        shouldYield: @Sendable () -> Bool,
+        onWindowDecoded: (Int) -> Void = { _ in }
     ) async throws -> [TranscriptSegment] {
         let file: AVAudioFile
         do {
@@ -400,6 +481,10 @@ nonisolated enum FinalizationPass {
                 clamped.end = min(segment.end, windowEnd)
                 return clamped
             }
+
+            // The channel's timeline is decoded through this window's end —
+            // silence skipped before it included (SP-005 S6, ADR-007).
+            onWindowDecoded(window.upperBound)
         }
         return segments
     }

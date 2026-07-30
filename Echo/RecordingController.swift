@@ -148,6 +148,11 @@ final class RecordingController {
     /// Same for the speech model — fed by the pipeline's phase handler. Starts
     /// as `.loading` because `prepare()` kicks the (cache-first) load at init.
     private(set) var speechModelState: SpeechModelState = .loading
+    /// And for the optional final-pass model (SP-005 S6, story 16) — fed by
+    /// the manager's state handler, which reflects the real tier/disk state
+    /// the moment it is wired in `init`. The dashboard hides the row entirely
+    /// on the `.notNeeded` tier and while nothing needs attention.
+    private(set) var finalPassModelState: FinalPassModelState = .notNeeded(.reuseLive)
 
     /// One-shot request (set by the menu bar's Stop) for the dashboard to open
     /// straight onto the just-stopped meeting, so the streaming summary — and
@@ -220,8 +225,15 @@ final class RecordingController {
         finalization.convergeTerminally = { [weak self] meetingID in
             await self?.library.deleteRetainedAudio(for: meetingID)
         }
-        finalization.onPassConcluded = { [weak self] _ in
-            self?.kickSummaryBackfill()
+        finalization.onPassConcluded = { [weak self] meetingID in
+            guard let self else { return }
+            // A deferred or launch-resumed pass may just have replaced the
+            // transcript of the meeting whose segments are still the live
+            // in-memory state (a just-stopped meeting whose pass was
+            // preempted): re-read from disk so an open detail — and a later
+            // retrySummary — shows the final transcript (SP-005 S6).
+            self.refreshLiveSegments(for: meetingID)
+            self.kickSummaryBackfill()
         }
 
         // Warm up the speech model at launch so pressing record is instant,
@@ -236,6 +248,12 @@ final class RecordingController {
         // the 947 MB transfer never competes with a pass either). It never
         // gates recording (ADR-009).
         Task {
+            // Wire the final-pass model's dashboard row first (cheap): the
+            // handler reflects the manager's current state immediately, so
+            // the row never sits on the placeholder default.
+            await finalPassModelManager.setStateHandler { [weak self] state in
+                Task { @MainActor in self?.finalPassModelState = state }
+            }
             await prepare()
             await resumePendingFinalizations()
             await startEagerSummaryDownloadIfNeeded()
@@ -382,14 +400,35 @@ final class RecordingController {
 
     func retrySummary() async {
         guard !state.isRecording else { return }
-        // The segments stay in `state.segments` until the next recording, and
-        // `lastSavedMeetingID` still points at the meeting they were saved as, so
-        // a successful retry attaches to that same meeting.
+        // Ground the retry in the PERSISTED transcript when the meeting saved:
+        // the final pass may have replaced the on-disk segments since the
+        // in-memory ones were captured (SP-005 S6), and a summary must never
+        // be grounded in words the disk no longer holds. A session that never
+        // persisted (no meeting folder) falls back to the in-memory segments,
+        // exactly as before. `lastSavedMeetingID` still points at the meeting,
+        // so a successful retry attaches to that same meeting.
+        var transcript = state.segments
+        if let id = lastSavedMeetingID, let record = await library.loadRecord(id) {
+            transcript = record.segments
+        }
         await generateSummary(
-            from: state.segments,
+            from: transcript,
             sessionGeneration: sessionGeneration,
             meetingID: lastSavedMeetingID
         )
+    }
+
+    /// Reloads `state.segments` from disk when `meetingID` is the meeting the
+    /// live in-memory state still mirrors (SP-005 S6 swap-in). A no-op for any
+    /// other meeting and during a recording — a live session owns its segments
+    /// (`replaceSegments` re-checks after the load's suspension too).
+    private func refreshLiveSegments(for meetingID: UUID) {
+        guard meetingID == lastSavedMeetingID, !state.isRecording else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            guard let record = await self.library.loadRecord(meetingID) else { return }
+            self.state.replaceSegments(record.segments)
+        }
     }
 
     /// Explicit download from the dashboard's model controls (the same download
@@ -761,6 +800,15 @@ final class RecordingController {
                 switch await self.runFinalizationPass(for: meetingID, writer: writer) {
                 case .replaced(let final):
                     summaryInput = final
+                    // SP-005 S6 swap-in: an open detail of this just-stopped
+                    // meeting renders the in-memory live segments — surface
+                    // the final set that now exists on disk. Generation-
+                    // guarded: a session that started meanwhile owns
+                    // `state.segments` (and `replaceSegments` re-checks
+                    // `isRecording` itself).
+                    if generation == self.sessionGeneration {
+                        self.state.replaceSegments(final)
+                    }
                 case .floorStands, nil:
                     break   // the live floor stands — the summary grounds in it
                 case .deferred:
@@ -838,9 +886,29 @@ final class RecordingController {
                 retainedFiles: retained,
                 model: TieredFinalPassModelProvider(
                     manager: finalPassModelManager,
-                    fallback: LivePipelineModelProvider(pipeline: pipeline)
+                    fallback: LivePipelineModelProvider(pipeline: pipeline),
+                    onServed: { [weak self] choice in
+                        // Degraded-pass honesty (SP-005 S6): worth a caption
+                        // only when a full-tier machine fell back to the live
+                        // model — the floor tier reusing it is by design.
+                        let fallback = choice == .liveModel && FinalPassTier.current == .fullLargeV3
+                        Task { @MainActor [weak self] in
+                            self?.finalization.noteServedModel(
+                                isFallbackOnFullTier: fallback,
+                                for: meetingID
+                            )
+                        }
+                    }
                 ),
-                shouldYield: shouldYield
+                shouldYield: shouldYield,
+                onProgress: { [weak self] fraction in
+                    // The single ADR-007 fraction, hopped to the main actor;
+                    // the coordinator's forward-only guard absorbs any
+                    // out-of-order Task delivery.
+                    Task { @MainActor [weak self] in
+                        self?.finalization.noteProgress(fraction, for: meetingID)
+                    }
+                }
             )
             // The live transcript was non-empty (it persisted); a final pass
             // that decoded nothing is a failed pass, not a better transcript.

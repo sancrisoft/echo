@@ -178,10 +178,16 @@ actor TranscriptionPipeline {
 
     // MARK: - Models
 
-    /// WhisperKit model variant (quantized large-v3 — good accuracy/size balance).
+    /// WhisperKit model variant. Despite the folder id, this checkpoint is
+    /// large-v3-TURBO (the v20240930 4-layer-decoder release), mixed-bit
+    /// quantized to 626 MB — never rename the id, it is the on-disk contract.
     private let modelVariant = "large-v3-v20240930_626MB"
-    /// Human name + size for the models banner.
-    static let modelDisplayName = "Whisper large-v3"
+    /// Human name + size for the models banner. Honest surfaces (SP-005 user
+    /// story 17): the display name says "turbo" because that is what runs —
+    /// plain "large-v3" would claim an accuracy class the live model isn't.
+    /// The full large-v3 exists only as the final-pass model
+    /// (`FinalPassModelManager.modelDisplayName`).
+    static let modelDisplayName = "Whisper large-v3-turbo"
     static let modelDisplaySize = "626 MB"
 
     /// Reports model-lifecycle transitions to the controller for the models

@@ -291,6 +291,24 @@ final class FinalizationCoordinator {
     private(set) var queuedMeetingIDs: [UUID] = []
     private(set) var terminalFailureIDs: Set<UUID> = []
 
+    /// Real progress of the running pass (SP-005 S6): the single ADR-007
+    /// fraction the pass's accumulator reports — decoded audio time over the
+    /// total retained duration. `nil` while no pass is decoding; resets to 0
+    /// when a (new or retried) pass starts.
+    private(set) var finalizationProgress: Double?
+    /// True while the running pass is served by the live (standard) model on
+    /// a machine whose tier wanted the full large-v3 — drives the honest
+    /// degraded caption (a caption, not a state machine).
+    private(set) var currentPassUsesFallbackModel = false
+    /// Which pass the published progress/caption belong to. Attempt included
+    /// so a same-meeting retry starts its bar fresh instead of appearing
+    /// stuck under the forward-only guard.
+    private struct PassKey: Equatable {
+        let meetingID: UUID
+        let attempt: Int
+    }
+    private var publishedPassKey: PassKey?
+
     var isBusy: Bool { machine.isBusy }
 
     // MARK: Recording lifecycle signals
@@ -349,6 +367,26 @@ final class FinalizationCoordinator {
 
     func endSummaryWork() {
         apply(machine.handle(.summaryEnded))
+    }
+
+    // MARK: Pass telemetry (SP-005 S6)
+
+    /// Forwarded (via a main-actor hop) from the running pass's progress
+    /// accumulator. Guarded to the running meeting and forward-only, so a
+    /// stale Task-hop straggler can neither rewind the bar nor paint another
+    /// meeting's pass (the ADR-007 discipline every progress surface uses).
+    func noteProgress(_ fraction: Double, for meetingID: UUID) {
+        guard meetingID == currentMeetingID else { return }
+        guard fraction > (finalizationProgress ?? -1) else { return }
+        finalizationProgress = min(fraction, 1)
+    }
+
+    /// The tiered provider reported which model is serving the running pass.
+    /// `isFallbackOnFullTier` is true only when a `.fullLargeV3`-tier machine
+    /// fell back to the live model — the case worth a caption.
+    func noteServedModel(isFallbackOnFullTier: Bool, for meetingID: UUID) {
+        guard meetingID == currentMeetingID else { return }
+        currentPassUsesFallbackModel = isFallbackOnFullTier
     }
 
     // MARK: Machine driving
@@ -446,6 +484,17 @@ final class FinalizationCoordinator {
     }
 
     private func publishMachineState() {
+        // A different pass attempt (or none) is decoding now: its progress
+        // and served-model caption start fresh — 0 for a starting pass, nil
+        // while nothing decodes.
+        let key = machine.runningMeetingID.map {
+            PassKey(meetingID: $0, attempt: machine.runningAttempt)
+        }
+        if key != publishedPassKey {
+            publishedPassKey = key
+            finalizationProgress = key == nil ? nil : 0
+            currentPassUsesFallbackModel = false
+        }
         currentMeetingID = machine.runningMeetingID
         queuedMeetingIDs = machine.queue
         terminalFailureIDs = machine.terminalMeetingIDs
