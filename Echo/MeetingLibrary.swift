@@ -192,7 +192,12 @@ final class MeetingLibrary {
         do {
             return try await store.adoptRetainedAudio(staged, for: id)
         } catch {
-            Self.log.error("Adopting retained audio failed: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record(
+                "Adopting retained audio failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
             return nil
         }
     }
@@ -207,7 +212,12 @@ final class MeetingLibrary {
             await refresh()
             return true
         } catch {
-            Self.log.error("Replacing transcript failed — live transcript stands: \(error.localizedDescription, privacy: .public)")
+            ErrorTrace.record(
+                "Replacing transcript failed — live transcript stands",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
             return false
         }
     }

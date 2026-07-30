@@ -254,9 +254,11 @@ actor MeetingStore {
         do {
             try FileManager.default.removeItem(at: staging)
         } catch {
-            Self.log.error("""
-            Retention-staging sweep failed: \(error.localizedDescription, privacy: .public)
-            """)
+            ErrorTrace.record(
+                "Retention-staging sweep failed",
+                error: error,
+                category: "MeetingStore"
+            )
         }
     }
 
@@ -296,10 +298,15 @@ actor MeetingStore {
             do {
                 try FileManager.default.removeItem(at: url)
             } catch {
-                Self.log.error("""
-                Retained-audio cleanup failed for \(url.lastPathComponent, privacy: .public): \
-                \(error.localizedDescription, privacy: .public)
-                """)
+                ErrorTrace.record(
+                    "Retained-audio cleanup failed",
+                    error: error,
+                    category: "MeetingStore",
+                    metadata: [
+                        "meetingID": id.uuidString,
+                        "file": url.lastPathComponent,
+                    ]
+                )
             }
         }
     }
