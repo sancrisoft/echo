@@ -134,6 +134,9 @@ final class RecordingController {
     private var retainedWriter: RetainedAudioWriter?
     private let summarizer = SummarizationPipeline()
     private let summaryModelManager = SummaryModelManager()
+    /// SP-005 S5 (ADR-015): the optional final-pass model's tier/download/
+    /// completeness lifecycle. Never consulted by recording readiness.
+    private let finalPassModelManager = FinalPassModelManager()
     private var sessionGeneration = 0
     /// Dashboard-facing lifecycle of the summary model (download/load/ready).
     /// Owned here so the UI never talks to the manager actor directly.
@@ -202,7 +205,10 @@ final class RecordingController {
         // then eagerly fetch the summary model — chained AFTER the speech
         // preload so a fresh install's bandwidth goes to the record-gating
         // speech download first and the two never co-saturate the link (OQ6).
-        Task { await prepare(); await startEagerSummaryDownloadIfNeeded() }
+        // The optional final-pass model (ADR-015) fetches LAST — behind the
+        // record-gating speech download and the summary model — and defers
+        // while a recording is active. It never gates recording (ADR-009).
+        Task { await prepare(); await startEagerSummaryDownloadIfNeeded(); await finalPassModelManager.initialize(deferWhile: { @MainActor [weak self] in self?.isRecording ?? false }) }
         // Paint the summary-model control from the on-disk cache state.
         Task { await refreshSummaryModelState() }
         // Catch up on summaries a quit interrupted (or that never ran): scan
@@ -743,7 +749,10 @@ final class RecordingController {
         do {
             let final = try await FinalizationPass.run(
                 retainedFiles: retained,
-                model: LivePipelineModelProvider(pipeline: pipeline),
+                model: TieredFinalPassModelProvider(
+                    manager: finalPassModelManager,
+                    fallback: LivePipelineModelProvider(pipeline: pipeline)
+                ),
                 shouldYield: { false }   // S4 wires recording preemption here (ADR-014)
             )
             // The live transcript was non-empty (it persisted); a final pass
