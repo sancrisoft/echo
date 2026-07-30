@@ -67,6 +67,11 @@ struct MenuBarView: View {
             appGlyph
             Text("Echo")
                 .font(.system(size: 17, weight: .bold))
+            // So internal testers can see at a glance which build they run.
+            Text(AppVersion.display)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 3)
             Spacer()
             Button(action: openDashboard) {
                 Image(systemName: "gearshape")
