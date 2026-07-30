@@ -414,6 +414,10 @@ private struct LibrarySidebar: View {
                     .foregroundStyle(.tertiary)
             }
             Spacer()
+            // So internal testers can see at a glance which build they run.
+            Text(AppVersion.display)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 10)
