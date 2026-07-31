@@ -237,6 +237,10 @@ struct MenuBarView: View {
         // Force it front on the next run-loop tick, once SwiftUI has created or
         // surfaced the scene, so the CTA always lands the user on the dashboard.
         DispatchQueue.main.async {
+            // Promote to a Dock/Cmd-Tab app before fronting: the notification
+            // hook only fires once the window becomes key, and re-ordering
+            // after a policy switch is what keeps it in front.
+            EchoAppDelegate.sync()
             NSApp.activate(ignoringOtherApps: true)
             NSApp.windows
                 .first { $0.identifier?.rawValue == EchoWindow.dashboard }?
