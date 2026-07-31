@@ -13,6 +13,10 @@ enum EchoWindow {
 
 @main
 struct EchoApp: App {
+    /// Owns the Dock/Cmd-Tab visibility of the agent app: `.regular` while the
+    /// dashboard is on screen, `.accessory` otherwise (see `ActivationPolicy`).
+    @NSApplicationDelegateAdaptor(EchoAppDelegate.self) private var appDelegate
+
     init() {
         // Reclaim the retired summary model's snapshot (ADR-011): every
         // launch, scoped to exactly the retired repo directories, non-fatal,
@@ -49,9 +53,11 @@ struct EchoApp: App {
     }
 
     var body: some Scene {
-        // Lives in the menu bar. Because the app is an LSUIElement agent, this
-        // keeps Echo running when the dashboard window is closed or minimized
-        // (only Force Quit terminates it).
+        // Lives in the menu bar. Because the app launches as an LSUIElement
+        // agent, this keeps Echo running when the dashboard window is closed or
+        // minimized (only Force Quit terminates it). While the dashboard *is*
+        // open the policy is promoted to `.regular` so the app is reachable
+        // from Cmd-Tab and the Dock — see `EchoAppDelegate`.
         MenuBarExtra {
             MenuBarView()
                 .environment(controller)
