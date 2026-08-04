@@ -149,11 +149,17 @@ final class MeetingLibrary {
     }
 
     /// Attaches a finished summary (and its AI one-line caption) to an
-    /// already-saved meeting (SPEC-03 criterion 2). A failure leaves the meeting
-    /// saved without a summary.
-    func attachSummary(_ summary: MeetingSummary, description: String? = nil, to id: UUID) async {
+    /// already-saved meeting (SPEC-03 criterion 2), recording which summary
+    /// model wrote it (SP-007, ADR-022). A failure leaves the meeting saved
+    /// without a summary.
+    func attachSummary(
+        _ summary: MeetingSummary,
+        description: String? = nil,
+        modelName: String? = nil,
+        to id: UUID
+    ) async {
         do {
-            try await store.attachSummary(summary, description: description, to: id)
+            try await store.attachSummary(summary, description: description, modelName: modelName, to: id)
             await refresh()
         } catch {
             ErrorTrace.record(
@@ -203,12 +209,17 @@ final class MeetingLibrary {
     }
 
     /// Atomically replaces a meeting's transcript with the final segment set
-    /// (ADR-016) and refreshes the headers so the re-derived counts reach the
-    /// list. Returns whether the replace landed — a failure leaves the live
-    /// transcript byte-identical (logged).
-    func replaceTranscript(_ segments: [TranscriptSegment], for id: UUID) async -> Bool {
+    /// (ADR-016), recording its provenance in the same meta re-derivation step
+    /// (SP-007, ADR-022), and refreshes the headers so the re-derived counts
+    /// reach the list. Returns whether the replace landed — a failure leaves
+    /// the live transcript byte-identical (logged).
+    func replaceTranscript(
+        _ segments: [TranscriptSegment],
+        provenance: TranscriptProvenance,
+        for id: UUID
+    ) async -> Bool {
         do {
-            try await store.replaceTranscript(segments, for: id)
+            try await store.replaceTranscript(segments, provenance: provenance, for: id)
             await refresh()
             return true
         } catch {
@@ -219,6 +230,24 @@ final class MeetingLibrary {
                 metadata: ["meetingID": id.uuidString]
             )
             return false
+        }
+    }
+
+    /// Records that the meeting's persisted transcript is the live floor —
+    /// one atomic meta write, nothing else touched (SP-007, ADR-022/ADR-024).
+    /// Best-effort: a failure is logged and the meeting stays diagnosable as
+    /// "unknown" provenance rather than blocking the stop path.
+    func recordLiveFloorProvenance(for id: UUID, provenance: TranscriptProvenance) async {
+        do {
+            try await store.recordLiveFloorProvenance(for: id, provenance: provenance)
+            await refresh()
+        } catch {
+            ErrorTrace.record(
+                "Recording live-floor provenance failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
         }
     }
 

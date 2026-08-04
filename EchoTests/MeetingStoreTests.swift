@@ -57,6 +57,20 @@ struct MeetingStoreTests {
         }
     }
 
+    private func makeProvenance(
+        source: TranscriptProvenance.Source = .finalPass,
+        modelName: String = "large-v3_947MB",
+        tier: String = "fullLargeV3",
+        servedByFallback: Bool = false
+    ) -> TranscriptProvenance {
+        TranscriptProvenance(
+            source: source,
+            modelName: modelName,
+            tier: tier,
+            servedByFallback: servedByFallback
+        )
+    }
+
     private func makeSummary() -> MeetingSummary {
         MeetingSummary(
             shortSummary: "Short",
@@ -116,6 +130,156 @@ struct MeetingStoreTests {
             #expect(loaded.summary == makeSummary())
             #expect(loaded.meta.hasSummary == true)
             #expect(await store.listMetas().first?.hasSummary == true)
+        }
+    }
+
+    @Test("attachSummary records the summary model name alongside hasSummary")
+    func attachSummaryRecordsModelName() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            try await store.attachSummary(
+                makeSummary(),
+                modelName: "mlx-community/Qwen3.5-4B-OptiQ-4bit",
+                to: meta.id
+            )
+
+            let loaded = try await store.loadRecord(meta.id)
+            #expect(loaded.meta.hasSummary == true)
+            #expect(loaded.meta.summaryModelName == "mlx-community/Qwen3.5-4B-OptiQ-4bit")
+        }
+    }
+
+    @Test("attachSummary without a model name leaves the field absent")
+    func attachSummaryWithoutModelName() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            try await store.attachSummary(makeSummary(), to: meta.id)
+
+            let loaded = try await store.loadRecord(meta.id)
+            #expect(loaded.meta.hasSummary == true)
+            #expect(loaded.meta.summaryModelName == nil)
+            let json = try String(
+                decoding: Data(contentsOf: store.directory(for: meta.id).appending(path: "meta.json")),
+                as: UTF8.self
+            )
+            #expect(!json.contains("summaryModelName"))
+        }
+    }
+
+    // MARK: - Provenance (SP-007, ADR-022)
+
+    @Test("a meta written without provenance decodes with nil provenance fields")
+    func metaWithoutProvenanceDecodesNil() async throws {
+        try await withTempStore { store, root in
+            // A pre-SP-007 meta.json, verbatim: no provenance fields at all.
+            let id = UUID()
+            let directory = root.appending(path: id.uuidString, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let legacy = """
+            {
+              "endedAt" : "2023-11-14T22:14:50Z",
+              "hasSummary" : false,
+              "id" : "\(id.uuidString)",
+              "schemaVersion" : 1,
+              "segmentCount" : 2,
+              "startedAt" : "2023-11-14T22:13:20Z",
+              "title" : "Legacy Meeting"
+            }
+            """
+            try Data(legacy.utf8).write(to: directory.appending(path: "meta.json"))
+
+            let metas = await store.listMetas()
+            #expect(metas.count == 1)
+            #expect(metas.first?.transcriptProvenance == nil)
+            #expect(metas.first?.summaryModelName == nil)
+        }
+    }
+
+    @Test("an untouched old meeting's meta.json stays byte-identical after reads")
+    func untouchedMetaStaysByteIdentical() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let metaURL = store.directory(for: meta.id).appending(path: "meta.json")
+            let before = try Data(contentsOf: metaURL)
+
+            _ = await store.listMetas()
+            _ = try await store.loadRecord(meta.id)
+
+            #expect(try Data(contentsOf: metaURL) == before)
+        }
+    }
+
+    @Test("recordLiveFloorProvenance writes exactly meta.json — transcript untouched")
+    func recordLiveFloorProvenanceWritesOnlyMeta() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            let segments = makeSegments()
+            try await store.save(MeetingRecord(meta: meta, segments: segments, summary: nil))
+            let directory = store.directory(for: meta.id)
+            let transcriptBytes = try Data(contentsOf: directory.appending(path: "transcript.json"))
+            let filesBefore = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+
+            let provenance = makeProvenance(
+                source: .liveFloor,
+                modelName: "large-v3-v20240930_626MB",
+                tier: "reuseLive"
+            )
+            try await store.recordLiveFloorProvenance(for: meta.id, provenance: provenance)
+
+            let loaded = try await store.loadRecord(meta.id)
+            #expect(loaded.meta.transcriptProvenance == provenance)
+            #expect(loaded.segments == segments)
+            #expect(try Data(contentsOf: directory.appending(path: "transcript.json")) == transcriptBytes)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() == filesBefore)
+        }
+    }
+
+    @Test("recordLiveFloorProvenance on a missing meeting throws and creates nothing")
+    func recordLiveFloorProvenanceMissingMeetingThrows() async throws {
+        try await withTempStore { store, _ in
+            let ghost = UUID()
+            await #expect(throws: (any Error).self) {
+                try await store.recordLiveFloorProvenance(for: ghost, provenance: makeProvenance(source: .liveFloor))
+            }
+            #expect(!FileManager.default.fileExists(atPath: store.directory(for: ghost).path))
+        }
+    }
+
+    @Test("provenance encodes with the stable raw strings the launch scan will key on")
+    func provenanceStableRawStrings() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let metaURL = store.directory(for: meta.id).appending(path: "meta.json")
+
+            try await store.recordLiveFloorProvenance(
+                for: meta.id,
+                provenance: makeProvenance(source: .liveFloor, modelName: "large-v3-v20240930_626MB", tier: "reuseLive")
+            )
+            var json = try String(decoding: Data(contentsOf: metaURL), as: UTF8.self)
+            #expect(json.contains("\"source\" : \"liveFloor\""))
+            #expect(json.contains("\"tier\" : \"reuseLive\""))
+            #expect(json.contains("\"modelName\" : \"large-v3-v20240930_626MB\""))
+            #expect(json.contains("\"servedByFallback\" : false"))
+
+            try await store.replaceTranscript(
+                makeSegments(),
+                provenance: makeProvenance(source: .finalPass, tier: "fullLargeV3"),
+                for: meta.id
+            )
+            json = try String(decoding: Data(contentsOf: metaURL), as: UTF8.self)
+            #expect(json.contains("\"source\" : \"finalPass\""))
+            #expect(json.contains("\"tier\" : \"fullLargeV3\""))
+
+            // The tier raws come from FinalPassTier itself — one source of truth
+            // for what the ADR-024 launch scan will read back.
+            #expect(FinalPassTier.reuseLive.rawValue == "reuseLive")
+            #expect(FinalPassTier.fullLargeV3.rawValue == "fullLargeV3")
         }
     }
 

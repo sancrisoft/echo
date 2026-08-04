@@ -86,13 +86,23 @@ actor MeetingStore {
     /// `description`, when provided, is stored on the meta as the row's
     /// one-line caption in the same write (it is generated alongside the
     /// summary). Passing `nil` leaves any existing caption untouched.
-    func attachSummary(_ summary: MeetingSummary, description: String? = nil, to id: UUID) async throws {
+    ///
+    /// `modelName`, when provided, records which summary model wrote the notes
+    /// (SP-007, ADR-022 — provenance lands in the same step as the artifact it
+    /// describes). Passing `nil` leaves any existing record untouched.
+    func attachSummary(
+        _ summary: MeetingSummary,
+        description: String? = nil,
+        modelName: String? = nil,
+        to id: UUID
+    ) async throws {
         let directory = directory(for: id)
         let metaURL = directory.appending(path: Filename.meta)
         var meta = try decode(MeetingMeta.self, from: metaURL)
         try await writeSummary(summary, to: directory.appending(path: Filename.summary))
         meta.hasSummary = true
         if let description { meta.oneLineDescription = description }
+        if let modelName { meta.summaryModelName = modelName }
         try writeJSON(meta, to: metaURL)
     }
 
@@ -169,11 +179,17 @@ actor MeetingStore {
 
     /// Atomically replaces a meeting's transcript with the complete final
     /// segment set and re-derives the meta fields that describe it (segment
-    /// and word counts). Transcript first, meta after — mirroring `save`'s
-    /// meta-last discipline, so the stale-meta window is display-only. Every
-    /// write is the store's temp-file-plus-rename (`writeJSON`), so any
-    /// failure leaves the live transcript byte-identical (the floor stands).
-    func replaceTranscript(_ segments: [TranscriptSegment], for id: UUID) throws {
+    /// and word counts, plus the transcript's provenance — ADR-022: written in
+    /// the same step as the artifact it describes). Transcript first, meta
+    /// after — mirroring `save`'s meta-last discipline, so the stale-meta
+    /// window is display-only. Every write is the store's
+    /// temp-file-plus-rename (`writeJSON`), so any failure leaves the live
+    /// transcript byte-identical (the floor stands).
+    func replaceTranscript(
+        _ segments: [TranscriptSegment],
+        provenance: TranscriptProvenance,
+        for id: UUID
+    ) throws {
         let directory = directory(for: id)
         let metaURL = directory.appending(path: Filename.meta)
         // Load the meta up front: a missing/corrupt meeting fails here,
@@ -184,6 +200,21 @@ actor MeetingStore {
 
         meta.segmentCount = segments.count
         meta.wordCount = MeetingMeta.wordCount(of: segments)
+        meta.transcriptProvenance = provenance
+        try writeJSON(meta, to: metaURL)
+    }
+
+    /// Records that the meeting's persisted transcript is (and will remain)
+    /// the live floor — a single atomic `meta.json` write, no other file
+    /// touched (ADR-022/ADR-024: the terminal transition is safe as a state
+    /// bit precisely because nothing else is written beside it). Called when
+    /// the live-floor outcome is known: retention never armed, or a pass
+    /// cycle terminally converged (the ADR-024 slice). Throws if the meeting
+    /// folder / meta is missing.
+    func recordLiveFloorProvenance(for id: UUID, provenance: TranscriptProvenance) throws {
+        let metaURL = directory(for: id).appending(path: Filename.meta)
+        var meta = try decode(MeetingMeta.self, from: metaURL)
+        meta.transcriptProvenance = provenance
         try writeJSON(meta, to: metaURL)
     }
 

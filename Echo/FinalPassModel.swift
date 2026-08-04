@@ -27,8 +27,11 @@ import os
 // MARK: - RAM tier (pure — SP-005 Testing Decisions, layer 1)
 
 /// Which model class the final pass runs on, decided purely by physical RAM
-/// (ADR-015: no user-facing picker in v1; the tier decides).
-nonisolated enum FinalPassTier: Equatable, Sendable {
+/// (ADR-015: no user-facing picker in v1; the tier decides). The raw strings
+/// are an on-disk contract: `TranscriptProvenance.tier` persists them in
+/// meta.json (SP-007, ADR-022), so the case names must never be renamed
+/// without keeping these raws.
+nonisolated enum FinalPassTier: String, Equatable, Sendable {
     /// Below the 16 GB class: the pass reuses the already-loaded live model —
     /// zero additional model memory, the universal floor.
     case reuseLive

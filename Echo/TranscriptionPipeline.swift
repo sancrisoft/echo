@@ -181,7 +181,10 @@ actor TranscriptionPipeline {
     /// WhisperKit model variant. Despite the folder id, this checkpoint is
     /// large-v3-TURBO (the v20240930 4-layer-decoder release), mixed-bit
     /// quantized to 626 MB — never rename the id, it is the on-disk contract.
-    private let modelVariant = "large-v3-v20240930_626MB"
+    /// `static` so provenance (SP-007, ADR-022) records this exact checkpoint
+    /// name — the naming-honesty register wants the real id, not the display
+    /// string.
+    static let modelVariant = "large-v3-v20240930_626MB"
     /// Human name + size for the models banner. Honest surfaces (SP-005 user
     /// story 17): the display name says "turbo" because that is what runs —
     /// plain "large-v3" would claim an accuracy class the live model isn't.
@@ -438,7 +441,7 @@ actor TranscriptionPipeline {
             //    fully cached on disk. Local-first means the network is only
             //    touched when something is actually missing.
             let folder: URL
-            if let cached = Self.cachedModelFolder(for: modelVariant) {
+            if let cached = Self.cachedModelFolder(for: Self.modelVariant) {
                 folder = cached
             } else {
                 // First run (or partial cache): download with progress. A
@@ -446,7 +449,7 @@ actor TranscriptionPipeline {
                 // hanging the pipeline at its last percentage forever.
                 await state?.updateStatus("Downloading speech model…")
                 phase?(.downloading(0))
-                let variant = modelVariant
+                let variant = Self.modelVariant
                 folder = try await ModelDownload.withStallRetry(
                     onRetry: { attempt in
                         Self.log.warning("Whisper model download stalled; retrying (attempt \(attempt, privacy: .public))")
@@ -504,7 +507,7 @@ actor TranscriptionPipeline {
     /// exists. Deliberately `false` during a cache-only load — that resolves
     /// in seconds, so a session may simply await it as it always has.
     var needsModelDownload: Bool {
-        !loaded && Self.cachedModelFolder(for: modelVariant) == nil
+        !loaded && Self.cachedModelFolder(for: Self.modelVariant) == nil
     }
 
     /// The complete local snapshot for `variant`, or nil when any required

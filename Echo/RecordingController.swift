@@ -674,7 +674,12 @@ final class RecordingController {
 
                     if let latest {
                         let description = await summarizer.oneLineDescription(for: latest, using: engine)
-                        await library.attachSummary(latest, description: description, to: meta.id)
+                        await library.attachSummary(
+                            latest,
+                            description: description,
+                            modelName: SummaryModelManager.modelID,
+                            to: meta.id
+                        )
                         // A failed write (logged by the library) must not spin
                         // the loop — skip the meeting for the rest of this run.
                         if library.meta(for: meta.id)?.hasSummary != true {
@@ -857,16 +862,33 @@ final class RecordingController {
         guard !staged.isEmpty else {
             // Retention was disabled mid-session (or nothing was captured):
             // no final pass for this meeting, the live transcript stands.
+            // That outcome is known and permanent — record it (ADR-022: a
+            // meeting whose retention never armed records liveFloor).
             await writer.discard()
+            await library.recordLiveFloorProvenance(for: meetingID, provenance: Self.liveFloorProvenance())
             return nil
         }
         guard await library.adoptRetainedAudio(staged, for: meetingID) != nil else {
             await writer.discard()
+            await library.recordLiveFloorProvenance(for: meetingID, provenance: Self.liveFloorProvenance())
             return nil
         }
         // The staged files just moved out; drop the empty staging folder.
         await writer.discard()
         return await finalization.finalizeStopped(meetingID)
+    }
+
+    /// The provenance of a meeting that keeps its live transcript: produced by
+    /// the live turbo checkpoint, on this machine's tier, no fallback involved
+    /// (no pass ran — the floor tier reusing the live model is by design, and
+    /// a never-armed meeting never got a pass at all).
+    private static func liveFloorProvenance() -> TranscriptProvenance {
+        TranscriptProvenance(
+            source: .liveFloor,
+            modelName: TranscriptionPipeline.modelVariant,
+            tier: FinalPassTier.current.rawValue,
+            servedByFallback: false
+        )
     }
 
     /// One pass attempt — the mechanics the coordinator's `runPass` seam
@@ -887,25 +909,28 @@ final class RecordingController {
             Self.log.error("Final pass found no retained audio for \(meetingID.uuidString, privacy: .public)")
             return .failed
         }
+        // A local so the success path can read back which model actually
+        // served the pass (`lastServed`) for the provenance record (ADR-022).
+        let provider = TieredFinalPassModelProvider(
+            manager: finalPassModelManager,
+            fallback: LivePipelineModelProvider(pipeline: pipeline),
+            onServed: { [weak self] choice in
+                // Degraded-pass honesty (SP-005 S6): worth a caption
+                // only when a full-tier machine fell back to the live
+                // model — the floor tier reusing it is by design.
+                let fallback = choice == .liveModel && FinalPassTier.current == .fullLargeV3
+                Task { @MainActor [weak self] in
+                    self?.finalization.noteServedModel(
+                        isFallbackOnFullTier: fallback,
+                        for: meetingID
+                    )
+                }
+            }
+        )
         do {
             let final = try await FinalizationPass.run(
                 retainedFiles: retained,
-                model: TieredFinalPassModelProvider(
-                    manager: finalPassModelManager,
-                    fallback: LivePipelineModelProvider(pipeline: pipeline),
-                    onServed: { [weak self] choice in
-                        // Degraded-pass honesty (SP-005 S6): worth a caption
-                        // only when a full-tier machine fell back to the live
-                        // model — the floor tier reusing it is by design.
-                        let fallback = choice == .liveModel && FinalPassTier.current == .fullLargeV3
-                        Task { @MainActor [weak self] in
-                            self?.finalization.noteServedModel(
-                                isFallbackOnFullTier: fallback,
-                                for: meetingID
-                            )
-                        }
-                    }
-                ),
+                model: provider,
                 shouldYield: shouldYield,
                 onProgress: { [weak self] fraction in
                     // The single ADR-007 fraction, hopped to the main actor;
@@ -916,13 +941,28 @@ final class RecordingController {
                     }
                 }
             )
-            // The live transcript was non-empty (it persisted); a final pass
-            // that decoded nothing is a failed pass, not a better transcript.
-            guard !final.isEmpty else {
-                Self.log.error("Final pass produced no segments — live transcript stands, retained audio kept")
+            // An empty `final` here is a legitimate success: `run` returns
+            // empty only when the energy evidence itself says nobody spoke
+            // (ADR-019 — speech regions with all segments dropped throws
+            // `emptyDisciplinedOutput` and lands in `.failed` below).
+            // Which checkpoint actually decoded this pass (ADR-022): the
+            // provider recorded its per-lend choice. A silence-only pass may
+            // never lend the model (`lastServed` nil) — it records the live
+            // checkpoint name and NO fallback flag, because no degraded
+            // decode happened.
+            let served = await provider.lastServed
+            let tier = FinalPassTier.current
+            let provenance = TranscriptProvenance(
+                source: .finalPass,
+                modelName: served == .fullLargeV3
+                    ? FinalPassModelManager.variant
+                    : TranscriptionPipeline.modelVariant,
+                tier: tier.rawValue,
+                servedByFallback: served == .liveModel && tier == .fullLargeV3
+            )
+            guard await library.replaceTranscript(final, provenance: provenance, for: meetingID) else {
                 return .failed
             }
-            guard await library.replaceTranscript(final, for: meetingID) else { return .failed }
             await library.deleteRetainedAudio(for: meetingID)
             Self.log.info("""
             Final pass succeeded for meeting \(meetingID.uuidString, privacy: .public): \
@@ -1052,7 +1092,12 @@ final class RecordingController {
                     // it fails, leaving the row without a caption).
                     if let meetingID {
                         let description = await summarizer.oneLineDescription(for: latest, using: engine)
-                        await library.attachSummary(latest, description: description, to: meetingID)
+                        await library.attachSummary(
+                            latest,
+                            description: description,
+                            modelName: SummaryModelManager.modelID,
+                            to: meetingID
+                        )
                     }
                 } else {
                     state.markSummaryUnavailable("The summary model returned an empty summary.")

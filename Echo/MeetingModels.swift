@@ -11,6 +11,41 @@
 
 import Foundation
 
+/// What produced the meeting's *current* persisted transcript (SP-007,
+/// ADR-022): a display/diagnostics record of a completed outcome, written in
+/// the same step as the transcript it describes — never a state marker driving
+/// the work queue (the ADR-016 reconciliation). The raw strings are an on-disk
+/// contract: the ADR-024 launch scan reads `source` back to disambiguate
+/// pending meetings from terminal drafts, so they must never change.
+nonisolated struct TranscriptProvenance: Codable, Hashable, Sendable {
+    /// Whether the persisted transcript is final-pass output or the live floor.
+    nonisolated enum Source: String, Codable, Hashable, Sendable {
+        case finalPass
+        case liveFloor
+    }
+
+    var source: Source
+    /// The real speech-checkpoint name that produced the transcript (SP-005
+    /// naming-honesty register), e.g. "large-v3_947MB" (final pass, full tier)
+    /// or "large-v3-v20240930_626MB" (the live turbo).
+    var modelName: String
+    /// The machine's RAM tier when the transcript landed — a `FinalPassTier`
+    /// raw value ("fullLargeV3" / "reuseLive"). Stored as a plain string so an
+    /// old meta with a tier a future build renamed still decodes.
+    var tier: String
+    /// True when a full-tier machine's pass was actually served by the live
+    /// model (snapshot absent / load failed) — a degraded pass must be
+    /// distinguishable from a full-tier pass after the fact.
+    var servedByFallback: Bool
+
+    nonisolated init(source: Source, modelName: String, tier: String, servedByFallback: Bool) {
+        self.source = source
+        self.modelName = modelName
+        self.tier = tier
+        self.servedByFallback = servedByFallback
+    }
+}
+
 /// The small, always-loaded header for one meeting. `listMetas` reads only
 /// these (never the full transcript) so opening the app stays cheap even with a
 /// long history — the transcript and summary live in sibling files.
@@ -44,6 +79,18 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
     /// predate the feature).
     var oneLineDescription: String?
 
+    /// Provenance of the persisted transcript (SP-007, ADR-022). Optional and
+    /// encoded only when present, like `wordCount`: pre-SP-007 metas decode to
+    /// `nil` (the UI renders "unknown"), and an untouched old `meta.json`
+    /// keeps its exact bytes. Written only in the same step as the transcript
+    /// it describes (`replaceTranscript` / `recordLiveFloorProvenance`).
+    var transcriptProvenance: TranscriptProvenance?
+
+    /// The real name of the summary model that wrote `summary.json` (SP-007,
+    /// ADR-022), recorded by `attachSummary` in its existing meta write. Same
+    /// additive-optional discipline as `transcriptProvenance`.
+    var summaryModelName: String?
+
     /// When the meeting was moved to Trash, or `nil` if it is live in the
     /// library. A trashed meeting keeps all its files; the library hides it from
     /// "All Meetings", lists it under "Trash", and permanently deletes it once
@@ -67,6 +114,8 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
         hasSummary: Bool,
         wordCount: Int? = nil,
         oneLineDescription: String? = nil,
+        transcriptProvenance: TranscriptProvenance? = nil,
+        summaryModelName: String? = nil,
         trashedAt: Date? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -78,6 +127,8 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
         self.hasSummary = hasSummary
         self.wordCount = wordCount
         self.oneLineDescription = oneLineDescription
+        self.transcriptProvenance = transcriptProvenance
+        self.summaryModelName = summaryModelName
         self.trashedAt = trashedAt
     }
 
