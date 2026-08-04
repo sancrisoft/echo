@@ -2267,15 +2267,19 @@ private struct PastMeetingDetail: View {
 
 // MARK: - Shared transcript list
 
-/// The committed (final) transcript of a resolved meeting. Never rendered
-/// while recording (SP-007 final-only UX): the live detail shows a
-/// "Recording" placeholder instead, so this view has no live-follow
-/// machinery — it is a plain, read-only scroll.
+/// The committed (final) transcript of a resolved meeting, rendered as
+/// derived utterances (ADR-021): consecutive same-speaker segments merge
+/// into paragraphs with a time range, and standalone backchannel stays out
+/// of the flow — the persisted segments are untouched. Never rendered while
+/// recording (SP-007 final-only UX): the live detail shows a "Recording"
+/// placeholder instead, so this view has no live-follow machinery — it is a
+/// plain, read-only scroll.
 private struct TranscriptScroll: View {
     let segments: [TranscriptSegment]
 
     var body: some View {
-        if segments.isEmpty {
+        let utterances = TranscriptUtterance.derive(from: segments)
+        if utterances.isEmpty {
             ContentUnavailableView(
                 "No transcript",
                 systemImage: "text.bubble",
@@ -2285,8 +2289,8 @@ private struct TranscriptScroll: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 22) {
-                    ForEach(segments) { segment in
-                        SegmentRow(segment: segment)
+                    ForEach(utterances) { utterance in
+                        UtteranceRow(utterance: utterance)
                     }
                 }
                 // A readable column as in the mockup: capped width,
@@ -2300,20 +2304,21 @@ private struct TranscriptScroll: View {
     }
 }
 
-private struct SegmentRow: View {
-    let segment: TranscriptSegment
+/// One derived utterance: speaker, time range, merged paragraph.
+private struct UtteranceRow: View {
+    let utterance: TranscriptUtterance
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text(segment.speaker.displayName)
+                Text(utterance.speaker.displayName)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(accent)
-                Text(timestamp)
+                Text(timeRange)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Text(segment.text)
+            Text(utterance.text)
                 .font(.body)
                 .textSelection(.enabled)
         }
@@ -2322,11 +2327,11 @@ private struct SegmentRow: View {
     /// Speaker accent: the user keeps the brand indigo (their wave, the
     /// glyph); everyone on the system stream gets a distinguishable purple.
     private var accent: Color {
-        segment.speaker == .me ? .echoIndigo : .purple
+        utterance.speaker == .me ? .echoIndigo : .purple
     }
 
-    private var timestamp: String {
-        recTimerString(segment.start)
+    private var timeRange: String {
+        "\(recTimerString(utterance.start))–\(recTimerString(utterance.end))"
     }
 }
 

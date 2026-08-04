@@ -552,27 +552,35 @@ actor SummarizationPipeline {
 
     // MARK: - Transcript rendering
 
-    private static func transcriptText(from segments: [TranscriptSegment]) -> String {
-        segments
-            .sorted { $0.start < $1.start }
-            .map { segment in
-                let start = timestamp(segment.start)
-                let end = timestamp(segment.end)
-                return "[\(start)-\(end)][\(speakerName(segment.speaker))][\(segment.channel.rawValue)][id=\(segment.id.uuidString)]: \(segment.text)"
+    /// Renders the merged, backchannel-filtered derivation (ADR-021) so the
+    /// model reads conversation paragraphs, not decoder chunks. Each line
+    /// carries the utterance's first-constituent segment ID — always a subset
+    /// of `evidenceIDs(of:)` (which stays ALL segment IDs), so citation
+    /// validation and the detail view's segment lookup keep resolving.
+    /// Internal (not private) so the line format is table-tested (SP-007 S7).
+    static func transcriptText(from segments: [TranscriptSegment]) -> String {
+        TranscriptUtterance.derive(from: segments)
+            .map { utterance in
+                let start = timestamp(utterance.start)
+                let end = timestamp(utterance.end)
+                return "[\(start)-\(end)][\(speakerName(utterance.speaker))][\(utterance.channel.rawValue)][id=\(utterance.id.uuidString)]: \(utterance.text)"
             }
             .joined(separator: "\n")
     }
 
-    /// Like `transcriptText`, but marks the overlap head (repeated from the
-    /// previous chunk) so the model can skip facts it already reported. The
-    /// chunk owns its segment order; we keep it as-is.
-    private static func chunkTranscriptText(for chunk: TranscriptChunk) -> String {
-        chunk.segments
-            .map { segment in
-                let overlap = chunk.overlapSegmentIDs.contains(segment.id) ? "(overlap) " : ""
-                let start = timestamp(segment.start)
-                let end = timestamp(segment.end)
-                return "\(overlap)[\(start)-\(end)][\(speakerName(segment.speaker))][\(segment.channel.rawValue)][id=\(segment.id.uuidString)]: \(segment.text)"
+    /// Like `transcriptText`, but derives utterances within the chunk's own
+    /// segments and marks a line `(overlap)` only when EVERY constituent is
+    /// in the chunk's overlap head — an utterance mixing overlap and new
+    /// segments is new content the model must not skip.
+    static func chunkTranscriptText(for chunk: TranscriptChunk) -> String {
+        TranscriptUtterance.derive(from: chunk.segments)
+            .map { utterance in
+                let isOverlap = utterance.segmentIDs
+                    .allSatisfy { chunk.overlapSegmentIDs.contains($0) }
+                let overlap = isOverlap ? "(overlap) " : ""
+                let start = timestamp(utterance.start)
+                let end = timestamp(utterance.end)
+                return "\(overlap)[\(start)-\(end)][\(speakerName(utterance.speaker))][\(utterance.channel.rawValue)][id=\(utterance.id.uuidString)]: \(utterance.text)"
             }
             .joined(separator: "\n")
     }
