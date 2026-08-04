@@ -242,22 +242,8 @@ struct MenuBarView: View {
     // MARK: - Actions
 
     private func openDashboard() {
-        NSApp.activate(ignoringOtherApps: true)
-        openWindow(id: EchoWindow.dashboard)
-        // As an LSUIElement agent, activating + opening the window doesn't
-        // reliably raise or focus it — the window can appear behind other apps.
-        // Force it front on the next run-loop tick, once SwiftUI has created or
-        // surfaced the scene, so the CTA always lands the user on the dashboard.
-        DispatchQueue.main.async {
-            // Promote to a Dock/Cmd-Tab app before fronting: the notification
-            // hook only fires once the window becomes key, and re-ordering
-            // after a policy switch is what keeps it in front.
-            EchoAppDelegate.sync()
-            NSApp.activate(ignoringOtherApps: true)
-            NSApp.windows
-                .first { $0.identifier?.rawValue == EchoWindow.dashboard }?
-                .makeKeyAndOrderFront(nil)
-        }
+        // Shared with SP-006's island (which has no `openWindow` of its own).
+        DashboardOpening.open(using: openWindow)
     }
 
     private func stopAndOpenDashboard() {

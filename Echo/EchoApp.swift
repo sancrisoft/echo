@@ -64,6 +64,10 @@ struct EchoApp: App {
                 .environment(settings)
         } label: {
             Image(systemName: controller.isRecording ? "waveform.circle.fill" : "waveform")
+                // Captures SwiftUI's `openWindow` for the AppKit side (SP-006's
+                // island): the label is the one view an agent app always has
+                // instantiated, so it is the earliest reliable hook.
+                .background(DashboardOpenerBridge())
         }
         .menuBarExtraStyle(.window)
 
