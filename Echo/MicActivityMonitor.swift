@@ -43,7 +43,12 @@ final class MicActivityMonitor {
     private var clientBlock: AudioObjectPropertyListenerBlock?
     private var watchedProcessObjects: Set<AudioObjectID> = []
     private var lastReported: Set<Client> = []
+    /// True while a coalesced rescan is already scheduled (see `handleChange`).
+    private var rescanPending = false
     private let ownPID = ProcessInfo.processInfo.processIdentifier
+    #if DEBUG
+    private var dumpTask: Task<Void, Never>?
+    #endif
 
     private static let processListAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyProcessObjectList,
@@ -55,6 +60,22 @@ final class MicActivityMonitor {
         mSelector: kAudioProcessPropertyIsRunningInput,
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain
+    )
+
+    /// What per-process listeners register for.
+    ///
+    /// Not `isRunningInputAddress`: registering that exact address on a process
+    /// object *succeeds* and then never delivers a thing — verified against real
+    /// calls on macOS 26, where a process going idle → capturing (FaceTime
+    /// hanging up, a Meet tab opening the mic) produced no notification at all
+    /// while reading the very same property showed the new value. The wildcard
+    /// address catches the change whatever scope and element `coreaudiod`
+    /// publishes it with. Over-notification is free: every fire just triggers a
+    /// rescan, and rescans are coalesced and reported only on a real diff.
+    private static let processWildcardAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioObjectPropertySelectorWildcard,
+        mScope: kAudioObjectPropertyScopeWildcard,
+        mElement: kAudioObjectPropertyElementWildcard
     )
 
     // MARK: - Lifecycle
@@ -87,6 +108,7 @@ final class MicActivityMonitor {
 
         #if DEBUG
         Self.log.info("Mic activity monitor started")
+        startDumpProbeIfRequested()
         #endif
         rescan()
     }
@@ -108,6 +130,8 @@ final class MicActivityMonitor {
         watchedProcessObjects = []
         lastReported = []
         #if DEBUG
+        dumpTask?.cancel()
+        dumpTask = nil
         Self.log.info("Mic activity monitor stopped")
         #endif
     }
@@ -119,13 +143,31 @@ final class MicActivityMonitor {
         clients(in: processObjects()).sorted { $0.pid < $1.pid }
     }
 
+    /// Collapses a burst of notifications into one scan.
+    ///
+    /// Wildcard listeners fire for any property on any watched process, so one
+    /// real event (a call connecting) arrives as several notifications across
+    /// several objects. A scan reads three properties per process, so answering
+    /// each notification separately would mean hundreds of round trips to
+    /// `coreaudiod` for a single change. The delay is invisible next to the 3 s
+    /// start debounce.
     private func handleChange() {
-        rescan()
+        guard !rescanPending else { return }
+        rescanPending = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard let self else { return }
+            self.rescanPending = false
+            self.rescan()
+        }
     }
 
     /// Reads the world, keeps the per-process listeners in sync with it, and
     /// reports only genuine changes.
     private func rescan() {
+        // A coalesced scan can land after `stop()`; re-registering listeners
+        // then would resurrect a monitor the setting just turned off.
+        guard listenerBlock != nil else { return }
         let objects = processObjects()
         syncClientListeners(with: Set(objects))
 
@@ -220,12 +262,30 @@ final class MicActivityMonitor {
     /// an already-known process is noticed without polling.
     private func syncClientListeners(with objects: Set<AudioObjectID>) {
         guard let clientBlock else { return }
+        var failures = 0
+        var lastFailure: OSStatus = noErr
         for object in objects.subtracting(watchedProcessObjects) {
-            var address = Self.isRunningInputAddress
+            var address = Self.processWildcardAddress
             let status = AudioObjectAddPropertyListenerBlock(object, &address, .main, clientBlock)
-            guard status == noErr else { continue }
+            guard status == noErr else {
+                // A process that died between the list read and this call is
+                // ordinary; a systematic failure would mean capture starting
+                // inside an already-known process goes unnoticed, so it is
+                // worth seeing in the log rather than swallowing entirely.
+                failures += 1
+                lastFailure = status
+                continue
+            }
             watchedProcessObjects.insert(object)
         }
+        #if DEBUG
+        if failures > 0 {
+            Self.log.info("""
+            per-process listener registration failed for \(failures, privacy: .public) object(s), \
+            last status=\(lastFailure, privacy: .public)
+            """)
+        }
+        #endif
         for object in watchedProcessObjects.subtracting(objects) {
             removeClientListener(from: object, block: clientBlock)
             watchedProcessObjects.remove(object)
@@ -236,13 +296,49 @@ final class MicActivityMonitor {
         from object: AudioObjectID,
         block: @escaping AudioObjectPropertyListenerBlock
     ) {
-        var address = Self.isRunningInputAddress
+        var address = Self.processWildcardAddress
         AudioObjectRemovePropertyListenerBlock(object, &address, .main, block)
     }
 
     // MARK: - Detection log (DEBUG)
 
     #if DEBUG
+    /// Diagnostic probe (`ECHO_MIC_DUMP=1`): logs what Core Audio actually
+    /// knows — every process object that is capturing, plus every catalogued
+    /// app's row whether it captures or not — so "this app is in a call and
+    /// Echo says nothing" can be told apart from "Core Audio never reports this
+    /// app capturing at all".
+    ///
+    /// Observational only: it never feeds the machine, so detection stays
+    /// listener-driven (SP-006 §9). Off unless the variable is set.
+    private func startDumpProbeIfRequested() {
+        guard ProcessInfo.processInfo.environment["ECHO_MIC_DUMP"] == "1", dumpTask == nil else { return }
+        Self.log.info("mic dump probe on")
+        dumpTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.dumpProcessTable()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private func dumpProcessTable() {
+        let objects = processObjects()
+        var rows: [String] = []
+        for object in objects {
+            guard let pid = pid(of: object) else { continue }
+            let bundle = bundleID(of: object)
+            let running = isRunningInput(object)
+            guard running || CallAppCatalog.match(bundleID: bundle) != nil else { continue }
+            rows.append("obj=\(object) pid=\(pid) input=\(running ? 1 : 0) bundle=\(bundle.isEmpty ? "<none>" : bundle)")
+        }
+        Self.log.info("""
+        dump: \(objects.count, privacy: .public) process objects, \
+        \(self.watchedProcessObjects.count, privacy: .public) watched — \
+        \(rows.isEmpty ? "no capturing or catalogued rows" : rows.joined(separator: " | "), privacy: .public)
+        """)
+    }
+
     /// The instrument for SP-006's open questions 1–2: which bundle IDs
     /// actually flip is-running-input for each meeting app, and whether an app
     /// releases the mic on mute. Watch with:
