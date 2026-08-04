@@ -264,6 +264,17 @@ final class MeetingLibrary {
         await store.retainedAudioFiles(for: id)
     }
 
+    #if DEBUG
+    /// SP-007 DEBUG keep flag (user story 12): renames the meeting's retained
+    /// audio to its kept-fixture names inside the same folder, so a successful
+    /// pass leaves a replayable real-meeting fixture behind instead of
+    /// deleting the audio. Returns whether anything was preserved.
+    @discardableResult
+    func preserveRetainedAudioAsDebugFixture(for id: UUID) async -> Bool {
+        await store.preserveRetainedAudioAsDebugFixture(for: id)
+    }
+    #endif
+
     /// Meetings pending finalization, newest first (retained audio with no
     /// recorded transcript provenance — ADR-016 amended by ADR-024) — feeds
     /// the launch resume and the backfill's eligibility check. Terminal

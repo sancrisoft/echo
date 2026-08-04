@@ -421,6 +421,65 @@ actor MeetingStore {
         }
     }
 
+    // MARK: - DEBUG kept fixtures (SP-007 keep flag)
+
+    #if DEBUG
+    /// The name a successful pass's kept audio takes inside the meeting
+    /// folder when the DEBUG keep flag is on. Deliberately NOT the canonical
+    /// `retained-*` names: the ADR-024 launch scan classifies retained audio
+    /// + `finalPass` provenance as a crashed-success orphan and would sweep
+    /// it, so kept fixtures must be invisible to `retainedAudioFiles` and
+    /// the disposition scan (different names — nothing above ever looks for
+    /// these). They stay inside the meeting's own folder, so deleting the
+    /// meeting always deletes them: retention can never outlive its meeting
+    /// (SP-007 Further Notes — a scoped exception to ADR-013, not an
+    /// amendment).
+    nonisolated static func debugKeptAudioFileName(for channel: AudioChannel) -> String {
+        switch channel {
+        case .microphone: return "debug-kept-mic.m4a"
+        case .system: return "debug-kept-system.m4a"
+        }
+    }
+
+    /// Preserves the meeting's retained audio as development fixtures: each
+    /// retained file currently present is RENAMED to its kept name in the
+    /// same folder (a move — cheap and atomic on the same volume, bytes
+    /// untouched). Afterwards the meeting reads as holding no retained audio
+    /// — not pending, invisible to the three-way scan — and the success
+    /// path's normal `deleteRetainedAudio` finds nothing, harmlessly.
+    /// Returns whether anything was preserved. A per-file failure is
+    /// non-fatal: the file stays under its retained name and the normal
+    /// deletion cleans it up.
+    @discardableResult
+    func preserveRetainedAudioAsDebugFixture(for id: UUID) -> Bool {
+        var preserved = false
+        for (channel, url) in retainedAudioFiles(for: id) {
+            let destination = directory(for: id).appending(
+                path: Self.debugKeptAudioFileName(for: channel),
+                directoryHint: .notDirectory
+            )
+            do {
+                // A re-kept meeting (manual Retry driven to success again)
+                // replaces the previous kept take.
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.moveItem(at: url, to: destination)
+                preserved = true
+            } catch {
+                ErrorTrace.record(
+                    "Preserving retained audio as a debug fixture failed",
+                    error: error,
+                    category: "MeetingStore",
+                    metadata: [
+                        "meetingID": id.uuidString,
+                        "file": url.lastPathComponent,
+                    ]
+                )
+            }
+        }
+        return preserved
+    }
+    #endif
+
     // MARK: - JSON helpers
 
     /// Atomic write (temp file in the same folder + rename): a crash or a

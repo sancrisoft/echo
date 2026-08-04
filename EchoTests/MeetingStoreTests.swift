@@ -356,6 +356,106 @@ struct MeetingStoreTests {
         }
     }
 
+    // MARK: - DEBUG kept fixtures (SP-007 keep flag)
+
+    #if DEBUG
+    /// Plants retained audio with distinct per-channel bytes, so the rename
+    /// tests can prove the kept files carry the original bytes.
+    private func plantRetainedAudio(
+        _ contents: [AudioChannel: Data],
+        for id: UUID,
+        in store: MeetingStore
+    ) throws {
+        for (channel, data) in contents {
+            try data.write(to: store.directory(for: id)
+                .appending(path: MeetingStore.retainedAudioFileName(for: channel)))
+        }
+    }
+
+    @Test("preserve renames the retained files to kept names in the same folder — originals gone, bytes identical")
+    func preserveRenamesRetainedAudioToKeptNames() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let micBytes = Data("mic take".utf8)
+            let systemBytes = Data("system take".utf8)
+            try plantRetainedAudio([.microphone: micBytes, .system: systemBytes], for: meta.id, in: store)
+            let directory = store.directory(for: meta.id)
+
+            #expect(await store.preserveRetainedAudioAsDebugFixture(for: meta.id))
+
+            // The retained names are gone; the kept names hold the same bytes
+            // in the same meeting folder (a rename, not a copy elsewhere).
+            for (channel, bytes) in [(AudioChannel.microphone, micBytes), (.system, systemBytes)] {
+                let retained = directory.appending(path: MeetingStore.retainedAudioFileName(for: channel))
+                let kept = directory.appending(path: MeetingStore.debugKeptAudioFileName(for: channel))
+                #expect(!FileManager.default.fileExists(atPath: retained.path))
+                #expect(try Data(contentsOf: kept) == bytes)
+            }
+        }
+    }
+
+    @Test("a preserved meeting reads as holding no retained audio — not pending, disposition none")
+    func preservedMeetingReadsAsNoRetainedAudio() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            try plantRetainedAudio([.microphone: Data("mic".utf8)], for: meta.id, in: store)
+            #expect(await store.isPendingFinalization(meta.id))
+
+            await store.preserveRetainedAudioAsDebugFixture(for: meta.id)
+
+            // Kept fixtures are invisible to the pending marker and the
+            // ADR-024 disposition scan — nothing re-runs, nothing sweeps them.
+            #expect(await !store.isPendingFinalization(meta.id))
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .none)
+            #expect(await store.retainedAudioFiles(for: meta.id).isEmpty)
+        }
+    }
+
+    @Test("deleteRetainedAudio after preserve is a harmless no-op — kept files untouched")
+    func deleteRetainedAudioAfterPreserveIsNoOp() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let bytes = Data("keep me".utf8)
+            try plantRetainedAudio([.microphone: bytes], for: meta.id, in: store)
+            await store.preserveRetainedAudioAsDebugFixture(for: meta.id)
+
+            // The success path's normal cleanup, running right after the
+            // preserve (the RecordingController ordering): finds nothing.
+            await store.deleteRetainedAudio(for: meta.id)
+
+            let kept = store.directory(for: meta.id)
+                .appending(path: MeetingStore.debugKeptAudioFileName(for: .microphone))
+            #expect(try Data(contentsOf: kept) == bytes)
+        }
+    }
+
+    @Test("a second preserve after re-retention replaces the previous kept take")
+    func secondPreserveReplacesPreviousKeptTake() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            try plantRetainedAudio([.microphone: Data("first take".utf8)], for: meta.id, in: store)
+            await store.preserveRetainedAudioAsDebugFixture(for: meta.id)
+
+            // Re-retention (a manual Retry driven to success again), then a
+            // second preserve: the kept name holds the NEW take.
+            let secondTake = Data("second take".utf8)
+            try plantRetainedAudio([.microphone: secondTake], for: meta.id, in: store)
+            #expect(await store.preserveRetainedAudioAsDebugFixture(for: meta.id))
+
+            let directory = store.directory(for: meta.id)
+            let kept = directory.appending(path: MeetingStore.debugKeptAudioFileName(for: .microphone))
+            #expect(try Data(contentsOf: kept) == secondTake)
+            #expect(!FileManager.default.fileExists(
+                atPath: directory.appending(path: MeetingStore.retainedAudioFileName(for: .microphone)).path
+            ))
+        }
+    }
+    #endif
+
     // MARK: - listMetas
 
     @Test("listMetas is empty when no meeting has ever been saved")

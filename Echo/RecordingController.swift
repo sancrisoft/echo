@@ -973,6 +973,14 @@ final class RecordingController {
             guard await library.replaceTranscript(final, provenance: provenance, for: meetingID) else {
                 return .failed
             }
+            #if DEBUG
+            // SP-007 keep flag (user story 12): preserve this meeting's audio
+            // as a replayable fixture; the deletion below then finds nothing,
+            // harmlessly. DEBUG-only and off by default (SP-007 Privacy).
+            if ProcessInfo.processInfo.environment["ECHO_KEEP_RETAINED_AUDIO"] == "1" {
+                await library.preserveRetainedAudioAsDebugFixture(for: meetingID)
+            }
+            #endif
             await library.deleteRetainedAudio(for: meetingID)
             Self.log.info("""
             Final pass succeeded for meeting \(meetingID.uuidString, privacy: .public): \
