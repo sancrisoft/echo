@@ -213,8 +213,8 @@ final class RecordingController {
         // SP-005 S4: the coordinator's work is injected here (it owns WHEN a
         // pass runs; the controller owns HOW). `prepareForPass` releases any
         // idle-warm summary model so it is never resident while a pass
-        // decodes; terminal convergence deletes the pending marker (ADR-016);
-        // a concluded resumed pass kicks the backfill for its summary.
+        // decodes; a concluded resumed pass kicks the backfill for its
+        // summary.
         finalization.runPass = { [weak self] meetingID, shouldYield in
             guard let self else { return .failed }
             return await self.performFinalizationPass(for: meetingID, shouldYield: shouldYield)
@@ -222,8 +222,17 @@ final class RecordingController {
         finalization.prepareForPass = { [summaryModelManager] in
             await summaryModelManager.unload()
         }
+        // Terminal convergence (ADR-024): ONE atomic act — record liveFloor
+        // provenance on the meeting's meta. The retained audio is KEPT for
+        // the manual Retry, and the single write is the crash safety: a
+        // crash BEFORE it re-enters pending on the next launch and simply
+        // converges again; after it, the scan reads the draft.
         finalization.convergeTerminally = { [weak self] meetingID in
-            await self?.library.deleteRetainedAudio(for: meetingID)
+            guard let self else { return }
+            await self.library.recordLiveFloorProvenance(
+                for: meetingID,
+                provenance: Self.liveFloorProvenance()
+            )
         }
         finalization.onPassConcluded = { [weak self] meetingID in
             guard let self else { return }
@@ -880,8 +889,9 @@ final class RecordingController {
 
     /// The provenance of a meeting that keeps its live transcript: produced by
     /// the live turbo checkpoint, on this machine's tier, no fallback involved
-    /// (no pass ran — the floor tier reusing the live model is by design, and
-    /// a never-armed meeting never got a pass at all).
+    /// (whether retention never armed or a pass cycle terminally converged,
+    /// no pass output ever landed — the persisted words are the live model's,
+    /// and the floor tier reusing it is by design).
     private static func liveFloorProvenance() -> TranscriptProvenance {
         TranscriptProvenance(
             source: .liveFloor,
@@ -985,22 +995,55 @@ final class RecordingController {
         }
     }
 
-    /// SP-005 S4 launch resume (ADR-016: crash-resume is a directory scan):
-    /// sweep staging a previous run orphaned, then enqueue every meeting
-    /// whose folder still holds retained audio, newest first. The coordinator
-    /// runs them one at a time — never while recording, never alongside
+    /// SP-005 S4 launch resume (ADR-016: crash-resume is a directory scan),
+    /// three-way since ADR-024: sweep staging a previous run orphaned, sweep
+    /// the audio of finalPass orphans (a success whose cleanup crashed —
+    /// already final, never re-run), then enqueue only the TRUE pending
+    /// meetings (retained audio, no provenance), newest first. Terminal
+    /// drafts (audio + liveFloor) are never auto-resumed — the pending query
+    /// excludes them; only the user's Retry re-opens one. The coordinator
+    /// runs the queue one at a time — never while recording, never alongside
     /// summary work.
     private func resumePendingFinalizations() async {
         // A session started before this ran (unlikely — it is chained right
-        // after the model preload): its staging is live, so skip the sweep;
-        // pending meetings still enqueue and simply defer until stop.
+        // after the model preload): its staging is live, so skip the sweeps;
+        // pending meetings still enqueue and simply defer until stop, and
+        // any orphan is re-swept next launch.
         if !isRecording {
             await library.sweepRetentionStaging()
+            await library.sweepFinalPassAudioOrphans()
         }
         let pending = await library.pendingFinalizationMeetingIDs()
         guard !pending.isEmpty else { return }
         Self.log.info("Resuming \(pending.count, privacy: .public) pending finalization(s) from retained audio")
         finalization.requestResume(of: pending)
+    }
+
+    // MARK: - Terminal-draft actions (SP-007, ADR-024)
+
+    /// User-initiated Retry from the terminal-draft state: re-admits the
+    /// meeting's pass with a FRESH bounded attempt budget at the front of
+    /// the deferred queue (the user-request discipline). Admission is not
+    /// bypassed — an active recording, summary work, or an open post-stop
+    /// pipeline still gates the start — and a cycle that converges again
+    /// returns to the draft with the audio still kept. Valid whether the
+    /// meeting converged this run (clears the coordinator's terminal mark)
+    /// or in a previous one (nothing to clear; the on-disk audio is the
+    /// checkpoint the resumed pass reads).
+    func retryFinalization(_ meetingID: UUID) {
+        finalization.requestManualRetry(meetingID)
+    }
+
+    /// "Keep draft" (ADR-024): the user accepts the draft as the meeting's
+    /// final transcript and ends retention — deletes exactly this meeting's
+    /// kept audio; transcript and liveFloor provenance stay untouched (the
+    /// Draft badge survives; the Retry disappears with its audio). The
+    /// coordinator's in-memory terminal set deliberately keeps the meeting:
+    /// that set only blocks AUTO re-admission, which is exactly right for an
+    /// accepted draft — and with the audio gone there is nothing a pass
+    /// could re-decode anyway.
+    func keepDraft(_ meetingID: UUID) async {
+        await library.deleteRetainedAudio(for: meetingID)
     }
 
     /// Runs `body` with a summary engine, counting the generation as active LLM

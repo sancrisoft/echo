@@ -264,10 +264,25 @@ final class MeetingLibrary {
         await store.retainedAudioFiles(for: id)
     }
 
-    /// Meetings pending finalization, newest first (retained-audio presence,
-    /// ADR-016) — feeds the launch resume and the backfill's eligibility check.
+    /// Meetings pending finalization, newest first (retained audio with no
+    /// recorded transcript provenance — ADR-016 amended by ADR-024) — feeds
+    /// the launch resume and the backfill's eligibility check. Terminal
+    /// drafts and finalPass orphans are NOT pending.
     func pendingFinalizationMeetingIDs() async -> [UUID] {
         await store.pendingFinalizationMeetingIDs()
+    }
+
+    /// Whether the meeting still holds kept audio — the exact lifetime of
+    /// the draft state's Retry affordance (SP-007/ADR-024).
+    func hasRetainedAudio(for id: UUID) async -> Bool {
+        await store.hasRetainedAudio(for: id)
+    }
+
+    /// Deletes the leftover audio of meetings whose provenance already says
+    /// `finalPass` (ADR-024's orphan class — a success whose cleanup
+    /// crashed). Part of the launch scan, before the resume enqueue.
+    func sweepFinalPassAudioOrphans() async {
+        await store.sweepFinalPassAudioOrphans()
     }
 
     /// Deletes orphaned retention staging from a previous run (disposable by

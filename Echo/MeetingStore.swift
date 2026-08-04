@@ -246,22 +246,101 @@ actor MeetingStore {
         return files
     }
 
-    /// ADR-016: presence of retained audio in the meeting folder IS the
-    /// pending-finalization marker — no separate state file or meta flag
-    /// to desync from what is actually on disk.
-    func isPendingFinalization(_ id: UUID) -> Bool {
+    /// Whether the meeting's folder still holds retained audio — the exact
+    /// lifetime of the draft state's Retry affordance (SP-007: "Retry exists
+    /// exactly while the retained audio does"). A thin, named veneer over
+    /// `retainedAudioFiles` for the UI's yes/no question.
+    func hasRetainedAudio(for id: UUID) -> Bool {
         !retainedAudioFiles(for: id).isEmpty
     }
 
+    /// What a meeting's retained audio means (ADR-024). ADR-016's
+    /// presence-means-pending rule gains one disambiguation: terminal
+    /// convergence now KEEPS the audio, so presence alone no longer implies
+    /// pending — the recorded transcript-provenance source (ADR-022's one
+    /// sanctioned scheduling bit) breaks the tie.
+    nonisolated enum RetainedAudioDisposition: Equatable, Sendable {
+        /// No retained audio: the meeting is final, its draft was kept, or
+        /// retention never armed.
+        case none
+        /// Audio with no transcript provenance: an unfinished cycle — the
+        /// launch scan auto-resumes it (ADR-016, unchanged).
+        case pending
+        /// Audio with `liveFloor` provenance: a terminally converged draft —
+        /// never auto-resumed; only the user's Retry opens a new cycle.
+        case terminalDraft
+        /// Audio with `finalPass` provenance: the orphan of a success whose
+        /// cleanup crashed between the transcript replace and the audio
+        /// deletion — swept, never re-run (the transcript is already final).
+        case finalPassOrphan
+    }
+
+    /// The pure classification rule — one source of truth for the
+    /// disposition query, the launch scan, and the orphan sweep.
+    nonisolated static func classifyRetainedAudio(
+        present: Bool,
+        transcriptSource: TranscriptProvenance.Source?
+    ) -> RetainedAudioDisposition {
+        guard present else { return .none }
+        switch transcriptSource {
+        case nil: return .pending
+        case .liveFloor: return .terminalDraft
+        case .finalPass: return .finalPassOrphan
+        }
+    }
+
+    /// Classifies one meeting's retained audio from disk: file presence +
+    /// the meta's recorded provenance, nothing else (ADR-024 — no new files,
+    /// no new state markers). An unreadable meta classifies like a missing
+    /// provenance; the scan never reaches it anyway (`listMetas` skips it).
+    func retainedAudioDisposition(for id: UUID) -> RetainedAudioDisposition {
+        let meta = try? decode(MeetingMeta.self, from: directory(for: id).appending(path: Filename.meta))
+        return Self.classifyRetainedAudio(
+            present: hasRetainedAudio(for: id),
+            transcriptSource: meta?.transcriptProvenance?.source
+        )
+    }
+
+    /// ADR-016 amended by ADR-024: retained audio marks a meeting pending
+    /// only while no transcript provenance is recorded — the terminal
+    /// transition's single atomic meta write (`liveFloor`) is what ends the
+    /// pending classification while the audio stays for the manual Retry.
+    func isPendingFinalization(_ id: UUID) -> Bool {
+        retainedAudioDisposition(for: id) == .pending
+    }
+
     /// Meetings still pending finalization, newest first — the launch-resume
-    /// work queue (ADR-016: crash-resume is a directory scan). Classified
-    /// purely by retained-audio presence. Trashed meetings are excluded: the
-    /// user set them aside, and their retention is deleted with the folder
-    /// (a restore surfaces them to the next launch's scan).
+    /// work queue (ADR-016: crash-resume is a directory scan) and the
+    /// summary backfill's exclusion set. Only the true pending class
+    /// qualifies (ADR-024): terminal drafts rest until the user retries (and
+    /// their floor summary may generate), finalPass orphans are sweep
+    /// targets. Trashed meetings are excluded: the user set them aside, and
+    /// their retention is deleted with the folder (a restore surfaces them
+    /// to the next launch's scan).
     func pendingFinalizationMeetingIDs() -> [UUID] {
         listMetas()
-            .filter { !$0.isTrashed && isPendingFinalization($0.id) }
+            .filter { !$0.isTrashed && disposition(of: $0) == .pending }
             .map(\.id)
+    }
+
+    /// Deletes the retained audio of meetings whose provenance says
+    /// `finalPass` (ADR-024): orphans of a success whose cleanup crashed
+    /// after the transcript replace. Their transcript is already final, so
+    /// the audio is swept — never re-run. Runs at launch, before the resume
+    /// enqueue. Trashed meetings stay outside the scan (existing rule).
+    func sweepFinalPassAudioOrphans() {
+        for meta in listMetas() where !meta.isTrashed && disposition(of: meta) == .finalPassOrphan {
+            deleteRetainedAudio(for: meta.id)
+        }
+    }
+
+    /// Classification with the meta already in hand (the scan and sweep walk
+    /// `listMetas` — no second decode per meeting).
+    private func disposition(of meta: MeetingMeta) -> RetainedAudioDisposition {
+        Self.classifyRetainedAudio(
+            present: hasRetainedAudio(for: meta.id),
+            transcriptSource: meta.transcriptProvenance?.source
+        )
     }
 
     /// Hidden sibling of the meeting folders where a live session stages its

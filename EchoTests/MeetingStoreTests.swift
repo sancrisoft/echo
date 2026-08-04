@@ -283,6 +283,79 @@ struct MeetingStoreTests {
         }
     }
 
+    // MARK: - Retained-audio disposition (SP-007, ADR-024)
+
+    /// Arms retained audio in the meeting folder (the ADR-016 marker).
+    private func plantRetainedAudio(for id: UUID, in store: MeetingStore) throws {
+        let url = store.directory(for: id)
+            .appending(path: MeetingStore.retainedAudioFileName(for: .microphone))
+        try Data("retained".utf8).write(to: url)
+    }
+
+    @Test("disposition reads audio presence + provenance source: none, pending, terminal draft, orphan")
+    func retainedAudioDispositionRows() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            // No audio → nothing retained, whatever the provenance says.
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .none)
+            #expect(await !store.hasRetainedAudio(for: meta.id))
+            #expect(await !store.isPendingFinalization(meta.id))
+
+            // Audio + no provenance → pending (auto-resume, as ever).
+            try plantRetainedAudio(for: meta.id, in: store)
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .pending)
+            #expect(await store.hasRetainedAudio(for: meta.id))
+            #expect(await store.isPendingFinalization(meta.id))
+
+            // Audio + liveFloor → terminal draft: kept for the manual Retry,
+            // no longer pending (ADR-024's one atomic meta write).
+            try await store.recordLiveFloorProvenance(
+                for: meta.id,
+                provenance: makeProvenance(source: .liveFloor, modelName: "large-v3-v20240930_626MB", tier: "reuseLive")
+            )
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .terminalDraft)
+            #expect(await store.hasRetainedAudio(for: meta.id))
+            #expect(await !store.isPendingFinalization(meta.id))
+
+            // Audio + finalPass → the orphan of a success whose cleanup
+            // crashed between the transcript replace and the audio deletion.
+            try await store.replaceTranscript(makeSegments(), provenance: makeProvenance(), for: meta.id)
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .finalPassOrphan)
+            #expect(await !store.isPendingFinalization(meta.id))
+        }
+    }
+
+    @Test("keep-draft deletes exactly the kept audio — meta and transcript byte-identical")
+    func keepDraftDeletesOnlyRetainedAudio() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            let segments = makeSegments()
+            try await store.save(MeetingRecord(meta: meta, segments: segments, summary: nil))
+            // The terminal-draft state: liveFloor provenance + kept audio.
+            try await store.recordLiveFloorProvenance(
+                for: meta.id,
+                provenance: makeProvenance(source: .liveFloor, modelName: "large-v3-v20240930_626MB", tier: "reuseLive")
+            )
+            try plantRetainedAudio(for: meta.id, in: store)
+            let directory = store.directory(for: meta.id)
+            let metaBytes = try Data(contentsOf: directory.appending(path: "meta.json"))
+            let transcriptBytes = try Data(contentsOf: directory.appending(path: "transcript.json"))
+
+            // "Keep draft" (ADR-024): the user accepts the draft as final and
+            // ends retention — nothing but the audio may change.
+            await store.deleteRetainedAudio(for: meta.id)
+
+            #expect(await !store.hasRetainedAudio(for: meta.id))
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .none)
+            #expect(try Data(contentsOf: directory.appending(path: "meta.json")) == metaBytes)
+            #expect(try Data(contentsOf: directory.appending(path: "transcript.json")) == transcriptBytes)
+            // The Draft badge survives: provenance still says liveFloor.
+            #expect(try await store.loadRecord(meta.id).meta.transcriptProvenance?.source == .liveFloor)
+        }
+    }
+
     // MARK: - listMetas
 
     @Test("listMetas is empty when no meeting has ever been saved")

@@ -12,14 +12,18 @@
 //  process newest-first, with the just-stopped meeting's own pass
 //  front-running the deferred queue.
 //
-//  Retry design (ADR-016): max 2 attempts per meeting per app run; a
-//  preemption is a deferral, never an attempt. ADR-016 rejects persisted
-//  state files, so no attempt counter survives the process — instead
-//  "attempts exhausted in this run" is TERMINAL: the retained audio is
-//  deleted, the live floor stands with an honest notice, and the summary
-//  generates from the floor. Per-run bounding + terminal-on-exhaustion keeps
-//  failure convergent across launches (a run either converges or is quit
-//  mid-pass — and a mid-pass quit leaves the audio, so the next launch
+//  Retry design (ADR-016, amended by ADR-024): max 2 attempts per meeting per
+//  app run; a preemption is a deferral, never an attempt. ADR-016 rejects
+//  persisted state files, so no attempt counter survives the process —
+//  instead "attempts exhausted in this run" is TERMINAL: ONE atomic meta
+//  write records live-floor provenance, the retained audio is KEPT, and the
+//  live floor stands as a draft whose summary generates from it. From the
+//  draft, retries are manual only: the user's Retry re-admits the meeting
+//  with a fresh attempt budget at the front of the queue — bounded within
+//  every cycle, user-paced across cycles, never an automatic loop. Per-run
+//  bounding + terminal-on-exhaustion keeps failure convergent across
+//  launches (a run either converges or is quit mid-pass — and a mid-pass
+//  quit leaves the audio with no provenance recorded, so the next launch
 //  resumes with a fresh budget; the audio is the checkpoint).
 //
 //  `FinalizationCoordinator` is the thin main-actor driver: it feeds events
@@ -69,13 +73,22 @@ nonisolated struct FinalizationMachine: Sendable {
         /// while requested or granted, no new pass starts.
         case summaryRequested
         case summaryEnded
+        /// The user pressed Retry on a terminal draft (ADR-024): clear the
+        /// meeting's terminal exclusion and failed-attempt history (a fresh
+        /// bounded cycle) and admit it at the FRONT of the queue — the
+        /// user-request discipline. Normal admission still gates the start
+        /// (recording, summary work, open pipelines). Also valid for a
+        /// meeting terminal only on disk (a relaunch: this set is in-memory)
+        /// — there is simply nothing to clear.
+        case manualRetryRequested(UUID)
     }
 
     enum Action: Equatable, Sendable {
         case startPass(meetingID: UUID, attempt: Int)
-        /// Retries exhausted this run (ADR-016 terminal convergence): delete
-        /// the retained audio, log honestly; the summary generates from the
-        /// live floor.
+        /// Retries exhausted this run (terminal convergence, ADR-016/ADR-024):
+        /// record live-floor provenance on the meeting's meta — one atomic
+        /// write, the retained audio stays KEPT for the manual Retry; the
+        /// summary generates from the live floor.
         case converge(meetingID: UUID)
         /// Resume `count` waiting summary-work requests.
         case grantSummary(count: Int)
@@ -171,6 +184,18 @@ nonisolated struct FinalizationMachine: Sendable {
 
         case .summaryEnded:
             summaryActive = max(0, summaryActive - 1)
+            return maybeStartPass()
+
+        case .manualRetryRequested(let id):
+            // Fresh cycle: forget the terminal exclusion and the exhausted
+            // attempt budget — only the user re-opens a converged meeting
+            // (ADR-024), so this can never become an automatic loop.
+            terminalMeetingIDs.remove(id)
+            failedAttempts[id] = nil
+            // Already decoding: the running attempt IS the retry.
+            guard runningMeetingID != id else { return [] }
+            queue.removeAll { $0 == id }
+            queue.insert(id, at: 0)
             return maybeStartPass()
         }
     }
@@ -272,8 +297,11 @@ final class FinalizationCoordinator {
     /// Runs before every pass starts: release any idle-warm summary model so
     /// it is never resident while a pass decodes (ADR-014 admission).
     var prepareForPass: @MainActor () async -> Void = {}
-    /// Terminal convergence (ADR-016): delete exactly this meeting's retained
-    /// audio — the pending marker — so the meeting reads final.
+    /// Terminal convergence (ADR-024): record live-floor provenance on the
+    /// meeting's meta — ONE atomic write, nothing else beside it. The
+    /// retained audio is KEPT for the manual Retry; the provenance bit is
+    /// what reclassifies the meeting out of pending (a crash before the
+    /// write re-enters pending and converges again — self-healing).
     var convergeTerminally: @MainActor (UUID) async -> Void = { _ in }
     /// A pass concluded outside a stop path's await (launch-resumed or
     /// deferred work): the meeting is summary-eligible now — kick the backfill.
@@ -350,6 +378,15 @@ final class FinalizationCoordinator {
             stopAwaiters[meetingID] = continuation
             apply(machine.handle(.stopPassRequested(meetingID)))
         }
+    }
+
+    /// The user's Retry on a terminal draft (ADR-024): re-admits the meeting
+    /// with a fresh bounded attempt budget at the front of the queue. Fire-
+    /// and-forget like `requestResume` — the pass runs under the same
+    /// admission rules (recording preempts, summary work gates), and a cycle
+    /// that converges again returns to the draft, audio still kept.
+    func requestManualRetry(_ meetingID: UUID) {
+        apply(machine.handle(.manualRetryRequested(meetingID)))
     }
 
     // MARK: Summary admission (ADR-014)
@@ -437,8 +474,8 @@ final class FinalizationCoordinator {
         } else if case .replaced = result {
             // Launch-resumed / deferred pass succeeded: the meeting is no
             // longer pending, so the backfill may summarize it now. (Terminal
-            // conclusions kick from `converge`, after the audio deletion that
-            // clears the pending marker.)
+            // conclusions kick from `converge`, after the provenance write
+            // that ends the meeting's pending classification — ADR-024.)
             onPassConcluded(meetingID)
         }
     }
@@ -467,12 +504,13 @@ final class FinalizationCoordinator {
     private func converge(_ meetingID: UUID) {
         Self.log.error("""
         Finalization retries exhausted for meeting \(meetingID.uuidString, privacy: .public) — \
-        live transcript stands, retained audio deleted (terminal, ADR-016)
+        live transcript stands as a draft, retained audio kept for manual Retry (terminal, ADR-024)
         """)
         // Captured now: `converge` runs before the stop awaiter (if any) is
         // resolved, and an awaited meeting's summary comes from its own stop
         // pipeline — only unawaited (launch-resumed) conclusions kick the
-        // backfill, and only after the deletion clears the pending marker.
+        // backfill, and only after the provenance write reclassifies the
+        // draft out of pending (its floor summary may then generate).
         let awaited = stopAwaiters[meetingID] != nil
         Task { [weak self] in
             guard let self else { return }
