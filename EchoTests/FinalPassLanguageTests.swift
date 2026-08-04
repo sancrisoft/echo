@@ -2,86 +2,100 @@
 //  FinalPassLanguageTests.swift
 //  EchoTests
 //
-//  SP-005 S3: session-informed per-window language with hysteresis. The
-//  binding requirement is "audio never discarded for language reasons" —
-//  every table row returns a decode language; no input ever means "skip the
-//  window". Hysteresis (N=2 consecutive windows to switch) lets genuinely
-//  mixed es/en meetings switch while single-window flickers don't.
+//  SP-007 (ADR-020): final-pass language is decided per window on voiced
+//  evidence — no session lock. A confident in-whitelist detection decides its
+//  own window and becomes the session fallback; everything else (failed,
+//  out-of-whitelist, below-floor detections) falls back to the most recent
+//  confident language, default "en". The SP-005 hysteresis (two-window switch
+//  streak) is deliberately retired: on a backchannel-dominated channel it
+//  locked the whole session to English and made Whisper *translate* the
+//  user's Spanish (the 2026-08-04 covert-translation failure).
 //
 
 import Testing
 @testable import Echo
 
-@Suite("FinalPassLanguageTracker")
+@Suite("FinalPassLanguageTracker (ADR-020 per-window policy)")
 struct FinalPassLanguageTests {
 
-    /// Runs a detection sequence through one tracker, collecting the decode
-    /// language chosen for each window.
-    private func decodeLanguages(for detections: [String?]) -> [String] {
+    /// Runs a per-window detection sequence (language + its detection
+    /// probability) through one tracker, collecting each window's decode
+    /// language — the pure function the tables drive.
+    private func decodeLanguages(
+        for detections: [(language: String?, probability: Float)]
+    ) -> [String] {
         var tracker = FinalPassLanguageTracker()
-        return detections.map { tracker.decodeLanguage(forDetection: $0) }
+        return detections.map { detection in
+            var probabilities: [String: Float] = [:]
+            if let language = detection.language {
+                probabilities[language] = detection.probability
+            }
+            return tracker.decodeLanguage(
+                detection: detection.language,
+                probabilities: probabilities
+            )
+        }
     }
 
-    @Test("undecided sessions decode in the default language, never skip")
-    func undecidedFallsBackToDefault() {
-        // Failed detection and out-of-whitelist detection, before any
-        // confident evidence: the window still decodes, in English.
-        #expect(decodeLanguages(for: [nil]) == ["en"])
-        #expect(decodeLanguages(for: ["de"]) == ["en"])
-        #expect(decodeLanguages(for: ["de", "fr", nil]) == ["en", "en", "en"])
+    /// The motivating row: a microphone channel dominated by English
+    /// backchannel, then a full Spanish sentence. The old hysteresis locked
+    /// "en" and translated it; per-window, the confident es detection decides
+    /// its own window — and the next English window flips right back.
+    @Test("a confident Spanish window decodes Spanish on an English-dominated channel")
+    func confidentSpanishWinsOnEnglishHistory() {
+        let sequence: [(String?, Float)] = [
+            ("en", 0.9), ("en", 0.85), ("es", 0.95), ("en", 0.9),
+        ]
+        #expect(decodeLanguages(for: sequence) == ["en", "en", "es", "en"])
     }
 
-    @Test("the first confident in-whitelist detection sets the session language")
-    func firstConfidentDetectionSetsSession() {
-        #expect(decodeLanguages(for: ["es"]) == ["es"])
-        // Out-of-whitelist noise before it doesn't lock the session to "en".
-        #expect(decodeLanguages(for: ["de", "es"]) == ["en", "es"])
+    @Test("alternating confident detections alternate the decode — whipsaw IS correct per-window")
+    func alternatingDetectionsAlternate() {
+        let sequence: [(String?, Float)] = [
+            ("es", 0.9), ("en", 0.9), ("es", 0.9), ("en", 0.9),
+        ]
+        #expect(decodeLanguages(for: sequence) == ["es", "en", "es", "en"])
     }
 
-    @Test("failed and out-of-whitelist detections keep the session language")
-    func noisyDetectionsKeepSession() {
-        #expect(decodeLanguages(for: ["es", nil, "de", nil]) == ["es", "es", "es", "es"])
+    @Test("no detection falls back to the session language, default English")
+    func noDetectionFallsBack() {
+        #expect(decodeLanguages(for: [(nil, 0)]) == ["en"])
+        #expect(decodeLanguages(for: [("es", 0.9), (nil, 0), (nil, 0)]) == ["es", "es", "es"])
     }
 
-    @Test("a single-window flicker does not switch the session")
-    func singleWindowFlickerDoesNotSwitch() {
-        #expect(decodeLanguages(for: ["es", "en", "es", "es"]) == ["es", "es", "es", "es"])
+    @Test("a below-floor detection is not evidence — the window falls back")
+    func belowFloorFallsBack() {
+        let sequence: [(String?, Float)] = [("es", 0.9), ("en", 0.3)]
+        #expect(decodeLanguages(for: sequence) == ["es", "es"])
     }
 
-    @Test("two consecutive differing detections switch the session (mixed meetings)")
-    func consecutiveDetectionsSwitch() {
-        #expect(decodeLanguages(for: ["es", "en", "en", "en"]) == ["es", "es", "en", "en"])
+    @Test("a below-floor detection never updates the session fallback")
+    func belowFloorNeverUpdatesSession() {
+        let sequence: [(String?, Float)] = [("es", 0.9), ("en", 0.3), (nil, 0)]
+        #expect(decodeLanguages(for: sequence) == ["es", "es", "es"])
     }
 
-    @Test("switching works in both directions across a meeting")
-    func mixedMeetingSwitchesBothWays() {
-        let sequence: [String?] = ["en", "en", "es", "es", "es", "en", "en"]
-        #expect(decodeLanguages(for: sequence) == ["en", "en", "en", "es", "es", "es", "en"])
+    @Test("out-of-whitelist detections fall back however confident they are")
+    func outOfWhitelistFallsBack() {
+        #expect(decodeLanguages(for: [("de", 0.99)]) == ["en"])
+        #expect(decodeLanguages(for: [("es", 0.9), ("de", 0.99)]) == ["es", "es"])
     }
 
-    @Test("an interruption breaks the switch streak — consecutive means consecutive")
-    func interruptionBreaksTheStreak() {
-        // "de" between the two "en" windows resets the pending switch; only
-        // the later back-to-back pair flips the session.
-        let sequence: [String?] = ["es", "en", "de", "en", "en"]
-        #expect(decodeLanguages(for: sequence) == ["es", "es", "es", "es", "en"])
+    @Test("each confident detection updates the session fallback for later undetectable windows")
+    func confidentDetectionUpdatesFallback() {
+        let sequence: [(String?, Float)] = [("es", 0.9), ("en", 0.8), (nil, 0)]
+        #expect(decodeLanguages(for: sequence) == ["es", "en", "en"])
     }
 
-    @Test("a matching detection also resets a pending switch")
-    func matchingDetectionResetsPendingSwitch() {
-        // es, en(pending), es(reset), en(pending again), en(switch)
-        let sequence: [String?] = ["es", "en", "es", "en", "en"]
-        #expect(decodeLanguages(for: sequence) == ["es", "es", "es", "es", "en"])
+    @Test("a detection exactly at the floor counts as confident")
+    func floorBoundaryIsConfident() {
+        let atFloor: [(String?, Float)] = [("es", FinalPassLanguageTracker.confidenceFloor)]
+        #expect(decodeLanguages(for: atFloor) == ["es"])
     }
 
-    @Test("a flicker after a switch does not whipsaw back")
-    func flickerAfterSwitchDoesNotRevert() {
-        let sequence: [String?] = ["es", "en", "en", "es", "en"]
-        #expect(decodeLanguages(for: sequence) == ["es", "es", "en", "en", "en"])
-    }
-
-    @Test("the switch streak is two consecutive windows")
-    func switchStreakIsTwo() {
-        #expect(FinalPassLanguageTracker.switchStreak == 2)
+    @Test("the default language is English and the floor is majority probability mass")
+    func constants() {
+        #expect(FinalPassLanguageTracker.defaultLanguage == "en")
+        #expect(FinalPassLanguageTracker.confidenceFloor == 0.5)
     }
 }

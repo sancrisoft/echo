@@ -824,6 +824,46 @@ actor TranscriptionPipeline {
         return segments
     }
 
+    /// SP-007 (ADR-019 rule 2): the final pass's segment assembly. Judges
+    /// every raw segment against energy stats sliced from ITS OWN time span
+    /// of the window's samples, through the SAME cleaned/noise/boilerplate
+    /// filters as the live path — per-segment granularity is what catches a
+    /// hallucination inside a window that has speech elsewhere. Live callers
+    /// keep the chunk-level `transcriptSegments` above: live chunks are
+    /// short, gate-checked whole, and bound to the show-something contract
+    /// (SP-007 Reliability NFR — the live path must not move).
+    static func evidenceJudgedSegments(
+        from segments: [TranscriptionSegment],
+        channel: AudioChannel,
+        offset: TimeInterval,
+        windowSamples: [Float]
+    ) -> [TranscriptSegment] {
+        let who = speaker(for: channel)
+        var produced: [TranscriptSegment] = []
+        for segment in segments {
+            let span = sampleSpan(of: segment, within: windowSamples.count)
+            let stats = AudioStats.compute(from: Array(windowSamples[span]))
+            guard let text = cleaned(segment.text, channel: channel, segment: segment, audio: stats) else { continue }
+            produced.append(TranscriptSegment(
+                channel: channel,
+                speaker: who,
+                text: text,
+                start: offset + Double(segment.start),
+                end: offset + Double(segment.end)
+            ))
+        }
+        return produced
+    }
+
+    /// The window-relative sample range a segment's timestamps cover, clamped
+    /// to the window. An out-of-range span degrades to an empty slice, whose
+    /// all-zero stats fail the gates — the conservative direction (ADR-019).
+    private static func sampleSpan(of segment: TranscriptionSegment, within count: Int) -> Range<Int> {
+        let start = max(0, min(count, Int(Double(segment.start) * AudioConstants.sampleRate)))
+        let end = max(start, min(count, Int(Double(segment.end) * AudioConstants.sampleRate)))
+        return start..<end
+    }
+
     private func cachedOrRestrictedLanguage(for audio: [Float], from channel: AudioChannel, using whisper: WhisperKit) async -> String? {
         if let language = detectedLanguages[channel] { return language }
         return await restrictedLanguage(for: audio, from: channel, using: whisper)
@@ -918,6 +958,13 @@ actor TranscriptionPipeline {
             "from below", "but im not", "but i m not", "im not sure", "i m not sure",
             "happy birthday", "gracias",
             "you", "so", "um", "uh", "mhm", "mm hmm", "uh huh",
+            // YouTube-training artifacts observed in the 2026-08-04 real
+            // meeting (SP-007). Entries are normalizedWords forms — note
+            // "that s" (apostrophes split words).
+            "subtitles by the amara org community",
+            "see you in the next one", "see you in the next video",
+            "i think that s it for this video",
+            "hi there my name is", "mumbling",
         ]
 
         guard commonHallucinations.contains(normalized) else { return false }
@@ -927,7 +974,9 @@ actor TranscriptionPipeline {
         return short && (!audio.hasClearSpeech || lowConfidence)
     }
 
-    private static func normalizedWords(_ text: String) -> [String] {
+    /// Internal (not private): the final-pass discipline's run-collapse
+    /// near-identity reuses exactly this normalization (SP-007, ADR-019).
+    static func normalizedWords(_ text: String) -> [String] {
         text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }

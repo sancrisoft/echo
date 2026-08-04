@@ -13,12 +13,16 @@
 //      the pinned WhisperKit prepends them behind startOfPreviousToken in
 //      `prefillDecoderInputs`, so they genuinely condition decoding)
 //    - temperature-fallback retries on flagged windows (`finalDecodeOptions`)
-//    - session-informed language with hysteresis (`FinalPassLanguageTracker`;
-//      audio is never discarded for language reasons)
+//    - per-window language on voiced evidence with the session language as
+//      fallback and an alternate-language re-decode on flagged windows
+//      (SP-007, ADR-020; audio is never discarded for language reasons)
 //    - evidence-based speech-region selection (`SpeechRegionSelector`) — the
 //      live path's anti-hallucination speech gates never see a full-timeline
 //      decode, and the pinned WhisperKit's noSpeechProb is dead code
 //      (hardcoded 0), so silence discipline must come from energy evidence
+//    - the SP-007 decode discipline (`FinalPassDiscipline`, ADR-019):
+//      tail-pad hygiene, rejection after exhausted fallback, per-segment
+//      energy evidence, per-channel run collapse, and the empty-output guard
 //    - ADR-003 dedup re-applied to the complete final segment set
 //
 //  The loop is deliberately window-driven: `shouldYield` is checked before
@@ -187,60 +191,6 @@ nonisolated struct FinalPassPromptChain: Sendable {
     }
 }
 
-/// Session-informed per-window language with hysteresis (SP-005 S3), one
-/// tracker per channel. Replaces the live path's per-chunk detect-and-discard:
-/// the final pass never skips audio for language reasons — every window
-/// decodes, in the best language the session's evidence supports.
-nonisolated struct FinalPassLanguageTracker: Sendable {
-
-    /// A differing in-whitelist detection must repeat on this many consecutive
-    /// windows to switch the session language — mixed es/en meetings switch on
-    /// real transitions while single-window flickers (Whisper mis-detecting
-    /// one noisy window) don't whipsaw the decode.
-    static let switchStreak = 2
-
-    /// Decode language while no confident in-whitelist detection has arrived.
-    static let defaultLanguage = "en"
-
-    private(set) var sessionLanguage: String?
-    private var pendingLanguage: String?
-    private var pendingCount = 0
-
-    /// The language this window decodes with, given the window's detection
-    /// (nil when detection failed). Out-of-whitelist detections keep the
-    /// current session language (or the default while undecided) and break
-    /// any pending switch streak — they are noise, not evidence.
-    mutating func decodeLanguage(forDetection detection: String?) -> String {
-        guard let detection,
-              TranscriptionPipeline.allowedTranscriptionLanguages.contains(detection) else {
-            pendingLanguage = nil
-            pendingCount = 0
-            return sessionLanguage ?? Self.defaultLanguage
-        }
-        guard let current = sessionLanguage else {
-            // First confident detection sets the session language.
-            sessionLanguage = detection
-            return detection
-        }
-        guard detection != current else {
-            pendingLanguage = nil
-            pendingCount = 0
-            return current
-        }
-        if pendingLanguage == detection {
-            pendingCount += 1
-        } else {
-            pendingLanguage = detection
-            pendingCount = 1
-        }
-        guard pendingCount >= Self.switchStreak else { return current }
-        sessionLanguage = detection
-        pendingLanguage = nil
-        pendingCount = 0
-        return detection
-    }
-}
-
 /// Evidence-based speech-region selection (SP-005 S3) — the live path's
 /// anti-hallucination defense, moved: speech gates never see a full-timeline
 /// decode and the pinned WhisperKit's noSpeechProb is dead code, so the final
@@ -316,6 +266,11 @@ nonisolated enum FinalizationPass {
         case preempted
         /// The retained file couldn't be opened or read as 16 kHz Float PCM.
         case unreadableAudio(String)
+        /// Speech regions existed but the decode discipline dropped every
+        /// segment (ADR-019's empty-output guard): a filter bug must never
+        /// silently erase a good transcript, so the pass fails and the
+        /// caller's live floor stands.
+        case emptyDisciplinedOutput
     }
 
     /// The final pass's decode options: the live path's tightened thresholds,
@@ -358,8 +313,9 @@ nonisolated enum FinalizationPass {
         onProgress(progress.fraction)
 
         var segments: [TranscriptSegment] = []
+        var anySpeechRegions = false
         for (index, entry) in channels.enumerated() {
-            segments += try await transcribeChannel(
+            let channelResult = try await transcribeChannel(
                 url: entry.url,
                 channel: entry.channel,
                 model: model,
@@ -368,6 +324,8 @@ nonisolated enum FinalizationPass {
                     onProgress(progress.advance(channel: index, decodedThrough: decodedThrough))
                 }
             )
+            segments += channelResult.segments
+            anySpeechRegions = anySpeechRegions || channelResult.hadSpeechRegions
             // Trailing silence after the channel's last speech region counts
             // as instantly decoded — the channel contributes its full share.
             onProgress(progress.finishChannel(index))
@@ -377,10 +335,34 @@ nonisolated enum FinalizationPass {
         // holds every Team segment, so echoes whose counterpart transcribed
         // too late to match live are caught here — batch dedup is only ever
         // stronger than live, and keep-on-doubt still rules the close calls.
-        return EchoDedupPolicy().dedupe(final: ordered)
+        let deduped = EchoDedupPolicy().dedupe(final: ordered)
+        // ADR-019's empty-output guard: empty output is a legitimate success
+        // only where the energy evidence itself says nobody spoke.
+        if FinalPassDiscipline.emptyOutputIsFailure(
+            regionsSelected: anySpeechRegions,
+            outputEmpty: deduped.isEmpty
+        ) {
+            ErrorTrace.record(
+                "Final pass dropped every segment despite speech regions — floor stands",
+                category: "FinalizationPass"
+            )
+            throw PassError.emptyDisciplinedOutput
+        }
+        return deduped
     }
 
     // MARK: - Per-channel window loop
+
+    /// One decoded window's disciplined outcome, computed inside the model
+    /// lend and applied to the loop state outside it.
+    private struct WindowOutcome: Sendable {
+        let segments: [TranscriptSegment]
+        let windowTokens: [Int]
+        let tracker: FinalPassLanguageTracker
+        /// The language the kept decode actually ran in (the A/B backstop may
+        /// have switched it) — what the next window's chain-reset compares.
+        let language: String
+    }
 
     private static func transcribeChannel(
         url: URL,
@@ -388,7 +370,7 @@ nonisolated enum FinalizationPass {
         model: some FinalPassModelProviding,
         shouldYield: @Sendable () -> Bool,
         onWindowDecoded: (Int) -> Void = { _ in }
-    ) async throws -> [TranscriptSegment] {
+    ) async throws -> (segments: [TranscriptSegment], hadSpeechRegions: Bool) {
         let file: AVAudioFile
         do {
             file = try AVAudioFile(forReading: url)
@@ -418,6 +400,7 @@ nonisolated enum FinalizationPass {
         var segments: [TranscriptSegment] = []
         var languageTracker = FinalPassLanguageTracker()
         var chain = FinalPassPromptChain()
+        var previousLanguage: String?
 
         for window in windows {
             if shouldYield() { throw PassError.preempted }
@@ -426,36 +409,84 @@ nonisolated enum FinalizationPass {
             let clip = FinalPassWindowPlan.paddedClip(samples[...])
             let offset = Double(window.lowerBound) / AudioConstants.sampleRate
             let carriedTracker = languageTracker
-            let promptTokens = chain.promptTokens
+            let carriedPrevious = previousLanguage
+            let carriedPrompt = chain.promptTokens
 
-            let (produced, windowTokens, advancedTracker) = try await model.withModel {
-                whisper -> ([TranscriptSegment], [Int], FinalPassLanguageTracker) in
-                // Session-informed language with hysteresis (SP-005): the
-                // window always decodes — out-of-whitelist or failed
-                // detections fall back to the session language, never skip.
+            let outcome = try await model.withModel { whisper -> WindowOutcome in
+                // Per-window language on voiced evidence (ADR-020): detection
+                // runs on the UNPADDED window samples — the window covers a
+                // selected speech region, so this is what was actually voiced,
+                // never the silence pad. The window always decodes: failed,
+                // out-of-whitelist, and unconfident detections fall back to
+                // the session language, never skip.
                 var tracker = carriedTracker
-                let detection = try? await whisper.detectLangauge(audioArray: clip)
-                let language = tracker.decodeLanguage(forDetection: detection?.language)
+                let detection = try? await whisper.detectLangauge(audioArray: samples)
+                let language = tracker.decodeLanguage(
+                    detection: detection?.language,
+                    probabilities: detection?.langProbs ?? [:]
+                )
+
+                // A language change orphans the previous window's prior-text
+                // conditioning (ADR-020 rule 4) — text in another language
+                // would drag this decode toward it.
+                let promptTokens = FinalPassDiscipline.shouldResetChain(
+                    previousLanguage: carriedPrevious,
+                    windowLanguage: language
+                ) ? nil : carriedPrompt
 
                 var options = finalDecodeOptions
                 options.language = language
                 options.promptTokens = promptTokens
                 let results = try await whisper.transcribe(audioArray: clip, decodeOptions: options)
 
-                // Same segment assembly + noise/boilerplate filters as the
-                // live path (the post-filter second line of defense), with
-                // recording-relative timestamps (window offset + within-window
-                // segment offsets). Stats come from the unpadded samples so
-                // the filters judge the real audio.
-                let stats = AudioStats.compute(from: samples)
-                let produced = TranscriptionPipeline.transcriptSegments(
-                    from: results,
+                // Tail-pad hygiene before anything judges the raw segments:
+                // the clip's real audio ends at the window boundary, and the
+                // decoder extrapolates into the pad (ADR-019 rule 4).
+                let windowDuration = Double(samples.count) / AudioConstants.sampleRate
+                var raw = FinalPassDiscipline.tailPadHygiene(
+                    results.flatMap(\.segments),
+                    windowDuration: windowDuration
+                )
+                var chosenLanguage = language
+
+                // A/B backstop (ADR-020 rule 3): a window still failing the
+                // model's own thresholds after temperature fallback gets one
+                // re-decode in the other whitelist language; the better
+                // model-reported confidence is kept — and remains subject to
+                // the discipline below (both may lose). No prompt: the chain
+                // is in the primary language.
+                if FinalPassDiscipline.isQualityFlagged(raw),
+                   let alternate = FinalPassDiscipline.alternateWhitelistLanguage(to: language) {
+                    var alternateOptions = finalDecodeOptions
+                    alternateOptions.language = alternate
+                    alternateOptions.promptTokens = nil
+                    if let alternateResults = try? await whisper.transcribe(
+                        audioArray: clip, decodeOptions: alternateOptions
+                    ) {
+                        let alternateRaw = FinalPassDiscipline.tailPadHygiene(
+                            alternateResults.flatMap(\.segments),
+                            windowDuration: windowDuration
+                        )
+                        if FinalPassDiscipline.abChoice(primary: raw, alternate: alternateRaw) == .alternate {
+                            raw = alternateRaw
+                            chosenLanguage = alternate
+                        }
+                    }
+                }
+
+                // ADR-019 rules 1+2: exhausted-fallback rejection, then
+                // per-segment energy evidence through the live filters —
+                // every kept segment is judged against stats sliced from its
+                // OWN span of the unpadded samples, with recording-relative
+                // timestamps applied.
+                let produced = FinalPassDiscipline.disciplinedWindowSegments(
+                    raw: raw,
                     channel: channel,
                     offset: offset,
-                    stats: stats
+                    windowSamples: samples
                 )
 
-                // Chain only text that survived the post-filters — a dropped
+                // Chain only text that survived the discipline — a dropped
                 // hallucination must not condition the next window. The
                 // leading space matters to Whisper's byte-BPE (mid-stream
                 // words tokenize with the space attached); WhisperKit's
@@ -467,26 +498,37 @@ nonisolated enum FinalizationPass {
                     tokens = tokenizer.encode(text: " " + keptText)
                         .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
                 }
-                return (produced, tokens, tracker)
+                return WindowOutcome(
+                    segments: produced,
+                    windowTokens: tokens,
+                    tracker: tracker,
+                    language: chosenLanguage
+                )
             }
 
-            languageTracker = advancedTracker
-            chain.advance(windowTokens: windowTokens)
-
-            // A segment may bleed into the silence pad; the clip's real audio
-            // ends at the window boundary, so clamp there.
-            let windowEnd = Double(window.upperBound) / AudioConstants.sampleRate
-            segments += produced.map { segment in
-                var clamped = segment
-                clamped.end = min(segment.end, windowEnd)
-                return clamped
+            languageTracker = outcome.tracker
+            // The chain resets when the kept decode's language changed from
+            // the previous window's (ADR-020 rule 4) — including an A/B
+            // switch, whose kept text is in the alternate language.
+            if FinalPassDiscipline.shouldResetChain(
+                previousLanguage: previousLanguage,
+                windowLanguage: outcome.language
+            ) {
+                chain = FinalPassPromptChain()
             }
+            chain.advance(windowTokens: outcome.windowTokens)
+            previousLanguage = outcome.language
+
+            segments += outcome.segments
 
             // The channel's timeline is decoded through this window's end —
             // silence skipped before it included (SP-005 S6, ADR-007).
             onWindowDecoded(window.upperBound)
         }
-        return segments
+        // ADR-019 rule 3, per channel across windows: no run of 3+
+        // near-identical segments survives; the first member remains as the
+        // ADR-003 dedup timing anchor.
+        return (FinalPassDiscipline.collapseRuns(segments), !regions.isEmpty)
     }
 
     /// Streams the retained file once, computing the 30 ms RMS/peak probe
