@@ -170,11 +170,6 @@ actor TranscriptionPipeline {
     /// cut here. 0.5 s clears normal between-word gaps (<200 ms) but catches
     /// clause/sentence boundaries.
     private let endpointSilence = Int(AudioConstants.sampleRate * 0.5)
-    /// Live transcript previews are re-run on a rolling window while we wait for
-    /// a clean endpoint. They are UI-only and get replaced by final segments.
-    private let partialMinSamples = Int(AudioConstants.sampleRate * 1.25)
-    private let partialWindowSamples = Int(AudioConstants.sampleRate * 5)
-    private let partialUpdateSamples = Int(AudioConstants.sampleRate * 1.25)
 
     // MARK: - Models
 
@@ -239,25 +234,10 @@ actor TranscriptionPipeline {
     private struct ChannelBuffer {
         var samples: [Float] = []
         var chunkStart: TimeInterval = 0
-        var lastPartialSampleCount = 0
-        var partialGeneration = 0
-        var partialInFlight = false
-        var partialRequestID = 0
-    }
-
-    private struct PartialSnapshot {
-        let audio: [Float]
-        let stats: AudioStats
-        let offset: TimeInterval
-        let sessionGeneration: Int
-        let bufferGeneration: Int
-        let requestID: Int
     }
 
     private var mic = ChannelBuffer()
     private var system = ChannelBuffer()
-    private var sessionGeneration = 0
-    private var nextPartialRequestID = 0
 
     /// Receives one record per finalized-chunk gate decision (SP-002 US-12).
     private let gateDiagnostics: any GateDiagnosticsSink
@@ -305,101 +285,6 @@ actor TranscriptionPipeline {
         let offset = buffer.chunkStart
         buffer.chunkStart += Double(n) / AudioConstants.sampleRate
         return (chunk, offset)
-    }
-
-    private func invalidatePartial(for channel: AudioChannel) -> Int {
-        switch channel {
-        case .microphone:
-            return Self.invalidatePartial(&mic)
-        case .system:
-            return Self.invalidatePartial(&system)
-        }
-    }
-
-    private static func invalidatePartial(_ buffer: inout ChannelBuffer) -> Int {
-        buffer.partialGeneration += 1
-        buffer.lastPartialSampleCount = 0
-        return buffer.partialGeneration
-    }
-
-    private func preparePartialSnapshot(for channel: AudioChannel) -> PartialSnapshot? {
-        let buffer: ChannelBuffer
-        switch channel {
-        case .microphone:
-            buffer = mic
-        case .system:
-            buffer = system
-        }
-
-        let sampleCount = buffer.samples.count
-        guard sampleCount >= partialMinSamples else { return nil }
-        guard !buffer.partialInFlight else { return nil }
-        guard sampleCount - buffer.lastPartialSampleCount >= partialUpdateSamples else { return nil }
-
-        let windowCount = min(sampleCount, partialWindowSamples)
-        let windowStart = sampleCount - windowCount
-        let audio = Array(buffer.samples[windowStart..<sampleCount])
-        let stats = AudioStats.compute(from: audio)
-        guard Self.shouldTranscribe(stats, from: channel) else { return nil }
-
-        nextPartialRequestID += 1
-        let requestID = nextPartialRequestID
-        switch channel {
-        case .microphone:
-            mic.partialInFlight = true
-            mic.partialRequestID = requestID
-            mic.lastPartialSampleCount = sampleCount
-        case .system:
-            system.partialInFlight = true
-            system.partialRequestID = requestID
-            system.lastPartialSampleCount = sampleCount
-        }
-
-        return PartialSnapshot(
-            audio: audio,
-            stats: stats,
-            offset: buffer.chunkStart + Double(windowStart) / AudioConstants.sampleRate,
-            sessionGeneration: sessionGeneration,
-            bufferGeneration: buffer.partialGeneration,
-            requestID: requestID
-        )
-    }
-
-    private func finishPartial(
-        for channel: AudioChannel,
-        snapshot: PartialSnapshot,
-        segment: TranscriptSegment?
-    ) async {
-        let isCurrent: Bool
-        switch channel {
-        case .microphone:
-            guard mic.partialRequestID == snapshot.requestID else { return }
-            mic.partialInFlight = false
-            isCurrent = sessionGeneration == snapshot.sessionGeneration
-                && mic.partialGeneration == snapshot.bufferGeneration
-        case .system:
-            guard system.partialRequestID == snapshot.requestID else { return }
-            system.partialInFlight = false
-            isCurrent = sessionGeneration == snapshot.sessionGeneration
-                && system.partialGeneration == snapshot.bufferGeneration
-        }
-
-        guard isCurrent else { return }
-        if let segment {
-            await state?.updatePartial(
-                segment,
-                sessionGeneration: snapshot.sessionGeneration,
-                generation: snapshot.bufferGeneration,
-                requestID: snapshot.requestID
-            )
-        } else {
-            await state?.clearPartial(
-                for: channel,
-                sessionGeneration: snapshot.sessionGeneration,
-                generation: snapshot.bufferGeneration,
-                requestID: snapshot.requestID
-            )
-        }
     }
 
     // MARK: - Lifecycle
@@ -535,11 +420,9 @@ actor TranscriptionPipeline {
     /// Resets per-session state and ensures the models are loaded.
     func start(appendingTo state: RecordingState) async {
         self.state = state
-        sessionGeneration += 1
         detectedLanguages.removeAll()
         mic = ChannelBuffer()
         system = ChannelBuffer()
-        await state.beginPartialSession(sessionGeneration)
 
         if !loaded { await preload(updating: state) }
     }
@@ -548,9 +431,8 @@ actor TranscriptionPipeline {
     /// Test seam (SP-002 S1): marks the pipeline ready to ingest without a
     /// Whisper model, so gate-diagnostics tests can drive the real
     /// ingest → endpoint → gate path. Chunks the gate drops never reach the
-    /// transcriber, and `emit`/`maybeEmitPartial` already tolerate a nil
-    /// `whisper`, so nothing is mocked. Production readiness only ever comes
-    /// from `preload`.
+    /// transcriber, and `emit` already tolerates a nil `whisper`, so nothing
+    /// is mocked. Production readiness only ever comes from `preload`.
     func prepareForGateTestingWithoutTranscriber() {
         loaded = true
     }
@@ -558,12 +440,9 @@ actor TranscriptionPipeline {
 
     /// Flush whatever is left in both buffers at the end of the session.
     func stop() async {
-        sessionGeneration += 1
-        await state?.clearPartials(sessionGeneration: sessionGeneration)
         await emit(.microphone, count: mic.samples.count)
         await emit(.system, count: system.samples.count)
         detectedLanguages.removeAll()
-        await state?.clearPartials(sessionGeneration: sessionGeneration)
     }
 
     // MARK: - Final-pass decode seam (SP-005 S1)
@@ -590,7 +469,6 @@ actor TranscriptionPipeline {
         while let cut = cutPoint(pendingSamples(channel)) {
             await emit(channel, count: cut)
         }
-        await maybeEmitPartial(channel)
     }
 
     // MARK: - Capture-gap clock realignment (SP-002 "input switch mid-recording")
@@ -704,33 +582,6 @@ actor TranscriptionPipeline {
 
     // MARK: - Transcription
 
-    private func maybeEmitPartial(_ channel: AudioChannel) async {
-        guard let whisper else { return }
-        guard let snapshot = preparePartialSnapshot(for: channel) else { return }
-
-        let segment: TranscriptSegment?
-        do {
-            guard let language = await cachedOrRestrictedLanguage(for: snapshot.audio, from: channel, using: whisper) else {
-                await finishPartial(for: channel, snapshot: snapshot, segment: nil)
-                return
-            }
-            var options = Self.liveDecodeOptions
-            options.language = language
-            let results = try await whisper.transcribe(audioArray: snapshot.audio, decodeOptions: options)
-            segment = partialSegment(from: results, channel: channel, offset: snapshot.offset, stats: snapshot.stats)
-        } catch {
-            ErrorTrace.record(
-                "Partial transcribe failed",
-                error: error,
-                category: "TranscriptionPipeline",
-                metadata: ["channel": channel.rawValue]
-            )
-            segment = nil
-        }
-
-        await finishPartial(for: channel, snapshot: snapshot, segment: segment)
-    }
-
     /// Pulls the leading `count` samples off the channel buffer, transcribes
     /// them, and appends the resulting segments. Shared by both channels.
     private func emit(_ channel: AudioChannel, count: Int) async {
@@ -738,23 +589,14 @@ actor TranscriptionPipeline {
         await finalize(chunk, at: offset, on: channel)
     }
 
-    /// Runs an already-detached chunk through partial invalidation, the gate
-    /// decision (recording it — SP-002 US-12), and transcription. Split from
-    /// `emit` so the capture-gap path can detach pre-gap audio and advance
-    /// the clock synchronously before this suspends.
+    /// Runs an already-detached chunk through the gate decision (recording
+    /// it — SP-002 US-12) and transcription. Split from `emit` so the
+    /// capture-gap path can detach pre-gap audio and advance the clock
+    /// synchronously before this suspends.
     private func finalize(_ chunk: [Float], at offset: TimeInterval, on channel: AudioChannel) async {
-        let partialGeneration = invalidatePartial(for: channel)
-        await state?.clearPartial(
-            for: channel,
-            sessionGeneration: sessionGeneration,
-            generation: partialGeneration
-        )
-
         let stats = AudioStats.compute(from: chunk)
         // One diagnostic record per finalized-chunk gate decision, for both
-        // verdicts (SP-002 US-12). Partial-preview gate checks are deliberately
-        // not recorded: they re-measure rolling windows of this same audio and
-        // would double-count it for the input-health classifier (ADR-006).
+        // verdicts (SP-002 US-12).
         let decision = GateDecisionRecord(
             channel: channel,
             chunkDuration: Double(chunk.count) / AudioConstants.sampleRate,
@@ -782,24 +624,6 @@ actor TranscriptionPipeline {
         for segment in Self.transcriptSegments(from: results, channel: channel, offset: offset, stats: stats) {
             await state?.append(segment)
         }
-    }
-
-    private func partialSegment(
-        from results: [TranscriptionResult],
-        channel: AudioChannel,
-        offset: TimeInterval,
-        stats: AudioStats
-    ) -> TranscriptSegment? {
-        let segments = Self.transcriptSegments(from: results, channel: channel, offset: offset, stats: stats)
-        guard let first = segments.first, let last = segments.last else { return nil }
-
-        return TranscriptSegment(
-            channel: channel,
-            speaker: Self.speaker(for: channel),
-            text: segments.map(\.text).joined(separator: " "),
-            start: first.start,
-            end: last.end
-        )
     }
 
     /// Static (pure) so the final pass (SP-005) assembles and filters its
@@ -865,11 +689,6 @@ actor TranscriptionPipeline {
         let start = max(0, min(count, Int(Double(segment.start) * AudioConstants.sampleRate)))
         let end = max(start, min(count, Int(Double(segment.end) * AudioConstants.sampleRate)))
         return start..<end
-    }
-
-    private func cachedOrRestrictedLanguage(for audio: [Float], from channel: AudioChannel, using whisper: WhisperKit) async -> String? {
-        if let language = detectedLanguages[channel] { return language }
-        return await restrictedLanguage(for: audio, from: channel, using: whisper)
     }
 
     private func restrictedLanguage(for audio: [Float], from channel: AudioChannel, using whisper: WhisperKit) async -> String? {

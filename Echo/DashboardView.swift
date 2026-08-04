@@ -9,8 +9,10 @@
 //  searchable, sortable, date-grouped list of compact meeting rows with
 //  working quick actions. Opening a meeting (or the pinned live row / REC
 //  pill while recording) covers the list with the detail: an underlined
-//  Transcript / AI Summary tab bar, the committed transcript, and — while
-//  recording — a footer with the popover's live waves and the partial text.
+//  Transcript / AI Summary tab bar and the committed transcript. While
+//  recording, the Transcript tab shows a calm "Recording" placeholder and a
+//  footer with the popover's live waves — never transcript text (SP-007
+//  final-only UX; the transcript is ready after the meeting ends).
 //
 
 import SwiftUI
@@ -1772,7 +1774,10 @@ private struct DetailTabBar: View {
 
 /// The current session (or empty idle state): the committed transcript and the
 /// streaming/regenerable summary over `controller.state`, plus — while
-/// recording — the footer with the popover's waves and the live partial text.
+/// recording — the footer with the popover's waves. While recording, the
+/// Transcript tab shows a placeholder instead of transcript text (SP-007:
+/// the user never sees a live transcript); the segments keep accumulating
+/// invisibly and surface once the meeting resolves.
 private struct LiveMeetingDetail: View {
     @Environment(RecordingController.self) private var controller
     @Binding var selectedTab: DetailTab
@@ -1782,10 +1787,16 @@ private struct LiveMeetingDetail: View {
             Group {
                 switch selectedTab {
                 case .transcript:
-                    TranscriptScroll(
-                        segments: controller.state.segments,
-                        isRecording: controller.state.isRecording
-                    )
+                    if controller.state.isRecording {
+                        ContentUnavailableView(
+                            "Recording",
+                            systemImage: "waveform",
+                            description: Text("Echo is capturing and transcribing locally. The transcript will be ready after the meeting ends.")
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        TranscriptScroll(segments: controller.state.segments)
+                    }
                 case .summary:
                     summary
                 }
@@ -2033,7 +2044,7 @@ private struct PastMeetingDetail: View {
             if let record {
                 switch selectedTab {
                 case .transcript:
-                    TranscriptScroll(segments: record.segments, isRecording: false)
+                    TranscriptScroll(segments: record.segments)
                 case .summary:
                     summary(for: record)
                 }
@@ -2119,95 +2130,34 @@ private struct PastMeetingDetail: View {
 
 // MARK: - Shared transcript list
 
-/// The committed (final) transcript only — live partial text renders in the
-/// footer, never here. While recording, the list follows new segments
-/// automatically as long as the user is at the bottom; scrolling up detaches
-/// and a floating "Latest" button re-engages. Past meetings never auto-scroll.
+/// The committed (final) transcript of a resolved meeting. Never rendered
+/// while recording (SP-007 final-only UX): the live detail shows a
+/// "Recording" placeholder instead, so this view has no live-follow
+/// machinery — it is a plain, read-only scroll.
 private struct TranscriptScroll: View {
     let segments: [TranscriptSegment]
-    let isRecording: Bool
-
-    /// Whether the viewport currently sits at (or near) the bottom — the
-    /// user's implicit opt-in to keep following new segments.
-    @State private var isAtBottom = true
-
-    /// Stable scroll target below the last row; scrolling to a row id inside
-    /// the LazyVStack is unreliable for not-yet-materialized rows.
-    private static let bottomAnchorID = "transcript-bottom"
 
     var body: some View {
         if segments.isEmpty {
             ContentUnavailableView(
-                isRecording ? "Listening…" : "No transcript",
+                "No transcript",
                 systemImage: "text.bubble",
-                description: Text(isRecording
-                    ? "Text will appear here as people speak."
-                    : "This meeting has no transcript.")
+                description: Text("This meeting has no transcript.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        LazyVStack(alignment: .leading, spacing: 22) {
-                            ForEach(segments) { segment in
-                                SegmentRow(segment: segment)
-                            }
-                        }
-                        // A readable column as in the mockup: capped width,
-                        // centered in the pane.
-                        .frame(maxWidth: 720, alignment: .leading)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 20)
-                        .frame(maxWidth: .infinity)
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id(Self.bottomAnchorID)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    ForEach(segments) { segment in
+                        SegmentRow(segment: segment)
                     }
                 }
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    // "Near bottom" with a small tolerance, so the follow mode
-                    // survives sub-row jitter; also true when the content
-                    // doesn't fill the viewport yet.
-                    geometry.contentOffset.y + geometry.containerSize.height
-                        >= geometry.contentSize.height - 60
-                } action: { _, nearBottom in
-                    isAtBottom = nearBottom
-                }
-                .onChange(of: segments.count) {
-                    guard isRecording, isAtBottom else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-                    }
-                }
-                // Opening the live detail mid-recording starts at the latest
-                // line, matching the follow-by-default behavior.
-                .onAppear {
-                    if isRecording { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    if isRecording && !isAtBottom {
-                        Button {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-                            }
-                        } label: {
-                            Label("Latest", systemImage: "arrow.down")
-                                .font(.callout.weight(.medium))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(.regularMaterial, in: Capsule())
-                                .overlay(Capsule().strokeBorder(.quaternary))
-                                .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .padding(16)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        .help("Jump to the latest transcript line")
-                    }
-                }
-                .animation(.easeOut(duration: 0.18), value: isAtBottom)
+                // A readable column as in the mockup: capped width,
+                // centered in the pane.
+                .frame(maxWidth: 720, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .frame(maxWidth: .infinity)
             }
         }
     }
@@ -2246,9 +2196,9 @@ private struct SegmentRow: View {
 // MARK: - Live transcription footer
 
 /// The detail's bottom bar while recording: the same dual waves as the menu
-/// bar popover (real capture levels), the current live partial text, and the
-/// transcribing / processed-locally status. Final transcript lines never
-/// render here — they land in the list above.
+/// bar popover (real capture levels — the capture-health signal) and the
+/// transcribing / processed-locally status. No transcript text ever renders
+/// here (SP-007: the user never sees a live transcript).
 private struct LiveTranscriptFooter: View {
     @Environment(RecordingController.self) private var controller
 
@@ -2261,12 +2211,6 @@ private struct LiveTranscriptFooter: View {
                     outputLevel: DualWaveView.amplitude(controller.state.outputLevels)
                 )
                 .frame(width: 130, height: 30)
-
-                Text(liveText ?? "Listening…")
-                    .font(.callout.italic())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
 
                 Spacer(minLength: 12)
 
@@ -2294,15 +2238,6 @@ private struct LiveTranscriptFooter: View {
             .padding(.vertical, 10)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    /// The most recent provisional line across both channels. Partials are
-    /// per-channel; the one that starts later is the one being spoken now.
-    private var liveText: String? {
-        let partials = controller.state.partialSegments.values
-        guard let latest = partials.max(by: { $0.start < $1.start }) else { return nil }
-        let text = latest.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text + "…"
     }
 }
 
