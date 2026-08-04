@@ -105,10 +105,25 @@ final class CallIslandPanelController {
         return panel
     }
 
-    /// Centers the island horizontally on the main screen with its top edge
-    /// tucked under the menu bar / notch area.
+    /// The screen the user is most likely looking at.
+    ///
+    /// `NSScreen.main` alone is not enough: it means "the screen with the key
+    /// window", and Echo is an accessory app whose island never takes focus, so
+    /// it resolves to the primary display. On a two-display setup that put the
+    /// island on a screen the user wasn't using — a real call detected, an
+    /// island shown, and nobody saw it (observed during SP-006 QA). The pointer
+    /// is the better signal for "here".
+    private static func targetScreen() -> NSScreen? {
+        let pointer = NSEvent.mouseLocation
+        return NSScreen.screens.first { $0.frame.contains(pointer) }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+    }
+
+    /// Centers the island horizontally on that screen with its top edge tucked
+    /// under the menu bar / notch area.
     private func place(_ panel: NSPanel) {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first,
+        guard let screen = Self.targetScreen(),
               let content = panel.contentView else { return }
 
         content.layoutSubtreeIfNeeded()

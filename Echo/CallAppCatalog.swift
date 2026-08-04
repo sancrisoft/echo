@@ -56,6 +56,16 @@ nonisolated enum CallAppCatalog {
         CallApp(displayName: "Microsoft Teams", bundlePrefix: "com.microsoft.teams"),
         CallApp(displayName: "Slack", bundlePrefix: "com.tinyspeck.slackmacgap"),
         CallApp(displayName: "Discord", bundlePrefix: "com.hnc.Discord"),
+        // FaceTime is here for completeness, but on macOS 26 it never captures
+        // in its own process, so in practice it never matches. SP-006 open
+        // question 1, resolved against real calls 2026-08-04: the process that
+        // does capture is `com.apple.avconferenced`, and that daemon is NOT
+        // catalogued on purpose — it was observed holding the microphone for 18
+        // minutes across three unrelated app tests with no FaceTime call in
+        // sight. Cataloguing it would mean a permanent "FaceTime call detected"
+        // island (ADR-017's rejected false-positive class) and, worse, a
+        // permanent call that masks every real one after it. FaceTime is
+        // therefore a known detection gap, not a supported app.
         CallApp(displayName: "FaceTime", bundlePrefix: "com.apple.FaceTime"),
         CallApp(displayName: "Webex", bundlePrefix: "Cisco-Systems.Spark"),
         CallApp(displayName: "Google Chrome", bundlePrefix: "com.google.Chrome"),

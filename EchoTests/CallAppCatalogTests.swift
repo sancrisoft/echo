@@ -78,6 +78,15 @@ struct CallAppCatalogTests {
         #expect(CallAppCatalog.match(bundleID: "com.sancrisoft.Echo") == nil)
     }
 
+    @Test func daemonsObservedHoldingTheMicOutsideCallsNeverMatch() {
+        // Both were seen capturing during SP-006's real-call session with no
+        // call of their own: avconferenced held the mic for 18 minutes across
+        // three unrelated app tests (which would have masked every real call
+        // after it), and replayd captures while the screen is being recorded.
+        #expect(CallAppCatalog.match(bundleID: "com.apple.avconferenced") == nil)
+        #expect(CallAppCatalog.match(bundleID: "com.apple.replayd") == nil)
+    }
+
     @Test func anEmptyBundleIDNeverMatches() {
         // Daemons and unbundled processes report no bundle ID; a nameless
         // capture must never be read as a call.
