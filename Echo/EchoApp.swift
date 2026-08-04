@@ -61,6 +61,7 @@ struct EchoApp: App {
         MenuBarExtra {
             MenuBarView()
                 .environment(controller)
+                .environment(settings)
         } label: {
             Image(systemName: controller.isRecording ? "waveform.circle.fill" : "waveform")
         }

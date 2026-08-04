@@ -21,6 +21,7 @@ import AppKit
 
 struct MenuBarView: View {
     @Environment(RecordingController.self) private var controller
+    @Environment(AppSettings.self) private var settings
     @Environment(\.openWindow) private var openWindow
 
     /// Stats for the most recently saved meeting, shown on the idle face.
@@ -171,6 +172,17 @@ struct MenuBarView: View {
             .buttonStyle(.borderedProminent)
             .tint(.echoIndigo)
             .clipShape(Capsule())
+
+            // SP-006: the call-detection island's on/off switch. Lives on the
+            // idle face because that is where "should Echo notice my next
+            // call?" is a question the user might have.
+            Toggle("Suggest recording when a call starts", isOn: Binding(
+                get: { settings.callDetectionEnabled },
+                set: { settings.setCallDetection(enabled: $0) }
+            ))
+            .font(.caption)
+            .toggleStyle(.switch)
+            .controlSize(.mini)
         }
         .frame(maxWidth: .infinity)
     }
