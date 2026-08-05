@@ -360,6 +360,70 @@ struct FinalPassDisciplineTests {
         func bothEmptyKeepsPrimary() {
             #expect(FinalPassDiscipline.abChoice(primary: [], alternate: []) == .primary)
         }
+
+        /// The 2026-08-05 fixture's dominant defect: a decode that returns a
+        /// single EMPTY-TEXT segment reports the default avgLogprob 0.0 —
+        /// which beat every real decode's negative mean and erased whole
+        /// windows (mic 11.3–41.3s, system 68.3–98.3s and 98.3–113.5s all
+        /// died this way, measured). Text-free segments carry no confidence.
+        @Test("an empty-text segment reports no confidence — real text always beats it")
+        func emptyTextNeverWins() {
+            let real = [rawSegment("voy directo con ella", start: 0, end: 4, avgLogprob: -0.5)]
+            let empty = [rawSegment("", start: 0, end: 29.3, avgLogprob: 0.0, compressionRatio: 0.0)]
+            #expect(FinalPassDiscipline.abChoice(primary: real, alternate: empty) == .primary)
+            #expect(FinalPassDiscipline.abChoice(primary: empty, alternate: real) == .alternate)
+        }
+
+        @Test("whitespace-only text is empty text")
+        func whitespaceOnlyIsEmpty() {
+            let real = [rawSegment("de acuerdo con eso", start: 0, end: 3, avgLogprob: -0.7)]
+            let blank = [rawSegment("  .  ", start: 0, end: 29.3, avgLogprob: 0.0)]
+            #expect(FinalPassDiscipline.abChoice(primary: blank, alternate: real) == .alternate)
+        }
+
+        @Test("two all-empty decodes keep the primary")
+        func bothAllEmptyKeepsPrimary() {
+            let emptyA = [rawSegment("", start: 0, end: 29.3, avgLogprob: 0.0)]
+            let emptyB = [rawSegment("", start: 0, end: 29.3, avgLogprob: 0.0)]
+            #expect(FinalPassDiscipline.abChoice(primary: emptyA, alternate: emptyB) == .primary)
+        }
+
+        @Test("confidence means the mean over REAL-text segments only")
+        func meanIgnoresEmptySegments() {
+            let mixed = [
+                rawSegment("hay una idea que nos venden", start: 0, end: 4, avgLogprob: -0.4),
+                rawSegment("", start: 4, end: 29.3, avgLogprob: 0.0),
+            ]
+            #expect(FinalPassDiscipline.meanAvgLogprob(mixed) == -0.4)
+            #expect(FinalPassDiscipline.meanAvgLogprob(
+                [rawSegment("", start: 0, end: 29.3, avgLogprob: 0.0)]
+            ) == nil)
+        }
+    }
+
+    // MARK: - Prompt policy (2026-08-05 second field report)
+
+    @Suite("FinalPassDiscipline — prompt permission")
+    struct PromptPermissionTests {
+
+        /// Uncertain windows dual-decode, and the verdict must compare like
+        /// with like: conditioning inflates the primary's logprob, so a
+        /// wrong-language chained primary could beat a right-language
+        /// promptless alternate (the app's mic 11.3–41.3s English win).
+        /// Uncertain windows therefore decode promptless on BOTH sides; the
+        /// chain still accumulates the kept text and resumes on the next
+        /// decisive window.
+        @Test("only a decisive window may consume the prompt chain")
+        func onlyDecisiveWindowsCarryThePrompt() {
+            #expect(FinalPassDiscipline.promptPermitted(isDecisive: true, chainReset: false))
+            #expect(!FinalPassDiscipline.promptPermitted(isDecisive: false, chainReset: false))
+            #expect(!FinalPassDiscipline.promptPermitted(isDecisive: false, chainReset: true))
+        }
+
+        @Test("a chain reset strips the prompt even from a decisive window")
+        func chainResetStripsPrompt() {
+            #expect(!FinalPassDiscipline.promptPermitted(isDecisive: true, chainReset: true))
+        }
     }
 
     // MARK: - Language-uncertainty A/B trigger (2026-08-05 field report)
@@ -547,6 +611,27 @@ struct FinalPassDisciplineTests {
                 raw: raw, channel: .system, offset: 60.0, windowSamples: window)
             #expect(result.map(\.text) == ["the rollout plan looks solid"])
             #expect(result[0].start == 62.0)
+        }
+
+        /// The replay harness's diagnostic mode attributes every drop to the
+        /// rule that made it — a field defect must be measurable, not
+        /// inferred (2026-08-05 second field report).
+        @Test("drops are attributed to the rule that made them, in raw order")
+        func dropsAreAttributed() {
+            let raw = [
+                rawSegment("the rollout plan looks solid", start: 2.0, end: 6.0),
+                rawSegment("el, ah, el, ah", start: 8.0, end: 12.0, avgLogprob: -1.4, compressionRatio: 3.0),
+                rawSegment("Gracias.", start: 20.0, end: 24.0),
+                rawSegment("thank you", start: 30.2, end: 31.0),   // born in the tail pad
+            ]
+            var drops: [(text: String, rule: FinalPassDiscipline.DropRule)] = []
+            let result = FinalPassDiscipline.disciplinedWindowSegments(
+                raw: raw, channel: .system, offset: 0, windowSamples: window,
+                onDrop: { segment, rule in drops.append((segment.text, rule)) }
+            )
+            #expect(result.map(\.text) == ["the rollout plan looks solid"])
+            #expect(drops.map(\.rule) == [.rejection, .evidence, .hygiene])
+            #expect(drops.map(\.text) == ["el, ah, el, ah", "Gracias.", "thank you"])
         }
 
         @Test("an all-garbage window contributes nothing")

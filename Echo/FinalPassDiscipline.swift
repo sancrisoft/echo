@@ -126,26 +126,54 @@ nonisolated enum FinalPassDiscipline {
 
     // MARK: - The composed per-window pipeline
 
+    /// Which discipline rule dropped a segment — the replay harness's
+    /// diagnostic vocabulary (a field defect must be measurable, not
+    /// inferred; 2026-08-05 field reports).
+    enum DropRule: String, Sendable {
+        case hygiene
+        case rejection
+        case evidence
+        case collapse
+    }
+
     /// One decode's raw segments through rules 4 → 1 → 2 in the fixed order:
     /// tail-pad hygiene first (so evidence slices judge real spans), then
     /// exhausted-fallback rejection, then per-segment energy evidence through
     /// the live filters. Run collapse (rule 3) runs later, per channel across
-    /// windows. `windowSamples` are the window's UNPADDED samples.
+    /// windows. `windowSamples` are the window's UNPADDED samples. `onDrop`
+    /// (diagnostics only — nil in production) receives every dropped segment
+    /// with the rule that made the drop; every rule is a per-segment filter,
+    /// so the per-segment walk is exactly the staged pipeline.
     static func disciplinedWindowSegments(
         raw: [TranscriptionSegment],
         channel: AudioChannel,
         offset: TimeInterval,
-        windowSamples: [Float]
+        windowSamples: [Float],
+        onDrop: ((TranscriptionSegment, DropRule) -> Void)? = nil
     ) -> [TranscriptSegment] {
         let windowDuration = Double(windowSamples.count) / AudioConstants.sampleRate
-        let hygienic = tailPadHygiene(raw, windowDuration: windowDuration)
-        let passing = rejectFailingSegments(hygienic)
-        return TranscriptionPipeline.evidenceJudgedSegments(
-            from: passing,
-            channel: channel,
-            offset: offset,
-            windowSamples: windowSamples
-        )
+        var kept: [TranscriptSegment] = []
+        for segment in raw {
+            guard let clean = tailPadHygiene([segment], windowDuration: windowDuration).first else {
+                onDrop?(segment, .hygiene)
+                continue
+            }
+            guard passesQualityThresholds(clean) else {
+                onDrop?(clean, .rejection)
+                continue
+            }
+            guard let produced = TranscriptionPipeline.evidenceJudgedSegments(
+                from: [clean],
+                channel: channel,
+                offset: offset,
+                windowSamples: windowSamples
+            ).first else {
+                onDrop?(clean, .evidence)
+                continue
+            }
+            kept.append(produced)
+        }
+        return kept
     }
 
     // MARK: - Empty-output guard (ADR-019)
@@ -191,9 +219,10 @@ nonisolated enum FinalPassDiscipline {
     }
 
     /// ADR-020 rule 3's verdict: the decode with the better model-reported
-    /// confidence (mean per-segment avgLogprob) is kept. A decode with no
-    /// segments reports no confidence and loses to one with any; ties and
-    /// empty-vs-empty keep the primary (the detection-decided language).
+    /// confidence (mean per-segment avgLogprob over REAL-text segments) is
+    /// kept. A decode with no real text reports no confidence and loses to
+    /// one with any; ties and empty-vs-empty keep the primary (the
+    /// detection-decided language).
     static func abChoice(
         primary: [TranscriptionSegment],
         alternate: [TranscriptionSegment]
@@ -203,12 +232,30 @@ nonisolated enum FinalPassDiscipline {
         return alternateConfidence > primaryConfidence ? .alternate : .primary
     }
 
-    /// Internal (not private): the window loop logs both decodes' confidence
-    /// on the per-window diagnostic line (2026-08-05 field report — this
-    /// defect class must never need inferring again).
+    /// Model-reported confidence of a decode: the mean avgLogprob over its
+    /// REAL-text segments, nil when there are none. Text-free segments are
+    /// excluded because the pinned WhisperKit emits them with the DEFAULT
+    /// avgLogprob 0.0 — measured on the 2026-08-05 kept fixture, where a
+    /// single empty segment's 0.0 beat every real decode's negative mean,
+    /// won the A/B, then evidence-dropped: whole windows of real Spanish
+    /// erased by text that never existed. Internal (not private): the window
+    /// loop logs both decodes' confidence on the diagnostic line.
     static func meanAvgLogprob(_ segments: [TranscriptionSegment]) -> Float? {
-        guard !segments.isEmpty else { return nil }
-        return segments.reduce(0) { $0 + $1.avgLogprob } / Float(segments.count)
+        let real = segments.filter { !TranscriptionPipeline.normalizedWords($0.text).isEmpty }
+        guard !real.isEmpty else { return nil }
+        return real.reduce(0) { $0 + $1.avgLogprob } / Float(real.count)
+    }
+
+    /// Whether a window's decode may consume the prompt chain. Only a
+    /// DECISIVE window (whose chain wasn't just reset by a language change):
+    /// an uncertain window dual-decodes, and the verdict must compare like
+    /// with like — conditioning inflates the primary's logprob, so a
+    /// wrong-language chained primary can beat a right-language promptless
+    /// alternate (2026-08-05 second field report: the app's mic 11.3–41.3 s
+    /// English translation won exactly this way). The chain still
+    /// accumulates the kept text and resumes on the next decisive window.
+    static func promptPermitted(isDecisive: Bool, chainReset: Bool) -> Bool {
+        isDecisive && !chainReset
     }
 }
 
@@ -251,6 +298,19 @@ nonisolated struct FinalPassLanguageTracker: Sendable {
     /// The most recent decisive detection or dual-decode winner — a prior
     /// for uncertain windows, never an override of a decisive one.
     private(set) var sessionLanguage: String?
+
+    /// The pinned WhisperKit's `detectLangauge` reports LOG probabilities
+    /// (its TextDecoder stores the sampler's log-softmax values — verified
+    /// in source and measured on the 2026-08-05 kept fixture: es@-0.00,
+    /// en@-0.14, en@-1.20). Compared raw against the linear floors, every
+    /// log value is below 0.5, so nothing was ever decisive and every
+    /// window dual-decoded. The conversion lives on the tracker so no call
+    /// site can repeat the unit mistake; positive inputs clamp to certainty.
+    static func linearProbabilities(
+        fromLogProbabilities logProbabilities: [String: Float]
+    ) -> [String: Float] {
+        logProbabilities.mapValues { exp(min($0, 0)) }
+    }
 
     /// One window's language decision.
     struct Decision: Equatable, Sendable {

@@ -107,9 +107,14 @@ struct FinalPassReplayHarness {
         let state = RecordingState()
         await Acceptance.pipeline.start(appendingTo: state)
 
+        // Diagnostic mode (2026-08-05 second field report): the harness is a
+        // local dev tool, so printing transcript text and per-segment metrics
+        // to stdout is fine HERE — per window the language decision and A/B
+        // verdict, per dropped segment the rule that dropped it.
         let segments = try await FinalizationPass.run(
             retainedFiles: retained,
-            model: LivePipelineModelProvider(pipeline: Acceptance.pipeline)
+            model: LivePipelineModelProvider(pipeline: Acceptance.pipeline),
+            diagnostics: { line in print("[replay][diag] \(line)") }
         )
 
         // Compact per-channel report.

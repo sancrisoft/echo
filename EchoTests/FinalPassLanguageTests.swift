@@ -175,4 +175,52 @@ struct FinalPassLanguageTests {
         #expect(FinalPassLanguageTracker.confidenceFloor == 0.5)
         #expect(FinalPassLanguageTracker.decisiveConfidence > FinalPassLanguageTracker.confidenceFloor)
     }
+
+    // MARK: - Log-probability units (2026-08-05 second field report)
+
+    /// The pinned WhisperKit's `detectLangauge` reports LOG probabilities
+    /// (TextDecoder.detectLanguage stores the sampler's log-softmax values —
+    /// verified in source, and measured on the kept fixture: es@-0.00,
+    /// en@-0.14, en@-1.20). Compared raw against the linear floors, every
+    /// value is below 0.5 — so nothing was ever decisive and every window
+    /// dual-decoded. The conversion is the tracker's, so no caller can make
+    /// that unit mistake again.
+    @Test("log probabilities convert to linear before the floors compare")
+    func logProbabilitiesConvert() {
+        let linear = FinalPassLanguageTracker.linearProbabilities(
+            fromLogProbabilities: ["es": -0.001, "en": -1.20]
+        )
+        #expect(abs((linear["es"] ?? 0) - 0.999) < 0.001)
+        #expect(abs((linear["en"] ?? 0) - 0.301) < 0.001)
+    }
+
+    @Test("a positive log probability clamps to certainty instead of exceeding it")
+    func positiveLogProbClamps() {
+        let linear = FinalPassLanguageTracker.linearProbabilities(
+            fromLogProbabilities: ["es": 0.3]
+        )
+        #expect(linear["es"] == 1.0)
+    }
+
+    /// The fixture's measured detections, end to end: es@log(-0.00) must be
+    /// decisive; en@log(-1.20) must not be.
+    @Test("the fixture's measured log detections decide correctly after conversion")
+    func fixtureDetectionsDecideCorrectly() {
+        var tracker = FinalPassLanguageTracker()
+        let decisive = tracker.decodeLanguage(
+            detection: "es",
+            probabilities: FinalPassLanguageTracker.linearProbabilities(
+                fromLogProbabilities: ["es": -0.001]
+            )
+        )
+        #expect(decisive == .init(language: "es", isDecisive: true))
+
+        let uncertain = tracker.decodeLanguage(
+            detection: "en",
+            probabilities: FinalPassLanguageTracker.linearProbabilities(
+                fromLogProbabilities: ["en": -1.20]
+            )
+        )
+        #expect(uncertain == .init(language: "es", isDecisive: false))
+    }
 }

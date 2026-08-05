@@ -287,6 +287,13 @@ nonisolated enum FinalizationPass {
         return options
     }()
 
+    /// Diagnostic sink for the developer replay harness (SP-007 user story
+    /// 13): one human-readable line per window decision and per dropped
+    /// segment, INCLUDING transcript text — which is why production paths
+    /// never pass one (the app's own diagnosability is the text-free
+    /// notice-level window log below).
+    typealias DiagnosticSink = @Sendable (String) -> Void
+
     /// Re-transcribes every retained channel and returns the complete final
     /// segment set, timeline-ordered, ready for the atomic replace. Throws on
     /// any failure — the caller leaves the live transcript standing and keeps
@@ -297,7 +304,8 @@ nonisolated enum FinalizationPass {
         retainedFiles: [AudioChannel: URL],
         model: some FinalPassModelProviding,
         shouldYield: @Sendable () -> Bool = { false },
-        onProgress: @Sendable (Double) -> Void = { _ in }
+        onProgress: @Sendable (Double) -> Void = { _ in },
+        diagnostics: DiagnosticSink? = nil
     ) async throws -> [TranscriptSegment] {
         // Deterministic channel order; the sort below owns the timeline.
         let channels = [AudioChannel.microphone, .system].compactMap { channel in
@@ -322,7 +330,8 @@ nonisolated enum FinalizationPass {
                 shouldYield: shouldYield,
                 onWindowDecoded: { decodedThrough in
                     onProgress(progress.advance(channel: index, decodedThrough: decodedThrough))
-                }
+                },
+                diagnostics: diagnostics
             )
             segments += channelResult.segments
             anySpeechRegions = anySpeechRegions || channelResult.hadSpeechRegions
@@ -375,7 +384,8 @@ nonisolated enum FinalizationPass {
         channel: AudioChannel,
         model: some FinalPassModelProviding,
         shouldYield: @Sendable () -> Bool,
-        onWindowDecoded: (Int) -> Void = { _ in }
+        onWindowDecoded: (Int) -> Void = { _ in },
+        diagnostics: DiagnosticSink? = nil
     ) async throws -> (segments: [TranscriptSegment], hadSpeechRegions: Bool) {
         let file: AVAudioFile
         do {
@@ -428,20 +438,34 @@ nonisolated enum FinalizationPass {
                 // (else argmax, else default) as the prompt-carrying primary.
                 var tracker = carriedTracker
                 let detection = try? await whisper.detectLangauge(audioArray: samples)
+                // The pinned WhisperKit reports LOG probabilities — convert
+                // before the tracker's linear floors compare (2026-08-05
+                // second field report: raw log values made every window
+                // "uncertain").
+                let linearProbs = FinalPassLanguageTracker.linearProbabilities(
+                    fromLogProbabilities: detection?.langProbs ?? [:]
+                )
                 let decision = tracker.decodeLanguage(
                     detection: detection?.language,
-                    probabilities: detection?.langProbs ?? [:]
+                    probabilities: linearProbs
                 )
                 let language = decision.language
 
-                // A language change orphans the previous window's prior-text
-                // conditioning (ADR-020 rule 4) — text in another language
-                // would drag this decode toward it.
-                let promptTokens = FinalPassDiscipline.shouldResetChain(
+                // The prompt chain is consumed only by a DECISIVE window
+                // whose language didn't just change (ADR-020 rule 4): an
+                // uncertain window dual-decodes promptless on BOTH sides so
+                // the verdict compares like with like — conditioning
+                // inflates the primary's logprob (2026-08-05 field report).
+                let chainReset = FinalPassDiscipline.shouldResetChain(
                     previousLanguage: carriedPrevious,
                     windowLanguage: language
-                ) ? nil : carriedPrompt
+                )
+                var promptTokens = FinalPassDiscipline.promptPermitted(
+                    isDecisive: decision.isDecisive,
+                    chainReset: chainReset
+                ) ? carriedPrompt : nil
 
+                let windowDuration = Double(samples.count) / AudioConstants.sampleRate
                 var options = finalDecodeOptions
                 options.language = language
                 options.promptTokens = promptTokens
@@ -450,11 +474,33 @@ nonisolated enum FinalizationPass {
                 // Tail-pad hygiene before anything judges the raw segments:
                 // the clip's real audio ends at the window boundary, and the
                 // decoder extrapolates into the pad (ADR-019 rule 4).
-                let windowDuration = Double(samples.count) / AudioConstants.sampleRate
                 var raw = FinalPassDiscipline.tailPadHygiene(
                     results.flatMap(\.segments),
                     windowDuration: windowDuration
                 )
+                var promptRetried = false
+
+                // Measured failure mode (2026-08-05 kept fixture, system
+                // 38.3–68.3 s): a prompt-conditioned decode can collapse to a
+                // single empty-text segment over real speech. The chain is a
+                // decode aid, never a reason to lose a window — drop it and
+                // decode once more.
+                if promptTokens != nil, FinalPassDiscipline.meanAvgLogprob(raw) == nil {
+                    promptRetried = true
+                    promptTokens = nil
+                    var retryOptions = finalDecodeOptions
+                    retryOptions.language = language
+                    retryOptions.promptTokens = nil
+                    if let retryResults = try? await whisper.transcribe(
+                        audioArray: clip, decodeOptions: retryOptions
+                    ) {
+                        raw = FinalPassDiscipline.tailPadHygiene(
+                            retryResults.flatMap(\.segments),
+                            windowDuration: windowDuration
+                        )
+                    }
+                }
+
                 var chosenLanguage = language
                 var abLine = "none"
 
@@ -492,8 +538,13 @@ nonisolated enum FinalizationPass {
                         // what the meeting sounds like — feed the session
                         // prior so consistent meetings converge, without
                         // re-creating the lock (decisive windows still
-                        // decide alone).
-                        tracker.noteABWinner(chosenLanguage)
+                        // decide alone). Only REAL text is evidence: an
+                        // all-empty win must not steer the session
+                        // (2026-08-05 fixture: an empty "win" flipped the
+                        // session to en and poisoned the following windows).
+                        if FinalPassDiscipline.meanAvgLogprob(raw) != nil {
+                            tracker.noteABWinner(chosenLanguage)
+                        }
                         abLine = String(
                             format: "%@ %@=%@ %@=%@",
                             choice == .alternate ? "alternate" : "primary",
@@ -510,18 +561,24 @@ nonisolated enum FinalizationPass {
                 // nothing logged the language path). Numbers and language
                 // codes only — NEVER transcript text.
                 let detectedLine = detection.map {
-                    String(format: "%@@%.2f", $0.language, $0.langProbs[$0.language] ?? 0)
+                    String(format: "%@@%.2f", $0.language, linearProbs[$0.language] ?? 0)
                 } ?? "none"
                 let windowLine = String(
-                    format: "Final pass window %@ %.2f–%.2fs: detected=%@ decisive=%@ decode=%@ kept=%@ ab=%@",
+                    format: "Final pass window %@ %.2f–%.2fs: detected=%@ decisive=%@ decode=%@ kept=%@ promptRetry=%@ ab=%@",
                     channel.rawValue,
                     offset, offset + windowDuration,
                     detectedLine,
                     decision.isDecisive ? "yes" : "no",
                     language, chosenLanguage,
+                    promptRetried ? "yes" : "no",
                     abLine
                 )
-                Self.log.info("\(windowLine, privacy: .public)")
+                // notice, not info: info-level lines never persist in the
+                // local log store, so a field report arriving after the fact
+                // would find nothing — the 2026-08-05 covert-translation
+                // defect had to be inferred for exactly that reason.
+                Self.log.notice("\(windowLine, privacy: .public)")
+                diagnostics?(windowLine)
 
                 // ADR-019 rules 1+2: exhausted-fallback rejection, then
                 // per-segment energy evidence through the live filters —
@@ -532,7 +589,17 @@ nonisolated enum FinalizationPass {
                     raw: raw,
                     channel: channel,
                     offset: offset,
-                    windowSamples: samples
+                    windowSamples: samples,
+                    onDrop: diagnostics.map { diagnose in
+                        { segment, rule in
+                            diagnose(String(
+                                format: "drop[%@] %@ %.2f–%.2fs logprob=%.3f cr=%.2f text=%@",
+                                rule.rawValue, channel.rawValue,
+                                offset + Double(segment.start), offset + Double(segment.end),
+                                segment.avgLogprob, segment.compressionRatio, segment.text
+                            ))
+                        }
+                    }
                 )
 
                 // Chain only text that survived the discipline — a dropped
@@ -577,7 +644,17 @@ nonisolated enum FinalizationPass {
         // ADR-019 rule 3, per channel across windows: no run of 3+
         // near-identical segments survives; the first member remains as the
         // ADR-003 dedup timing anchor.
-        return (FinalPassDiscipline.collapseRuns(segments), !regions.isEmpty)
+        let collapsed = FinalPassDiscipline.collapseRuns(segments)
+        if let diagnostics, collapsed.count != segments.count {
+            let keptIDs = Set(collapsed.map(\.id))
+            for segment in segments where !keptIDs.contains(segment.id) {
+                diagnostics(String(
+                    format: "drop[collapse] %@ %.2f–%.2fs text=%@",
+                    channel.rawValue, segment.start, segment.end, segment.text
+                ))
+            }
+        }
+        return (collapsed, !regions.isEmpty)
     }
 
     /// Streams the retained file once, computing the 30 ms RMS/peak probe
