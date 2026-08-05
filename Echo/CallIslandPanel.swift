@@ -87,9 +87,15 @@ final class CallIslandPanelController {
             backing: .buffered,
             defer: false
         )
-        panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isFloatingPanel = true
+        // AFTER `isFloatingPanel`, which silently resets the level to
+        // `.floating` (3). Setting the level first left the island below the
+        // menu bar (24) and below Notification Center's full-screen window
+        // (21): created, placed, ordered front — and invisible. Verified with
+        // CGWindowListCopyWindowInfo, which is the only thing that shows the
+        // real compositing order (a view-tree snapshot renders fine either way).
+        panel.level = .statusBar
         panel.hidesOnDeactivate = false
         panel.isMovable = false
         panel.backgroundColor = .clear
@@ -130,9 +136,15 @@ final class CallIslandPanelController {
         let size = content.fittingSize
         guard size.width > 0, size.height > 0 else { return }
 
+        // "Tucked under the menu bar" needs a floor: with the menu bar set to
+        // auto-hide, `visibleFrame` reserves nothing at the top, so the island
+        // would sit inside the menu bar strip and fight it every time it
+        // appears. Fall back to the status bar's own thickness in that case.
+        let reserved = screen.frame.maxY - screen.visibleFrame.maxY
+        let topInset = max(reserved, NSStatusBar.system.thickness)
         let frame = NSRect(
             x: screen.frame.midX - size.width / 2,
-            y: screen.visibleFrame.maxY - size.height,
+            y: screen.frame.maxY - topInset - size.height,
             width: size.width,
             height: size.height
         )
