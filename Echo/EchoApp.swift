@@ -17,6 +17,15 @@ struct EchoApp: App {
     /// dashboard is on screen, `.accessory` otherwise (see `ActivationPolicy`).
     @NSApplicationDelegateAdaptor(EchoAppDelegate.self) private var appDelegate
 
+    /// Single shared session controller for both the menu bar and the dashboard.
+    @State private var controller: RecordingController
+    /// Persisted UI state (e.g. the dismissed privacy banner). Loaded once from
+    /// `settings.json`; the dashboard reads and mutates it.
+    @State private var settings: AppSettings
+    /// SP-006's call-detection island. Held here so it lives as long as the app
+    /// does; nothing reads it — it drives its own AppKit panel.
+    @State private var callDetection: CallDetectionController
+
     init() {
         // Reclaim the retired summary model's snapshot (ADR-011): every
         // launch, scoped to exactly the retired repo directories, non-fatal,
@@ -33,13 +42,17 @@ struct EchoApp: App {
             // non-fatal, never competes with startup on the main thread.
             await ErrorTrace.shared.prune()
         }
-    }
 
-    /// Single shared session controller for both the menu bar and the dashboard.
-    @State private var controller = RecordingController()
-    /// Persisted UI state (e.g. the dismissed privacy banner). Loaded once from
-    /// `settings.json`; the dashboard reads and mutates it.
-    @State private var settings = AppSettings()
+        // The three long-lived objects, wired here because SP-006's call
+        // detection needs both of the others.
+        let recording = RecordingController()
+        let settings = AppSettings()
+        let callDetection = CallDetectionController(recording: recording, settings: settings)
+        callDetection.start()
+        _controller = State(initialValue: recording)
+        _settings = State(initialValue: settings)
+        _callDetection = State(initialValue: callDetection)
+    }
 
     /// The dashboard opens on demand from the menu bar — never at launch. In
     /// DEBUG builds, ECHO_OPEN_DASHBOARD=1 opens it immediately so the UI can
@@ -61,8 +74,13 @@ struct EchoApp: App {
         MenuBarExtra {
             MenuBarView()
                 .environment(controller)
+                .environment(settings)
         } label: {
             Image(systemName: controller.isRecording ? "waveform.circle.fill" : "waveform")
+                // Captures SwiftUI's `openWindow` for the AppKit side (SP-006's
+                // island): the label is the one view an agent app always has
+                // instantiated, so it is the earliest reliable hook.
+                .background(DashboardOpenerBridge())
         }
         .menuBarExtraStyle(.window)
 
