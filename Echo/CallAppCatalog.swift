@@ -56,17 +56,21 @@ nonisolated enum CallAppCatalog {
         CallApp(displayName: "Microsoft Teams", bundlePrefix: "com.microsoft.teams"),
         CallApp(displayName: "Slack", bundlePrefix: "com.tinyspeck.slackmacgap"),
         CallApp(displayName: "Discord", bundlePrefix: "com.hnc.Discord"),
-        // FaceTime is here for completeness, but on macOS 26 it never captures
-        // in its own process, so in practice it never matches. SP-006 open
-        // question 1, resolved against real calls 2026-08-04: the process that
-        // does capture is `com.apple.avconferenced`, and that daemon is NOT
-        // catalogued on purpose — it was observed holding the microphone for 18
-        // minutes across three unrelated app tests with no FaceTime call in
-        // sight. Cataloguing it would mean a permanent "FaceTime call detected"
-        // island (ADR-017's rejected false-positive class) and, worse, a
-        // permanent call that masks every real one after it. FaceTime is
-        // therefore a known detection gap, not a supported app.
+        // SP-006 open question 1, resolved by measuring real calls: FaceTime
+        // never captures in its own process (`com.apple.FaceTime` stays at
+        // is-running-input 0, is-running 0, even mid-call). The process that
+        // does is Apple's AV conferencing daemon, and it tracks the call
+        // faithfully — measured going quiet within two seconds of hanging up.
+        //
+        // A longer hold across other apps' tests looked at first like a daemon
+        // that never lets go; it was a FaceTime call left connected in the
+        // background. Both entries stay: the app for macOS versions that
+        // capture in-process, the daemon for the ones that don't. Other Apple
+        // conferencing surfaces (an iPhone call relayed to the Mac) share the
+        // daemon, so they attribute here too — they are calls as well, and the
+        // island's copy is the only thing that reads slightly off.
         CallApp(displayName: "FaceTime", bundlePrefix: "com.apple.FaceTime"),
+        CallApp(displayName: "FaceTime", bundlePrefix: "com.apple.avconferenced"),
         CallApp(displayName: "Webex", bundlePrefix: "Cisco-Systems.Spark"),
         CallApp(displayName: "Google Chrome", bundlePrefix: "com.google.Chrome"),
         CallApp(displayName: "Microsoft Edge", bundlePrefix: "com.microsoft.edgemac"),

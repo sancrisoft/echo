@@ -78,13 +78,19 @@ struct CallAppCatalogTests {
         #expect(CallAppCatalog.match(bundleID: "com.sancrisoft.Echo") == nil)
     }
 
-    @Test func daemonsObservedHoldingTheMicOutsideCallsNeverMatch() {
-        // Both were seen capturing during SP-006's real-call session with no
-        // call of their own: avconferenced held the mic for 18 minutes across
-        // three unrelated app tests (which would have masked every real call
-        // after it), and replayd captures while the screen is being recorded.
-        #expect(CallAppCatalog.match(bundleID: "com.apple.avconferenced") == nil)
+    @Test func screenRecordingIsNotACall() {
+        // `replayd` captures the microphone while the screen is being recorded
+        // — seen for six minutes during SP-006's real-call session. Recording
+        // your screen is not being in a meeting.
         #expect(CallAppCatalog.match(bundleID: "com.apple.replayd") == nil)
+    }
+
+    @Test func faceTimeMatchesTheDaemonThatActuallyCaptures() {
+        // Measured on real calls: the FaceTime app process never opens the mic,
+        // Apple's AV conferencing daemon does, and it goes quiet within two
+        // seconds of hanging up (SP-006 open question 1).
+        #expect(CallAppCatalog.match(bundleID: "com.apple.avconferenced")?.displayName == "FaceTime")
+        #expect(CallAppCatalog.match(bundleID: "com.apple.FaceTime")?.displayName == "FaceTime")
     }
 
     @Test func anEmptyBundleIDNeverMatches() {
