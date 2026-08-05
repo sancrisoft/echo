@@ -9,8 +9,10 @@
 //  searchable, sortable, date-grouped list of compact meeting rows with
 //  working quick actions. Opening a meeting (or the pinned live row / REC
 //  pill while recording) covers the list with the detail: an underlined
-//  Transcript / AI Summary tab bar, the committed transcript, and — while
-//  recording — a footer with the popover's live waves and the partial text.
+//  Transcript / AI Summary tab bar and the committed transcript. While
+//  recording, the Transcript tab shows a calm "Recording" placeholder and a
+//  footer with the popover's live waves — never transcript text (SP-007
+//  final-only UX; the transcript is ready after the meeting ends).
 //
 
 import SwiftUI
@@ -919,19 +921,17 @@ private struct MeetingRow: View {
         return parts.joined(separator: "  ·  ")
     }
 
-    /// This meeting's finalizing state for the row pill (SP-005 S6, stories
-    /// 8/15): the running pass shows the honest fraction — unless a recording
-    /// is active, when the pass is yielding and must read as waiting, never
-    /// as a spinner pretending to work.
+    /// This meeting's finalization face for the row pill, from the same pure
+    /// function as the details (SP-007 S6) — the pill renders a subset (no
+    /// Retry, so the retained-audio probe is skipped; a draft reads the same
+    /// either way), never a re-derivation.
     private var finalizationStatus: StatusPill.Finalization? {
-        let finalization = controller.finalization
-        if finalization.currentMeetingID == meta.id {
-            return controller.state.isRecording
-                ? .waiting
-                : .finalizing(finalization.finalizationProgress)
+        switch meetingDisplayState(for: meta.id, controller: controller) {
+        case .transcribing(let fraction): return .finalizing(fraction)
+        case .waiting: return .waiting
+        case .draft: return .draft
+        case .recording, .final: return nil
         }
-        if finalization.queuedMeetingIDs.contains(meta.id) { return .waiting }
-        return nil
     }
 
     private func export(as format: MeetingExportFormat) {
@@ -1076,11 +1076,13 @@ private struct TrashRow: View {
 }
 
 private struct StatusPill: View {
-    /// The row's finalizing state (SP-005 S6): a running pass with its honest
-    /// fraction, or a queued/deferred pass waiting its turn.
+    /// The row's finalization face (SP-005 S6 + SP-007 S6): a running pass
+    /// with its honest fraction, a queued/deferred/pending pass waiting its
+    /// turn, or a terminal draft (persisted liveFloor provenance).
     enum Finalization: Equatable {
         case finalizing(Double?)
         case waiting
+        case draft
     }
 
     let meta: MeetingMeta
@@ -1116,6 +1118,11 @@ private struct StatusPill: View {
             return ("Finalizing \(percent)%", .echoIndigo, "clock", true)
         case .waiting:
             return ("Waiting to finalize", .secondary, "clock", false)
+        case .draft:
+            // Persistent, like the detail's badge: it keys on persisted
+            // provenance and outranks the summary states below (a draft's
+            // summary is a draft's summary).
+            return ("Draft", .orange, "doc.text", false)
         case nil:
             break
         }
@@ -1625,10 +1632,6 @@ private struct MeetingDetailScreen: View {
         VStack(spacing: 0) {
             DetailTabBar(selection: $selectedTab)
 
-            // SP-005 S6 (stories 8, 9, 14): the meeting's finalization state
-            // as a thin strip — the transcript below stays fully readable.
-            FinalizationNotice(meetingID: finalizationMeetingID)
-
             switch target {
             case .live:
                 LiveMeetingDetail(selectedTab: $selectedTab)
@@ -1646,93 +1649,200 @@ private struct MeetingDetailScreen: View {
         // Escape returns to the list.
         .onExitCommand(perform: onClose)
     }
-
-    /// The saved meeting this detail is about — for the live target that is
-    /// the just-stopped meeting (nil while recording or before a save, when
-    /// no finalization state can exist for it yet).
-    private var finalizationMeetingID: UUID? {
-        switch target {
-        case .live: return controller.library.activeMeetingID
-        case .saved(let id): return id
-        }
-    }
 }
 
-/// The finalization status strip under the detail's tab bar (SP-005 S6).
-/// Non-blocking by design (story 9): it renders above the transcript, never
-/// over it, and disappears when the meeting has no finalization state.
-///   - Running pass → "Finalizing transcript…" with the real fraction (the
-///     coordinator's single ADR-007 source), plus the degraded-model caption
-///     when a full-tier machine fell back to the live model.
-///   - Queued, or deferred behind an active recording → "Waiting to finalize…".
-///   - Terminal failure this run (ADR-016) → the calm floor notice (story 14).
-private struct FinalizationNotice: View {
-    @Environment(RecordingController.self) private var controller
+// MARK: - Meeting display state (SP-007 S6)
+
+/// The ONE assembler behind every meeting face: snapshots the coordinator's
+/// sync observables and the meta's persisted provenance into the pure
+/// `MeetingDisplayState.resolve` inputs. `hasRetainedAudio` is the only
+/// async input — surfaces that render Retry probe it (`MeetingTranscriptFace`);
+/// the list pill and summary checks pass `false`, which only narrows
+/// draft-with-Retry to draft-without (a subset, same function).
+@MainActor
+private func meetingDisplayState(
+    for meetingID: UUID?,
+    controller: RecordingController,
+    isLiveTarget: Bool = false,
+    hasRetainedAudio: Bool = false
+) -> MeetingDisplayState {
+    let finalization = controller.finalization
+    return MeetingDisplayState.resolve(MeetingDisplaySnapshot(
+        isRecordingThisMeeting: isLiveTarget && controller.state.isRecording,
+        isRecordingActive: controller.state.isRecording,
+        isPassRunning: meetingID != nil && finalization.currentMeetingID == meetingID,
+        isQueued: meetingID.map { finalization.queuedMeetingIDs.contains($0) } ?? false,
+        progressFraction: finalization.finalizationProgress,
+        transcriptSource: meetingID.flatMap {
+            controller.library.meta(for: $0)?.transcriptProvenance?.source
+        },
+        hasRetainedAudio: hasRetainedAudio
+    ))
+}
+
+/// The Transcript tab's whole face, for both details (SP-007 S6): exactly one
+/// of recording / waiting / transcribing / draft / final, from the pure
+/// display-state function. Transcript text renders only in `draft` and
+/// `final` — while a pass runs or waits the user reads the honest state
+/// instead (SP-005's read-during-the-pass story is deliberately retired).
+private struct MeetingTranscriptFace: View {
+    /// The saved meeting (nil only for the live target before its stop-save).
     let meetingID: UUID?
+    /// This face fronts the live in-memory session (the recording, or the
+    /// just-stopped meeting whose segments are still `controller.state`).
+    var isLiveTarget = false
+    let segments: [TranscriptSegment]
+    @Environment(RecordingController.self) private var controller
+
+    /// The async input of the snapshot: probed on appear and re-probed when
+    /// the pass lifecycle or the persisted provenance moves (`probeKey`).
+    @State private var hasRetainedAudio = false
+    @State private var confirmKeepDraft = false
 
     var body: some View {
-        if let meetingID {
-            let finalization = controller.finalization
-            if finalization.currentMeetingID == meetingID, !controller.state.isRecording {
-                let progress = ModelDownloadProgress(fraction: finalization.finalizationProgress ?? 0)
-                strip(tint: .echoIndigo, icon: "wand.and.stars") {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Finalizing transcript… \(progress.percent)%")
-                            .font(.callout.weight(.medium))
-                        Text(finalization.currentPassUsesFallbackModel
-                            ? "Re-transcribing with full context, using the standard model for this pass. You can keep reading meanwhile."
-                            : "Re-transcribing the meeting with full context. You can keep reading meanwhile.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 12)
-                    ProgressView(value: progress.fraction)
-                        .frame(width: 140)
-                }
-            } else if isWaiting(meetingID, finalization) {
-                strip(tint: .secondary, icon: "clock") {
-                    Text("Waiting to finalize…")
-                        .font(.callout.weight(.medium))
-                    Text(controller.state.isRecording
+        Group {
+            switch displayState {
+            case .recording:
+                ContentUnavailableView(
+                    "Recording",
+                    systemImage: "waveform",
+                    description: Text("Echo is capturing and transcribing locally. The transcript will be ready after the meeting ends.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            case .waiting:
+                // Honest waiting — never a bar, never a fake percentage.
+                ContentUnavailableView(
+                    "Waiting to finalize",
+                    systemImage: "clock",
+                    description: Text(controller.state.isRecording
                         ? "The transcript will be finalized after the current recording stops."
                         : "This meeting's transcript will be finalized shortly.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 12)
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            case .transcribing(let fraction):
+                transcribing(fraction: fraction)
+
+            case .draft(let retryAvailable):
+                VStack(spacing: 0) {
+                    draftStrip(retryAvailable: retryAvailable)
+                    TranscriptScroll(segments: segments)
                 }
-            } else if finalization.terminalFailureIDs.contains(meetingID) {
-                strip(tint: .orange, icon: "info.circle") {
-                    Text("Transcript finalization didn't complete — showing the live transcript.")
-                        .font(.callout.weight(.medium))
-                    Spacer(minLength: 12)
-                }
+
+            case .final:
+                TranscriptScroll(segments: segments)
             }
+        }
+        .task(id: probeKey) {
+            guard let meetingID else {
+                hasRetainedAudio = false
+                return
+            }
+            hasRetainedAudio = await controller.library.hasRetainedAudio(for: meetingID)
+        }
+        // ADR-024: releasing the audio is irreversible — confirm it.
+        .confirmationDialog("Keep draft?", isPresented: $confirmKeepDraft) {
+            Button("Keep Draft") { keepDraft() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The meeting's audio will be deleted and this draft becomes the final transcript. This can't be undone.")
         }
     }
 
-    /// Queued behind other work — or the running pass is yielding to an
-    /// active recording (story 15), which must read as waiting, not progress.
-    private func isWaiting(_ id: UUID, _ finalization: FinalizationCoordinator) -> Bool {
-        finalization.queuedMeetingIDs.contains(id)
-            || (finalization.currentMeetingID == id && controller.state.isRecording)
+    private var displayState: MeetingDisplayState {
+        meetingDisplayState(
+            for: meetingID,
+            controller: controller,
+            isLiveTarget: isLiveTarget,
+            hasRetainedAudio: hasRetainedAudio
+        )
     }
 
-    private func strip(
-        tint: Color,
-        icon: String,
-        @ViewBuilder content: () -> some View
-    ) -> some View {
+    /// Re-probes the retained audio when a pass starts/ends (success deletes
+    /// it) or the persisted provenance lands (convergence keeps it). Keep
+    /// draft refreshes locally in `keepDraft()` — it changes no meta.
+    private struct ProbeKey: Equatable {
+        let meetingID: UUID?
+        let runningMeetingID: UUID?
+        let source: TranscriptProvenance.Source?
+    }
+
+    private var probeKey: ProbeKey {
+        ProbeKey(
+            meetingID: meetingID,
+            runningMeetingID: controller.finalization.currentMeetingID,
+            source: meetingID.flatMap {
+                controller.library.meta(for: $0)?.transcriptProvenance?.source
+            }
+        )
+    }
+
+    private func transcribing(fraction: Double) -> some View {
+        let progress = ModelDownloadProgress(fraction: fraction)
+        return VStack(spacing: 12) {
+            ProgressView(value: progress.fraction)
+                .frame(maxWidth: 280)
+            Text("Finalizing transcript… \(progress.percent)%")
+                .font(.headline)
+            Text(controller.finalization.currentPassUsesFallbackModel
+                ? "Re-transcribing the meeting with full context, using the standard model for this pass."
+                : "Re-transcribing the meeting with full context.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The draft chrome above the floor transcript: the persistent badge
+    /// (keyed on persisted liveFloor provenance — survives relaunch), plus
+    /// Retry / Keep draft exactly while the kept audio exists (ADR-024).
+    private func draftStrip(retryAvailable: Bool) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: icon)
-                .foregroundStyle(tint)
-            content()
+            Text("Draft")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.orange.opacity(0.14), in: Capsule())
+            Text("Finalization didn't complete — this is the live transcript.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            if retryAvailable {
+                Button {
+                    if let meetingID { controller.retryFinalization(meetingID) }
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Run a fresh finalization pass from the meeting's kept audio")
+                Button("Keep draft") {
+                    confirmKeepDraft = true
+                }
+                .buttonStyle(.bordered)
+                .help("Accept this draft as final and delete the meeting's kept audio")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .padding(.horizontal, 24)
         .padding(.top, 10)
+    }
+
+    private func keepDraft() {
+        guard let meetingID else { return }
+        Task {
+            await controller.keepDraft(meetingID)
+            // Local refresh: no meta changed, so the probe key won't fire —
+            // the Retry disappears here; the state stays draft (now final by
+            // the user's acceptance, badge and all).
+            hasRetainedAudio = false
+        }
     }
 }
 
@@ -1772,7 +1882,10 @@ private struct DetailTabBar: View {
 
 /// The current session (or empty idle state): the committed transcript and the
 /// streaming/regenerable summary over `controller.state`, plus — while
-/// recording — the footer with the popover's waves and the live partial text.
+/// recording — the footer with the popover's waves. While recording, the
+/// Transcript tab shows a placeholder instead of transcript text (SP-007:
+/// the user never sees a live transcript); the segments keep accumulating
+/// invisibly and surface once the meeting resolves.
 private struct LiveMeetingDetail: View {
     @Environment(RecordingController.self) private var controller
     @Binding var selectedTab: DetailTab
@@ -1782,9 +1895,16 @@ private struct LiveMeetingDetail: View {
             Group {
                 switch selectedTab {
                 case .transcript:
-                    TranscriptScroll(
-                        segments: controller.state.segments,
-                        isRecording: controller.state.isRecording
+                    // The pure display state routes the whole tab (SP-007
+                    // S6): recording placeholder → waiting/transcribing
+                    // faces → final transcript or draft-labeled floor. On
+                    // pass success `replaceSegments` swaps `state.segments`
+                    // in place, so the final transcript appears here without
+                    // reopening.
+                    MeetingTranscriptFace(
+                        meetingID: controller.library.activeMeetingID,
+                        isLiveTarget: true,
+                        segments: controller.state.segments
                     )
                 case .summary:
                     summary
@@ -2033,7 +2153,10 @@ private struct PastMeetingDetail: View {
             if let record {
                 switch selectedTab {
                 case .transcript:
-                    TranscriptScroll(segments: record.segments, isRecording: false)
+                    // Same routing as the live detail (SP-007 S6): a pending
+                    // meeting opened from the list shows waiting/transcribing,
+                    // never its floor transcript; a draft shows the draft face.
+                    MeetingTranscriptFace(meetingID: id, segments: record.segments)
                 case .summary:
                     summary(for: record)
                 }
@@ -2065,12 +2188,16 @@ private struct PastMeetingDetail: View {
     private struct ReloadKey: Equatable {
         let hasSummary: Bool
         let isFinalizing: Bool
+        let transcriptSource: TranscriptProvenance.Source?
     }
 
     private var reloadKey: ReloadKey {
         ReloadKey(
             hasSummary: controller.library.meta(for: id)?.hasSummary ?? false,
-            isFinalizing: controller.finalization.currentMeetingID == id
+            isFinalizing: controller.finalization.currentMeetingID == id,
+            // Provenance landing (replace or terminal convergence) re-reads
+            // the record, so the face keys on fresh persisted state.
+            transcriptSource: controller.library.meta(for: id)?.transcriptProvenance?.source
         )
     }
 
@@ -2081,6 +2208,16 @@ private struct PastMeetingDetail: View {
         } else if controller.backfillingMeetingID == id {
             SummaryGenerationProgressView(subject: "this meeting's transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if isPendingFinalization {
+            // The summary is deliberately held back until the pass resolves
+            // (SP-005 sequencing) — say so instead of offering to generate
+            // one from a transcript that is about to be replaced.
+            ContentUnavailableView(
+                "Summary after finalization",
+                systemImage: "sparkles",
+                description: Text("Echo will generate this once the transcript finishes finalizing.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             // Not a dead end: the transcript is saved, so the summary can be
             // generated right here — or the missing model downloaded first.
@@ -2115,118 +2252,73 @@ private struct PastMeetingDetail: View {
         }
         return "Generating one needs the summary model. Download it and this meeting will be processed automatically."
     }
+
+    /// Waiting or transcribing, from the same pure function as the faces —
+    /// the sync subset (no audio probe: a pending meeting is enqueued or
+    /// running by the time this tab can be read, and the drafts/finals this
+    /// check misses are exactly the ones allowed to generate).
+    private var isPendingFinalization: Bool {
+        switch meetingDisplayState(for: id, controller: controller) {
+        case .waiting, .transcribing: return true
+        case .recording, .draft, .final: return false
+        }
+    }
 }
 
 // MARK: - Shared transcript list
 
-/// The committed (final) transcript only — live partial text renders in the
-/// footer, never here. While recording, the list follows new segments
-/// automatically as long as the user is at the bottom; scrolling up detaches
-/// and a floating "Latest" button re-engages. Past meetings never auto-scroll.
+/// The committed (final) transcript of a resolved meeting, rendered as
+/// derived utterances (ADR-021): consecutive same-speaker segments merge
+/// into paragraphs with a time range, and standalone backchannel stays out
+/// of the flow — the persisted segments are untouched. Never rendered while
+/// recording (SP-007 final-only UX): the live detail shows a "Recording"
+/// placeholder instead, so this view has no live-follow machinery — it is a
+/// plain, read-only scroll.
 private struct TranscriptScroll: View {
     let segments: [TranscriptSegment]
-    let isRecording: Bool
-
-    /// Whether the viewport currently sits at (or near) the bottom — the
-    /// user's implicit opt-in to keep following new segments.
-    @State private var isAtBottom = true
-
-    /// Stable scroll target below the last row; scrolling to a row id inside
-    /// the LazyVStack is unreliable for not-yet-materialized rows.
-    private static let bottomAnchorID = "transcript-bottom"
 
     var body: some View {
-        if segments.isEmpty {
+        let utterances = TranscriptUtterance.derive(from: segments)
+        if utterances.isEmpty {
             ContentUnavailableView(
-                isRecording ? "Listening…" : "No transcript",
+                "No transcript",
                 systemImage: "text.bubble",
-                description: Text(isRecording
-                    ? "Text will appear here as people speak."
-                    : "This meeting has no transcript.")
+                description: Text("This meeting has no transcript.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(spacing: 0) {
-                        LazyVStack(alignment: .leading, spacing: 22) {
-                            ForEach(segments) { segment in
-                                SegmentRow(segment: segment)
-                            }
-                        }
-                        // A readable column as in the mockup: capped width,
-                        // centered in the pane.
-                        .frame(maxWidth: 720, alignment: .leading)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 20)
-                        .frame(maxWidth: .infinity)
-
-                        Color.clear
-                            .frame(height: 1)
-                            .id(Self.bottomAnchorID)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 22) {
+                    ForEach(utterances) { utterance in
+                        UtteranceRow(utterance: utterance)
                     }
                 }
-                .onScrollGeometryChange(for: Bool.self) { geometry in
-                    // "Near bottom" with a small tolerance, so the follow mode
-                    // survives sub-row jitter; also true when the content
-                    // doesn't fill the viewport yet.
-                    geometry.contentOffset.y + geometry.containerSize.height
-                        >= geometry.contentSize.height - 60
-                } action: { _, nearBottom in
-                    isAtBottom = nearBottom
-                }
-                .onChange(of: segments.count) {
-                    guard isRecording, isAtBottom else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-                    }
-                }
-                // Opening the live detail mid-recording starts at the latest
-                // line, matching the follow-by-default behavior.
-                .onAppear {
-                    if isRecording { proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom) }
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    if isRecording && !isAtBottom {
-                        Button {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                proxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-                            }
-                        } label: {
-                            Label("Latest", systemImage: "arrow.down")
-                                .font(.callout.weight(.medium))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(.regularMaterial, in: Capsule())
-                                .overlay(Capsule().strokeBorder(.quaternary))
-                                .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .padding(16)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        .help("Jump to the latest transcript line")
-                    }
-                }
-                .animation(.easeOut(duration: 0.18), value: isAtBottom)
+                // A readable column as in the mockup: capped width,
+                // centered in the pane.
+                .frame(maxWidth: 720, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .frame(maxWidth: .infinity)
             }
         }
     }
 }
 
-private struct SegmentRow: View {
-    let segment: TranscriptSegment
+/// One derived utterance: speaker, time range, merged paragraph.
+private struct UtteranceRow: View {
+    let utterance: TranscriptUtterance
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text(segment.speaker.displayName)
+                Text(utterance.speaker.displayName)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(accent)
-                Text(timestamp)
+                Text(timeRange)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            Text(segment.text)
+            Text(utterance.text)
                 .font(.body)
                 .textSelection(.enabled)
         }
@@ -2235,20 +2327,20 @@ private struct SegmentRow: View {
     /// Speaker accent: the user keeps the brand indigo (their wave, the
     /// glyph); everyone on the system stream gets a distinguishable purple.
     private var accent: Color {
-        segment.speaker == .me ? .echoIndigo : .purple
+        utterance.speaker == .me ? .echoIndigo : .purple
     }
 
-    private var timestamp: String {
-        recTimerString(segment.start)
+    private var timeRange: String {
+        "\(recTimerString(utterance.start))–\(recTimerString(utterance.end))"
     }
 }
 
 // MARK: - Live transcription footer
 
 /// The detail's bottom bar while recording: the same dual waves as the menu
-/// bar popover (real capture levels), the current live partial text, and the
-/// transcribing / processed-locally status. Final transcript lines never
-/// render here — they land in the list above.
+/// bar popover (real capture levels — the capture-health signal) and the
+/// transcribing / processed-locally status. No transcript text ever renders
+/// here (SP-007: the user never sees a live transcript).
 private struct LiveTranscriptFooter: View {
     @Environment(RecordingController.self) private var controller
 
@@ -2261,12 +2353,6 @@ private struct LiveTranscriptFooter: View {
                     outputLevel: DualWaveView.amplitude(controller.state.outputLevels)
                 )
                 .frame(width: 130, height: 30)
-
-                Text(liveText ?? "Listening…")
-                    .font(.callout.italic())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
 
                 Spacer(minLength: 12)
 
@@ -2294,15 +2380,6 @@ private struct LiveTranscriptFooter: View {
             .padding(.vertical, 10)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    /// The most recent provisional line across both channels. Partials are
-    /// per-channel; the one that starts later is the one being spoken now.
-    private var liveText: String? {
-        let partials = controller.state.partialSegments.values
-        guard let latest = partials.max(by: { $0.start < $1.start }) else { return nil }
-        let text = latest.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? nil : text + "…"
     }
 }
 

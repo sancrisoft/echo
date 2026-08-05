@@ -149,11 +149,17 @@ final class MeetingLibrary {
     }
 
     /// Attaches a finished summary (and its AI one-line caption) to an
-    /// already-saved meeting (SPEC-03 criterion 2). A failure leaves the meeting
-    /// saved without a summary.
-    func attachSummary(_ summary: MeetingSummary, description: String? = nil, to id: UUID) async {
+    /// already-saved meeting (SPEC-03 criterion 2), recording which summary
+    /// model wrote it (SP-007, ADR-022). A failure leaves the meeting saved
+    /// without a summary.
+    func attachSummary(
+        _ summary: MeetingSummary,
+        description: String? = nil,
+        modelName: String? = nil,
+        to id: UUID
+    ) async {
         do {
-            try await store.attachSummary(summary, description: description, to: id)
+            try await store.attachSummary(summary, description: description, modelName: modelName, to: id)
             await refresh()
         } catch {
             ErrorTrace.record(
@@ -203,12 +209,17 @@ final class MeetingLibrary {
     }
 
     /// Atomically replaces a meeting's transcript with the final segment set
-    /// (ADR-016) and refreshes the headers so the re-derived counts reach the
-    /// list. Returns whether the replace landed — a failure leaves the live
-    /// transcript byte-identical (logged).
-    func replaceTranscript(_ segments: [TranscriptSegment], for id: UUID) async -> Bool {
+    /// (ADR-016), recording its provenance in the same meta re-derivation step
+    /// (SP-007, ADR-022), and refreshes the headers so the re-derived counts
+    /// reach the list. Returns whether the replace landed — a failure leaves
+    /// the live transcript byte-identical (logged).
+    func replaceTranscript(
+        _ segments: [TranscriptSegment],
+        provenance: TranscriptProvenance,
+        for id: UUID
+    ) async -> Bool {
         do {
-            try await store.replaceTranscript(segments, for: id)
+            try await store.replaceTranscript(segments, provenance: provenance, for: id)
             await refresh()
             return true
         } catch {
@@ -219,6 +230,24 @@ final class MeetingLibrary {
                 metadata: ["meetingID": id.uuidString]
             )
             return false
+        }
+    }
+
+    /// Records that the meeting's persisted transcript is the live floor —
+    /// one atomic meta write, nothing else touched (SP-007, ADR-022/ADR-024).
+    /// Best-effort: a failure is logged and the meeting stays diagnosable as
+    /// "unknown" provenance rather than blocking the stop path.
+    func recordLiveFloorProvenance(for id: UUID, provenance: TranscriptProvenance) async {
+        do {
+            try await store.recordLiveFloorProvenance(for: id, provenance: provenance)
+            await refresh()
+        } catch {
+            ErrorTrace.record(
+                "Recording live-floor provenance failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
         }
     }
 
@@ -235,10 +264,36 @@ final class MeetingLibrary {
         await store.retainedAudioFiles(for: id)
     }
 
-    /// Meetings pending finalization, newest first (retained-audio presence,
-    /// ADR-016) — feeds the launch resume and the backfill's eligibility check.
+    #if DEBUG
+    /// SP-007 DEBUG keep flag (user story 12): renames the meeting's retained
+    /// audio to its kept-fixture names inside the same folder, so a successful
+    /// pass leaves a replayable real-meeting fixture behind instead of
+    /// deleting the audio. Returns whether anything was preserved.
+    @discardableResult
+    func preserveRetainedAudioAsDebugFixture(for id: UUID) async -> Bool {
+        await store.preserveRetainedAudioAsDebugFixture(for: id)
+    }
+    #endif
+
+    /// Meetings pending finalization, newest first (retained audio with no
+    /// recorded transcript provenance — ADR-016 amended by ADR-024) — feeds
+    /// the launch resume and the backfill's eligibility check. Terminal
+    /// drafts and finalPass orphans are NOT pending.
     func pendingFinalizationMeetingIDs() async -> [UUID] {
         await store.pendingFinalizationMeetingIDs()
+    }
+
+    /// Whether the meeting still holds kept audio — the exact lifetime of
+    /// the draft state's Retry affordance (SP-007/ADR-024).
+    func hasRetainedAudio(for id: UUID) async -> Bool {
+        await store.hasRetainedAudio(for: id)
+    }
+
+    /// Deletes the leftover audio of meetings whose provenance already says
+    /// `finalPass` (ADR-024's orphan class — a success whose cleanup
+    /// crashed). Part of the launch scan, before the resume enqueue.
+    func sweepFinalPassAudioOrphans() async {
+        await store.sweepFinalPassAudioOrphans()
     }
 
     /// Deletes orphaned retention staging from a previous run (disposable by

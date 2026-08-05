@@ -8,8 +8,9 @@
 //    • Idle/Ready — a green status dot, the last meeting's stats, and an indigo
 //      "Start Recording" button.
 //    • Recording — a red status dot, a large running timer, the two live
-//      waveforms (mic = indigo, system = gray), a live word count, and a red
-//      "Stop" button.
+//      waveforms (mic = indigo, system = gray), and a red "Stop" button.
+//      No transcript-derived numbers while recording (SP-007 final-only UX);
+//      word counts reappear once the meeting resolves.
 //
 //  The gear in the header opens the full dashboard. Capture-health problems
 //  (mic lost, degraded echo handling, unusable input) temporarily replace the
@@ -221,8 +222,11 @@ struct MenuBarView: View {
 
     /// The default info line for the current face.
     private var metaText: String? {
+        // While recording, no transcript-derived numbers (SP-007 final-only
+        // UX): the segments keep accumulating invisibly, and the word count
+        // reappears once the meeting resolves.
         if controller.state.isRecording {
-            return "Mic + system · \(liveWordCount.formatted()) words"
+            return "Mic + system"
         }
         // Idle: surface any pending status (e.g. "Generating summary…") first,
         // otherwise the last meeting's stats.
@@ -233,10 +237,6 @@ struct MenuBarView: View {
             return "Last meeting · \(Self.minutesString(last.duration)) · \(last.words.formatted()) words"
         }
         return nil
-    }
-
-    private var liveWordCount: Int {
-        Self.wordCount(of: controller.state.segments)
     }
 
     // MARK: - Actions

@@ -184,6 +184,65 @@ struct FinalizationMachineTests {
             == [.startPass(meetingID: meeting, attempt: 1)])
     }
 
+    @Test func manualRetryReadmitsTerminalMeetingFrontOfQueueWithFreshBudget() {
+        var machine = machineWithRunningStopPass()
+        _ = machine.handle(.passConcluded(.failure))   // attempt 1 → retry
+        _ = machine.handle(.passConcluded(.failure))   // attempt 2 → terminal
+        _ = machine.handle(.pipelineFinished)
+        #expect(machine.terminalMeetingIDs == [meeting])
+
+        // While a recording runs, the user's Retry only queues — at the
+        // FRONT, ahead of a meeting queued before it (the user-request
+        // discipline, ADR-024) — and clears the terminal exclusion.
+        _ = machine.handle(.recordingStarted)
+        _ = machine.handle(.passRequested(older))
+        #expect(machine.handle(.manualRetryRequested(meeting)) == [])
+        #expect(machine.queue == [meeting, older])
+        #expect(machine.terminalMeetingIDs.isEmpty)
+
+        // The retry bypasses no admission gate: it starts only after the
+        // recording stops AND its post-stop pipeline closes — on a FRESH
+        // attempt 1, the exhausted budget forgotten.
+        #expect(machine.handle(.recordingStopped) == [])
+        #expect(machine.handle(.pipelineFinished)
+            == [.startPass(meetingID: meeting, attempt: 1)])
+    }
+
+    @Test func manualRetryCycleThatConvergesAgainReturnsToTerminal() {
+        var machine = machineWithRunningStopPass()
+        _ = machine.handle(.passConcluded(.failure))
+        _ = machine.handle(.passConcluded(.failure))   // terminal
+        _ = machine.handle(.pipelineFinished)
+
+        // The Retry re-admits immediately (nothing else gates it).
+        #expect(machine.handle(.manualRetryRequested(meeting))
+            == [.startPass(meetingID: meeting, attempt: 1)])
+
+        // The fresh cycle keeps ADR-016's bounded retries…
+        #expect(machine.handle(.passConcluded(.failure))
+            == [.startPass(meetingID: meeting, attempt: 2)])
+        // …and a second convergence is terminal again — nothing loops
+        // automatically; only the user starts another cycle.
+        #expect(machine.handle(.passConcluded(.failure)) == [.converge(meetingID: meeting)])
+        #expect(machine.terminalMeetingIDs == [meeting])
+        #expect(machine.handle(.passRequested(meeting)) == [])
+    }
+
+    @Test func manualRetryOfNonTerminalMeetingEnqueuesNormally() {
+        // A meeting terminal only ON DISK (a relaunch: the in-memory terminal
+        // set died with the process) has no exclusion to clear — the Retry is
+        // a normal front-of-queue admission on attempt 1.
+        var machine = FinalizationMachine()
+        #expect(machine.handle(.manualRetryRequested(meeting))
+            == [.startPass(meetingID: meeting, attempt: 1)])
+
+        // Retrying the meeting whose pass is already running is a no-op —
+        // the running attempt IS the retry the user asked for.
+        #expect(machine.handle(.manualRetryRequested(meeting)) == [])
+        #expect(machine.queue.isEmpty)
+        #expect(machine.runningMeetingID == meeting)
+    }
+
     @Test func attemptBudgetIsPerMeeting() {
         var machine = FinalizationMachine()
         // `meeting` exhausts its budget…
@@ -304,6 +363,34 @@ struct FinalizationCoordinatorTests {
         #expect(converged.entries == [meeting.uuidString])
         #expect(!coordinator.isBusy)
         coordinator.notePostStopWorkFinished()
+    }
+
+    @Test func manualRetryRunsAFreshCycleAfterTerminalConvergence() async {
+        let coordinator = FinalizationCoordinator()
+        let meeting = UUID()
+        let final = segments()
+        let runner = ScriptedRunner([.failed, .failed, .replaced(final)])
+        let concluded = OrderLog()
+        coordinator.runPass = { id, yield in runner.run(id, shouldYield: yield) }
+        coordinator.onPassConcluded = { id in concluded.append(id.uuidString) }
+        enterStopPipeline(coordinator)
+
+        let outcome = await coordinator.finalizeStopped(meeting)
+        #expect(outcome == .floorStands)
+        #expect(coordinator.terminalFailureIDs == [meeting])
+        coordinator.notePostStopWorkFinished()
+
+        // The user's Retry (ADR-024): a fresh bounded cycle for the same
+        // meeting, clearing the in-memory terminal notice.
+        coordinator.requestManualRetry(meeting)
+        #expect(coordinator.terminalFailureIDs.isEmpty)
+
+        // No stop awaiter this time — the retry's success kicks the
+        // backfill, exactly like a launch-resumed pass.
+        while concluded.entries.isEmpty { await Task.yield() }
+        #expect(concluded.entries == [meeting.uuidString])
+        #expect(runner.calledMeetingIDs == [meeting, meeting, meeting])
+        #expect(!coordinator.isBusy)
     }
 
     @Test func recordingMidStopPassDefersAndResumesAfterStop() async {

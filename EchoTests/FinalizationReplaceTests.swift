@@ -55,6 +55,20 @@ struct FinalizationReplaceTests {
         ]
     }
 
+    private func makeProvenance(
+        source: TranscriptProvenance.Source = .finalPass,
+        modelName: String = "large-v3_947MB",
+        tier: String = "fullLargeV3",
+        servedByFallback: Bool = false
+    ) -> TranscriptProvenance {
+        TranscriptProvenance(
+            source: source,
+            modelName: modelName,
+            tier: tier,
+            servedByFallback: servedByFallback
+        )
+    }
+
     /// Saves a live meeting and returns its id.
     private func saveLiveMeeting(in store: MeetingStore) async throws -> UUID {
         let meta = makeMeta()
@@ -74,18 +88,22 @@ struct FinalizationReplaceTests {
 
     // MARK: - Atomic replace (ADR-016)
 
-    @Test("replaceTranscript swaps in exactly the final set and re-derives meta counts")
+    @Test("replaceTranscript swaps in exactly the final set and re-derives meta counts + provenance in one step")
     func replaceSwapsTranscriptAndRederivesMeta() async throws {
         try await withTempStore { store, _ in
             let id = try await saveLiveMeeting(in: store)
             let final = finalSegments()
+            let provenance = makeProvenance(servedByFallback: true)
 
-            try await store.replaceTranscript(final, for: id)
+            try await store.replaceTranscript(final, provenance: provenance, for: id)
 
             let record = try await store.loadRecord(id)
             #expect(record.segments == final)
             #expect(record.meta.segmentCount == final.count)
             #expect(record.meta.wordCount == MeetingMeta.wordCount(of: final))
+            // ADR-022: provenance lands in the SAME meta re-derivation write —
+            // a meta with the final counts always also carries the provenance.
+            #expect(record.meta.transcriptProvenance == provenance)
         }
     }
 
@@ -95,7 +113,7 @@ struct FinalizationReplaceTests {
             let id = try await saveLiveMeeting(in: store)
             let before = try await store.loadRecord(id).meta
 
-            try await store.replaceTranscript(finalSegments(), for: id)
+            try await store.replaceTranscript(finalSegments(), provenance: makeProvenance(), for: id)
 
             let after = try await store.loadRecord(id).meta
             #expect(after.title == before.title)
@@ -111,7 +129,9 @@ struct FinalizationReplaceTests {
             let id = try await saveLiveMeeting(in: store)
             let directory = store.directory(for: id)
             let transcriptURL = directory.appending(path: "transcript.json")
+            let metaURL = directory.appending(path: "meta.json")
             let liveBytes = try Data(contentsOf: transcriptURL)
+            let metaBytes = try Data(contentsOf: metaURL)
 
             // Injected failure: a read-only meeting folder fails the atomic
             // temp-file-plus-rename write before it can replace anything.
@@ -119,10 +139,12 @@ struct FinalizationReplaceTests {
             defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path) }
 
             await #expect(throws: (any Error).self) {
-                try await store.replaceTranscript(finalSegments(), for: id)
+                try await store.replaceTranscript(finalSegments(), provenance: makeProvenance(), for: id)
             }
 
             #expect(try Data(contentsOf: transcriptURL) == liveBytes)
+            // No provenance sneaks in either — the meta stays byte-identical.
+            #expect(try Data(contentsOf: metaURL) == metaBytes)
         }
     }
 
@@ -131,7 +153,7 @@ struct FinalizationReplaceTests {
         try await withTempStore { store, root in
             let ghost = UUID()
             await #expect(throws: (any Error).self) {
-                try await store.replaceTranscript(finalSegments(), for: ghost)
+                try await store.replaceTranscript(finalSegments(), provenance: makeProvenance(), for: ghost)
             }
             #expect(!FileManager.default.fileExists(atPath: store.directory(for: ghost).path))
         }

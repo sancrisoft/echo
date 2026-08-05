@@ -3,11 +3,15 @@
 //  EchoTests
 //
 //  SP-005 S4: the launch-time crash-resume scan (ADR-016 — pending state is a
-//  directory scan over retained-audio presence) and the retention-staging
-//  sweep, against a real-FS temp meetings root (the MeetingStoreTests /
-//  FinalizationReplaceTests pattern). The pending-ID query under test here is
-//  also the summary backfill's eligibility exclusion — one primitive, both
-//  consumers.
+//  directory scan over retained audio) and the retention-staging sweep,
+//  against a real-FS temp meetings root (the MeetingStoreTests /
+//  FinalizationReplaceTests pattern). SP-007 (ADR-024) makes the scan
+//  three-way: terminal convergence now KEEPS the audio, so presence alone no
+//  longer means pending — the recorded transcript provenance disambiguates
+//  (none → pending; liveFloor → terminal draft, never auto-resumed;
+//  finalPass → orphan of a crashed success cleanup, swept). The pending-ID
+//  query under test here is also the summary backfill's eligibility
+//  exclusion — one primitive, both consumers.
 //
 
 import Foundation
@@ -57,6 +61,36 @@ struct FinalizationResumeScanTests {
         try Data("retained".utf8).write(to: url)
     }
 
+    /// Marks the meeting a terminal draft: liveFloor provenance recorded by
+    /// the same store call the converge path uses (ADR-024's atomic write).
+    private func markTerminalDraft(_ id: UUID, in store: MeetingStore) async throws {
+        try await store.recordLiveFloorProvenance(
+            for: id,
+            provenance: TranscriptProvenance(
+                source: .liveFloor,
+                modelName: "large-v3-v20240930_626MB",
+                tier: "reuseLive",
+                servedByFallback: false
+            )
+        )
+    }
+
+    /// Makes the meeting a finalPass orphan: a successful replace (which
+    /// records finalPass provenance) whose audio deletion then "crashed" —
+    /// the caller plants/keeps retained audio around this.
+    private func markFinalized(_ id: UUID, in store: MeetingStore) async throws {
+        try await store.replaceTranscript(
+            [TranscriptSegment(channel: .microphone, speaker: .me, text: "final", start: 0, end: 1)],
+            provenance: TranscriptProvenance(
+                source: .finalPass,
+                modelName: "large-v3_947MB",
+                tier: "fullLargeV3",
+                servedByFallback: false
+            ),
+            for: id
+        )
+    }
+
     /// Plants an orphaned staging session folder (a quit mid-recording).
     private func plantStaging(in store: MeetingStore) throws -> URL {
         let session = store.retentionStagingDirectory
@@ -103,6 +137,75 @@ struct FinalizationResumeScanTests {
             try plantRetainedAudio(for: live, in: store)
 
             #expect(await store.pendingFinalizationMeetingIDs() == [live])
+        }
+    }
+
+    // MARK: - Three-way classification (ADR-024)
+
+    @Test("with retained audio, provenance disambiguates: none resumes, liveFloor is a draft, finalPass is an orphan")
+    func scanClassifiesRetainedAudioByProvenance() async throws {
+        try await withTempStore { store, _ in
+            let pending = try await saveMeeting(in: store, age: 3_000)
+            let draft = try await saveMeeting(in: store, age: 2_000)
+            let orphan = try await saveMeeting(in: store, age: 1_000)
+            for id in [pending, draft, orphan] {
+                try plantRetainedAudio(for: id, in: store)
+            }
+            try await markTerminalDraft(draft, in: store)
+            try await markFinalized(orphan, in: store)
+
+            // Only the true pending meeting auto-resumes: the draft waits
+            // for the user's Retry; the orphan's transcript is already final.
+            #expect(await store.pendingFinalizationMeetingIDs() == [pending])
+            #expect(await store.retainedAudioDisposition(for: pending) == .pending)
+            #expect(await store.retainedAudioDisposition(for: draft) == .terminalDraft)
+            #expect(await store.retainedAudioDisposition(for: orphan) == .finalPassOrphan)
+        }
+    }
+
+    @Test("the orphan sweep deletes exactly the finalPass orphan's audio — drafts and pending untouched")
+    func orphanSweepDeletesOnlyOrphanAudio() async throws {
+        try await withTempStore { store, _ in
+            let pending = try await saveMeeting(in: store, age: 4_000)
+            let draft = try await saveMeeting(in: store, age: 3_000)
+            let orphan = try await saveMeeting(in: store, age: 2_000)
+            let trashedOrphan = try await saveMeeting(in: store, age: 1_000, trashed: true)
+            for id in [pending, draft, orphan, trashedOrphan] {
+                try plantRetainedAudio(for: id, in: store)
+            }
+            try await markTerminalDraft(draft, in: store)
+            try await markFinalized(orphan, in: store)
+            try await markFinalized(trashedOrphan, in: store)
+            let orphanTranscript = try Data(contentsOf: store.directory(for: orphan).appending(path: "transcript.json"))
+
+            await store.sweepFinalPassAudioOrphans()
+
+            // The orphan's audio is gone; its final transcript is untouched.
+            #expect(await !store.hasRetainedAudio(for: orphan))
+            #expect(try Data(contentsOf: store.directory(for: orphan).appending(path: "transcript.json")) == orphanTranscript)
+            // The draft's kept audio (the Retry's fuel) and the pending
+            // meeting's checkpoint both survive the sweep.
+            #expect(await store.hasRetainedAudio(for: draft))
+            #expect(await store.hasRetainedAudio(for: pending))
+            // Trashed meetings stay outside the scan (existing rule): their
+            // files go with the folder, or a restore re-surfaces them.
+            #expect(await store.hasRetainedAudio(for: trashedOrphan))
+        }
+    }
+
+    @Test("a terminal draft is never enqueued — across relaunches, only the user re-opens it")
+    func terminalDraftIsNeverAutoResumed() async throws {
+        try await withTempStore { store, _ in
+            let draft = try await saveMeeting(in: store, age: 1_000)
+            try plantRetainedAudio(for: draft, in: store)
+            try await markTerminalDraft(draft, in: store)
+
+            // However often the scan runs (every launch), the draft rests.
+            #expect(await store.pendingFinalizationMeetingIDs() == [])
+            await store.sweepFinalPassAudioOrphans()
+            #expect(await store.pendingFinalizationMeetingIDs() == [])
+            // Its audio — the Retry affordance's exact lifetime — remains.
+            #expect(await store.hasRetainedAudio(for: draft))
         }
     }
 
@@ -156,10 +259,28 @@ struct FinalizationResumeScanTests {
             #expect(excluded.contains(pending))
             #expect(!excluded.contains(eligible))
 
-            // A concluded pass (success or terminal) deletes the audio; the
-            // meeting becomes eligible with no other state change (ADR-016).
+            // Terminal convergence records liveFloor provenance with the
+            // audio KEPT (ADR-024): the draft is no longer pending, so its
+            // floor summary may generate — the same rule, new bit.
+            try await markTerminalDraft(pending, in: store)
+            #expect(await store.pendingFinalizationMeetingIDs() == [])
+            #expect(await store.hasRetainedAudio(for: pending))
+        }
+    }
+
+    @Test("a successful pass still ends pending the old way: the audio deletion")
+    func successCleanupEndsPending() async throws {
+        try await withTempStore { store, _ in
+            let pending = try await saveMeeting(in: store, age: 1_000)
+            try plantRetainedAudio(for: pending, in: store)
+            #expect(await store.pendingFinalizationMeetingIDs() == [pending])
+
+            // Success: replace (recording finalPass provenance) + delete —
+            // and a crash between the two is exactly the orphan class above.
+            try await markFinalized(pending, in: store)
             await store.deleteRetainedAudio(for: pending)
             #expect(await store.pendingFinalizationMeetingIDs() == [])
+            #expect(await store.retainedAudioDisposition(for: pending) == .none)
         }
     }
 }

@@ -57,6 +57,20 @@ struct MeetingStoreTests {
         }
     }
 
+    private func makeProvenance(
+        source: TranscriptProvenance.Source = .finalPass,
+        modelName: String = "large-v3_947MB",
+        tier: String = "fullLargeV3",
+        servedByFallback: Bool = false
+    ) -> TranscriptProvenance {
+        TranscriptProvenance(
+            source: source,
+            modelName: modelName,
+            tier: tier,
+            servedByFallback: servedByFallback
+        )
+    }
+
     private func makeSummary() -> MeetingSummary {
         MeetingSummary(
             shortSummary: "Short",
@@ -118,6 +132,329 @@ struct MeetingStoreTests {
             #expect(await store.listMetas().first?.hasSummary == true)
         }
     }
+
+    @Test("attachSummary records the summary model name alongside hasSummary")
+    func attachSummaryRecordsModelName() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            try await store.attachSummary(
+                makeSummary(),
+                modelName: "mlx-community/Qwen3.5-4B-OptiQ-4bit",
+                to: meta.id
+            )
+
+            let loaded = try await store.loadRecord(meta.id)
+            #expect(loaded.meta.hasSummary == true)
+            #expect(loaded.meta.summaryModelName == "mlx-community/Qwen3.5-4B-OptiQ-4bit")
+        }
+    }
+
+    @Test("attachSummary without a model name leaves the field absent")
+    func attachSummaryWithoutModelName() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            try await store.attachSummary(makeSummary(), to: meta.id)
+
+            let loaded = try await store.loadRecord(meta.id)
+            #expect(loaded.meta.hasSummary == true)
+            #expect(loaded.meta.summaryModelName == nil)
+            let json = try String(
+                decoding: Data(contentsOf: store.directory(for: meta.id).appending(path: "meta.json")),
+                as: UTF8.self
+            )
+            #expect(!json.contains("summaryModelName"))
+        }
+    }
+
+    // MARK: - Provenance (SP-007, ADR-022)
+
+    @Test("a meta written without provenance decodes with nil provenance fields")
+    func metaWithoutProvenanceDecodesNil() async throws {
+        try await withTempStore { store, root in
+            // A pre-SP-007 meta.json, verbatim: no provenance fields at all.
+            let id = UUID()
+            let directory = root.appending(path: id.uuidString, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let legacy = """
+            {
+              "endedAt" : "2023-11-14T22:14:50Z",
+              "hasSummary" : false,
+              "id" : "\(id.uuidString)",
+              "schemaVersion" : 1,
+              "segmentCount" : 2,
+              "startedAt" : "2023-11-14T22:13:20Z",
+              "title" : "Legacy Meeting"
+            }
+            """
+            try Data(legacy.utf8).write(to: directory.appending(path: "meta.json"))
+
+            let metas = await store.listMetas()
+            #expect(metas.count == 1)
+            #expect(metas.first?.transcriptProvenance == nil)
+            #expect(metas.first?.summaryModelName == nil)
+        }
+    }
+
+    @Test("an untouched old meeting's meta.json stays byte-identical after reads")
+    func untouchedMetaStaysByteIdentical() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let metaURL = store.directory(for: meta.id).appending(path: "meta.json")
+            let before = try Data(contentsOf: metaURL)
+
+            _ = await store.listMetas()
+            _ = try await store.loadRecord(meta.id)
+
+            #expect(try Data(contentsOf: metaURL) == before)
+        }
+    }
+
+    @Test("recordLiveFloorProvenance writes exactly meta.json — transcript untouched")
+    func recordLiveFloorProvenanceWritesOnlyMeta() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            let segments = makeSegments()
+            try await store.save(MeetingRecord(meta: meta, segments: segments, summary: nil))
+            let directory = store.directory(for: meta.id)
+            let transcriptBytes = try Data(contentsOf: directory.appending(path: "transcript.json"))
+            let filesBefore = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+
+            let provenance = makeProvenance(
+                source: .liveFloor,
+                modelName: "large-v3-v20240930_626MB",
+                tier: "reuseLive"
+            )
+            try await store.recordLiveFloorProvenance(for: meta.id, provenance: provenance)
+
+            let loaded = try await store.loadRecord(meta.id)
+            #expect(loaded.meta.transcriptProvenance == provenance)
+            #expect(loaded.segments == segments)
+            #expect(try Data(contentsOf: directory.appending(path: "transcript.json")) == transcriptBytes)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() == filesBefore)
+        }
+    }
+
+    @Test("recordLiveFloorProvenance on a missing meeting throws and creates nothing")
+    func recordLiveFloorProvenanceMissingMeetingThrows() async throws {
+        try await withTempStore { store, _ in
+            let ghost = UUID()
+            await #expect(throws: (any Error).self) {
+                try await store.recordLiveFloorProvenance(for: ghost, provenance: makeProvenance(source: .liveFloor))
+            }
+            #expect(!FileManager.default.fileExists(atPath: store.directory(for: ghost).path))
+        }
+    }
+
+    @Test("provenance encodes with the stable raw strings the launch scan will key on")
+    func provenanceStableRawStrings() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let metaURL = store.directory(for: meta.id).appending(path: "meta.json")
+
+            try await store.recordLiveFloorProvenance(
+                for: meta.id,
+                provenance: makeProvenance(source: .liveFloor, modelName: "large-v3-v20240930_626MB", tier: "reuseLive")
+            )
+            var json = try String(decoding: Data(contentsOf: metaURL), as: UTF8.self)
+            #expect(json.contains("\"source\" : \"liveFloor\""))
+            #expect(json.contains("\"tier\" : \"reuseLive\""))
+            #expect(json.contains("\"modelName\" : \"large-v3-v20240930_626MB\""))
+            #expect(json.contains("\"servedByFallback\" : false"))
+
+            try await store.replaceTranscript(
+                makeSegments(),
+                provenance: makeProvenance(source: .finalPass, tier: "fullLargeV3"),
+                for: meta.id
+            )
+            json = try String(decoding: Data(contentsOf: metaURL), as: UTF8.self)
+            #expect(json.contains("\"source\" : \"finalPass\""))
+            #expect(json.contains("\"tier\" : \"fullLargeV3\""))
+
+            // The tier raws come from FinalPassTier itself — one source of truth
+            // for what the ADR-024 launch scan will read back.
+            #expect(FinalPassTier.reuseLive.rawValue == "reuseLive")
+            #expect(FinalPassTier.fullLargeV3.rawValue == "fullLargeV3")
+        }
+    }
+
+    // MARK: - Retained-audio disposition (SP-007, ADR-024)
+
+    /// Arms retained audio in the meeting folder (the ADR-016 marker).
+    private func plantRetainedAudio(for id: UUID, in store: MeetingStore) throws {
+        let url = store.directory(for: id)
+            .appending(path: MeetingStore.retainedAudioFileName(for: .microphone))
+        try Data("retained".utf8).write(to: url)
+    }
+
+    @Test("disposition reads audio presence + provenance source: none, pending, terminal draft, orphan")
+    func retainedAudioDispositionRows() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            // No audio → nothing retained, whatever the provenance says.
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .none)
+            #expect(await !store.hasRetainedAudio(for: meta.id))
+            #expect(await !store.isPendingFinalization(meta.id))
+
+            // Audio + no provenance → pending (auto-resume, as ever).
+            try plantRetainedAudio(for: meta.id, in: store)
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .pending)
+            #expect(await store.hasRetainedAudio(for: meta.id))
+            #expect(await store.isPendingFinalization(meta.id))
+
+            // Audio + liveFloor → terminal draft: kept for the manual Retry,
+            // no longer pending (ADR-024's one atomic meta write).
+            try await store.recordLiveFloorProvenance(
+                for: meta.id,
+                provenance: makeProvenance(source: .liveFloor, modelName: "large-v3-v20240930_626MB", tier: "reuseLive")
+            )
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .terminalDraft)
+            #expect(await store.hasRetainedAudio(for: meta.id))
+            #expect(await !store.isPendingFinalization(meta.id))
+
+            // Audio + finalPass → the orphan of a success whose cleanup
+            // crashed between the transcript replace and the audio deletion.
+            try await store.replaceTranscript(makeSegments(), provenance: makeProvenance(), for: meta.id)
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .finalPassOrphan)
+            #expect(await !store.isPendingFinalization(meta.id))
+        }
+    }
+
+    @Test("keep-draft deletes exactly the kept audio — meta and transcript byte-identical")
+    func keepDraftDeletesOnlyRetainedAudio() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            let segments = makeSegments()
+            try await store.save(MeetingRecord(meta: meta, segments: segments, summary: nil))
+            // The terminal-draft state: liveFloor provenance + kept audio.
+            try await store.recordLiveFloorProvenance(
+                for: meta.id,
+                provenance: makeProvenance(source: .liveFloor, modelName: "large-v3-v20240930_626MB", tier: "reuseLive")
+            )
+            try plantRetainedAudio(for: meta.id, in: store)
+            let directory = store.directory(for: meta.id)
+            let metaBytes = try Data(contentsOf: directory.appending(path: "meta.json"))
+            let transcriptBytes = try Data(contentsOf: directory.appending(path: "transcript.json"))
+
+            // "Keep draft" (ADR-024): the user accepts the draft as final and
+            // ends retention — nothing but the audio may change.
+            await store.deleteRetainedAudio(for: meta.id)
+
+            #expect(await !store.hasRetainedAudio(for: meta.id))
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .none)
+            #expect(try Data(contentsOf: directory.appending(path: "meta.json")) == metaBytes)
+            #expect(try Data(contentsOf: directory.appending(path: "transcript.json")) == transcriptBytes)
+            // The Draft badge survives: provenance still says liveFloor.
+            #expect(try await store.loadRecord(meta.id).meta.transcriptProvenance?.source == .liveFloor)
+        }
+    }
+
+    // MARK: - DEBUG kept fixtures (SP-007 keep flag)
+
+    #if DEBUG
+    /// Plants retained audio with distinct per-channel bytes, so the rename
+    /// tests can prove the kept files carry the original bytes.
+    private func plantRetainedAudio(
+        _ contents: [AudioChannel: Data],
+        for id: UUID,
+        in store: MeetingStore
+    ) throws {
+        for (channel, data) in contents {
+            try data.write(to: store.directory(for: id)
+                .appending(path: MeetingStore.retainedAudioFileName(for: channel)))
+        }
+    }
+
+    @Test("preserve renames the retained files to kept names in the same folder — originals gone, bytes identical")
+    func preserveRenamesRetainedAudioToKeptNames() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let micBytes = Data("mic take".utf8)
+            let systemBytes = Data("system take".utf8)
+            try plantRetainedAudio([.microphone: micBytes, .system: systemBytes], for: meta.id, in: store)
+            let directory = store.directory(for: meta.id)
+
+            #expect(await store.preserveRetainedAudioAsDebugFixture(for: meta.id))
+
+            // The retained names are gone; the kept names hold the same bytes
+            // in the same meeting folder (a rename, not a copy elsewhere).
+            for (channel, bytes) in [(AudioChannel.microphone, micBytes), (.system, systemBytes)] {
+                let retained = directory.appending(path: MeetingStore.retainedAudioFileName(for: channel))
+                let kept = directory.appending(path: MeetingStore.debugKeptAudioFileName(for: channel))
+                #expect(!FileManager.default.fileExists(atPath: retained.path))
+                #expect(try Data(contentsOf: kept) == bytes)
+            }
+        }
+    }
+
+    @Test("a preserved meeting reads as holding no retained audio — not pending, disposition none")
+    func preservedMeetingReadsAsNoRetainedAudio() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            try plantRetainedAudio([.microphone: Data("mic".utf8)], for: meta.id, in: store)
+            #expect(await store.isPendingFinalization(meta.id))
+
+            await store.preserveRetainedAudioAsDebugFixture(for: meta.id)
+
+            // Kept fixtures are invisible to the pending marker and the
+            // ADR-024 disposition scan — nothing re-runs, nothing sweeps them.
+            #expect(await !store.isPendingFinalization(meta.id))
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .none)
+            #expect(await store.retainedAudioFiles(for: meta.id).isEmpty)
+        }
+    }
+
+    @Test("deleteRetainedAudio after preserve is a harmless no-op — kept files untouched")
+    func deleteRetainedAudioAfterPreserveIsNoOp() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let bytes = Data("keep me".utf8)
+            try plantRetainedAudio([.microphone: bytes], for: meta.id, in: store)
+            await store.preserveRetainedAudioAsDebugFixture(for: meta.id)
+
+            // The success path's normal cleanup, running right after the
+            // preserve (the RecordingController ordering): finds nothing.
+            await store.deleteRetainedAudio(for: meta.id)
+
+            let kept = store.directory(for: meta.id)
+                .appending(path: MeetingStore.debugKeptAudioFileName(for: .microphone))
+            #expect(try Data(contentsOf: kept) == bytes)
+        }
+    }
+
+    @Test("a second preserve after re-retention replaces the previous kept take")
+    func secondPreserveReplacesPreviousKeptTake() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            try plantRetainedAudio([.microphone: Data("first take".utf8)], for: meta.id, in: store)
+            await store.preserveRetainedAudioAsDebugFixture(for: meta.id)
+
+            // Re-retention (a manual Retry driven to success again), then a
+            // second preserve: the kept name holds the NEW take.
+            let secondTake = Data("second take".utf8)
+            try plantRetainedAudio([.microphone: secondTake], for: meta.id, in: store)
+            #expect(await store.preserveRetainedAudioAsDebugFixture(for: meta.id))
+
+            let directory = store.directory(for: meta.id)
+            let kept = directory.appending(path: MeetingStore.debugKeptAudioFileName(for: .microphone))
+            #expect(try Data(contentsOf: kept) == secondTake)
+            #expect(!FileManager.default.fileExists(
+                atPath: directory.appending(path: MeetingStore.retainedAudioFileName(for: .microphone)).path
+            ))
+        }
+    }
+    #endif
 
     // MARK: - listMetas
 
