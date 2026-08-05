@@ -364,6 +364,12 @@ nonisolated enum FinalizationPass {
         let language: String
     }
 
+    /// The per-window diagnostic's confidence field: a decode that produced
+    /// no segments has no mean logprob to report.
+    private static func logprobDescription(_ mean: Float?) -> String {
+        mean.map { String(format: "%.3f", $0) } ?? "empty"
+    }
+
     private static func transcribeChannel(
         url: URL,
         channel: AudioChannel,
@@ -416,15 +422,17 @@ nonisolated enum FinalizationPass {
                 // Per-window language on voiced evidence (ADR-020): detection
                 // runs on the UNPADDED window samples — the window covers a
                 // selected speech region, so this is what was actually voiced,
-                // never the silence pad. The window always decodes: failed,
-                // out-of-whitelist, and unconfident detections fall back to
-                // the session language, never skip.
+                // never the silence pad. The window always decodes: a decisive
+                // detection decides it alone; anything below the decisive
+                // floor makes it language-uncertain, with the session prior
+                // (else argmax, else default) as the prompt-carrying primary.
                 var tracker = carriedTracker
                 let detection = try? await whisper.detectLangauge(audioArray: samples)
-                let language = tracker.decodeLanguage(
+                let decision = tracker.decodeLanguage(
                     detection: detection?.language,
                     probabilities: detection?.langProbs ?? [:]
                 )
+                let language = decision.language
 
                 // A language change orphans the previous window's prior-text
                 // conditioning (ADR-020 rule 4) — text in another language
@@ -448,15 +456,21 @@ nonisolated enum FinalizationPass {
                     windowDuration: windowDuration
                 )
                 var chosenLanguage = language
+                var abLine = "none"
 
-                // A/B backstop (ADR-020 rule 3): a window still failing the
-                // model's own thresholds after temperature fallback gets one
-                // re-decode in the other whitelist language; the better
-                // model-reported confidence is kept — and remains subject to
+                // A/B backstop (ADR-020 rule 3 + 2026-08-05 field report):
+                // quality-flagged windows as before, PLUS language-uncertain
+                // ones — a fluent covert translation has healthy logprobs and
+                // never quality-flags, but transcribing Spanish as Spanish
+                // beats translating it on token logprob, so the decode
+                // comparison catches what fluency hides from the thresholds.
+                // The better mean logprob is kept — and remains subject to
                 // the discipline below (both may lose). No prompt: the chain
                 // is in the primary language.
-                if FinalPassDiscipline.isQualityFlagged(raw),
-                   let alternate = FinalPassDiscipline.alternateWhitelistLanguage(to: language) {
+                if FinalPassDiscipline.needsAlternateDecode(
+                    isDecisive: decision.isDecisive,
+                    qualityFlagged: FinalPassDiscipline.isQualityFlagged(raw)
+                ), let alternate = FinalPassDiscipline.alternateWhitelistLanguage(to: language) {
                     var alternateOptions = finalDecodeOptions
                     alternateOptions.language = alternate
                     alternateOptions.promptTokens = nil
@@ -467,12 +481,47 @@ nonisolated enum FinalizationPass {
                             alternateResults.flatMap(\.segments),
                             windowDuration: windowDuration
                         )
-                        if FinalPassDiscipline.abChoice(primary: raw, alternate: alternateRaw) == .alternate {
+                        let primaryMean = FinalPassDiscipline.meanAvgLogprob(raw)
+                        let alternateMean = FinalPassDiscipline.meanAvgLogprob(alternateRaw)
+                        let choice = FinalPassDiscipline.abChoice(primary: raw, alternate: alternateRaw)
+                        if choice == .alternate {
                             raw = alternateRaw
                             chosenLanguage = alternate
                         }
+                        // The kept dual-decode language is real evidence of
+                        // what the meeting sounds like — feed the session
+                        // prior so consistent meetings converge, without
+                        // re-creating the lock (decisive windows still
+                        // decide alone).
+                        tracker.noteABWinner(chosenLanguage)
+                        abLine = String(
+                            format: "%@ %@=%@ %@=%@",
+                            choice == .alternate ? "alternate" : "primary",
+                            language, Self.logprobDescription(primaryMean),
+                            alternate, Self.logprobDescription(alternateMean)
+                        )
+                    } else {
+                        abLine = "failed"
                     }
                 }
+
+                // Per-window language diagnosability (2026-08-05 field
+                // report: covert translation had to be inferred because
+                // nothing logged the language path). Numbers and language
+                // codes only — NEVER transcript text.
+                let detectedLine = detection.map {
+                    String(format: "%@@%.2f", $0.language, $0.langProbs[$0.language] ?? 0)
+                } ?? "none"
+                let windowLine = String(
+                    format: "Final pass window %@ %.2f–%.2fs: detected=%@ decisive=%@ decode=%@ kept=%@ ab=%@",
+                    channel.rawValue,
+                    offset, offset + windowDuration,
+                    detectedLine,
+                    decision.isDecisive ? "yes" : "no",
+                    language, chosenLanguage,
+                    abLine
+                )
+                Self.log.info("\(windowLine, privacy: .public)")
 
                 // ADR-019 rules 1+2: exhausted-fallback rejection, then
                 // per-segment energy evidence through the live filters —

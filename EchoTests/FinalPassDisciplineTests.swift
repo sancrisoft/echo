@@ -295,6 +295,16 @@ struct FinalPassDisciplineTests {
             #expect(FinalPassDiscipline.shouldResetChain(previousLanguage: "en", windowLanguage: "es"))
             #expect(FinalPassDiscipline.shouldResetChain(previousLanguage: "es", windowLanguage: "en"))
         }
+
+        /// The dual-decode composition: an uncertain window's primary carried
+        /// the en chain, but the es alternate won the A/B — the KEPT language
+        /// drives the reset, so the next window never appends to English
+        /// conditioning (same pure gate, compared against the winner).
+        @Test("an A/B winner differing from the previous window's language resets the chain")
+        func abWinnerDifferingFromPreviousResets() {
+            #expect(FinalPassDiscipline.shouldResetChain(previousLanguage: "en", windowLanguage: "es"))
+            #expect(!FinalPassDiscipline.shouldResetChain(previousLanguage: "es", windowLanguage: "es"))
+        }
     }
 
     @Suite("FinalPassDiscipline — alternate whitelist language")
@@ -349,6 +359,52 @@ struct FinalPassDisciplineTests {
         @Test("both empty keeps the primary")
         func bothEmptyKeepsPrimary() {
             #expect(FinalPassDiscipline.abChoice(primary: [], alternate: []) == .primary)
+        }
+    }
+
+    // MARK: - Language-uncertainty A/B trigger (2026-08-05 field report)
+
+    @Suite("FinalPassDiscipline — dual-decode trigger")
+    struct DualDecodeTriggerTests {
+
+        @Test("uncertain OR quality-flagged forces the dual decode; decisive and clean does not")
+        func triggerComposition() {
+            #expect(FinalPassDiscipline.needsAlternateDecode(isDecisive: false, qualityFlagged: false))
+            #expect(FinalPassDiscipline.needsAlternateDecode(isDecisive: false, qualityFlagged: true))
+            #expect(FinalPassDiscipline.needsAlternateDecode(isDecisive: true, qualityFlagged: true))
+            #expect(!FinalPassDiscipline.needsAlternateDecode(isDecisive: true, qualityFlagged: false))
+        }
+
+        /// The covert-translation geometry end to end (pure parts): Whisper
+        /// says en@0.55 on Spanish audio; the English decode is a FLUENT
+        /// translation — healthy metrics, never quality-flagged — so only the
+        /// uncertainty trigger reaches it; and transcribing Spanish as
+        /// Spanish beats translating it on token logprob, so the A/B verdict
+        /// keeps the Spanish decode.
+        @Test("en@0.55 on Spanish audio: uncertain, unflagged, and es wins the A/B on logprob")
+        func covertTranslationIsCaught() {
+            var tracker = FinalPassLanguageTracker()
+            let decision = tracker.decodeLanguage(detection: "en", probabilities: ["en": 0.55])
+            #expect(!decision.isDecisive)
+
+            let fluentTranslation = [rawSegment(
+                "I'll go straight to her and see how she's doing",
+                start: 0, end: 4, avgLogprob: -0.45
+            )]
+            #expect(!FinalPassDiscipline.isQualityFlagged(fluentTranslation))
+            #expect(FinalPassDiscipline.needsAlternateDecode(
+                isDecisive: decision.isDecisive,
+                qualityFlagged: FinalPassDiscipline.isQualityFlagged(fluentTranslation)
+            ))
+
+            let spanishTranscription = [rawSegment(
+                "voy directo con ella a ver cómo va",
+                start: 0, end: 4, avgLogprob: -0.22
+            )]
+            #expect(FinalPassDiscipline.abChoice(
+                primary: fluentTranslation,
+                alternate: spanishTranscription
+            ) == .alternate)
         }
     }
 

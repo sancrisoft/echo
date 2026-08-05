@@ -174,6 +174,17 @@ nonisolated enum FinalPassDiscipline {
         TranscriptionPipeline.allowedTranscriptionLanguages.first { $0 != language }
     }
 
+    /// Whether a window must dual-decode both whitelist languages
+    /// (2026-08-05 field report, extending ADR-020 rule 3): quality-flagged
+    /// windows as before, PLUS every language-uncertain window. A covert
+    /// translation is FLUENT — healthy logprobs, never quality-flagged — so
+    /// the quality trigger alone cannot see it; but transcribing Spanish as
+    /// Spanish beats translating it on token logprob, so the decode
+    /// comparison catches what fluency hides from the thresholds.
+    static func needsAlternateDecode(isDecisive: Bool, qualityFlagged: Bool) -> Bool {
+        !isDecisive || qualityFlagged
+    }
+
     enum ABChoice: Equatable {
         case primary
         case alternate
@@ -192,50 +203,97 @@ nonisolated enum FinalPassDiscipline {
         return alternateConfidence > primaryConfidence ? .alternate : .primary
     }
 
-    private static func meanAvgLogprob(_ segments: [TranscriptionSegment]) -> Float? {
+    /// Internal (not private): the window loop logs both decodes' confidence
+    /// on the per-window diagnostic line (2026-08-05 field report — this
+    /// defect class must never need inferring again).
+    static func meanAvgLogprob(_ segments: [TranscriptionSegment]) -> Float? {
         guard !segments.isEmpty else { return nil }
         return segments.reduce(0) { $0 + $1.avgLogprob } / Float(segments.count)
     }
 }
 
 /// ADR-020: per-window language on voiced evidence — no session lock. A
-/// confident in-whitelist detection decides its own window, full stop, and
-/// becomes the session fallback; windows with no confident in-whitelist
-/// detection decode in the most recent confident language (default "en"
-/// before any). Replaces the SP-005 hysteresis tracker: its two-window switch
-/// streak let a backchannel-dominated channel lock the whole session to
-/// English, and Whisper then *translated* the user's Spanish sentences — the
-/// 2026-08-04 covert-translation failure. Per-window whipsaw is harmless:
-/// alternating languages per window IS the correct output for a mixed meeting.
+/// DECISIVE in-whitelist detection decides its own window, full stop, and
+/// becomes the session fallback. Everything below the decisive floor is
+/// language-UNCERTAIN: the window dual-decodes both whitelist languages and
+/// keeps the better mean logprob (`FinalPassDiscipline.abChoice`); the
+/// uncertain PRIMARY (the decode that carries the prompt chain) follows the
+/// session prior when one exists, else the detection argmax, else the
+/// default. The dual decode's winner feeds the session evidence, so a
+/// consistently-Spanish meeting converges to an es prior — without ever
+/// locking out a decisive opposite detection (mixed meetings stay
+/// per-window; alternating languages per window IS the correct output).
+///
+/// History: the SP-005 hysteresis tracker let backchannel lock a session to
+/// English (2026-08-04 covert translation); its pure per-window replacement
+/// then trusted any detection above 0.5 — and a 2026-08-05 field meeting
+/// showed Whisper reporting en@~0.5–0.8 on Spanish audio, producing FLUENT
+/// per-window translations whose healthy logprobs never quality-flagged.
+/// The decisive/uncertain split is what closes that band.
 nonisolated struct FinalPassLanguageTracker: Sendable {
 
-    /// Decode language while no confident detection has ever arrived.
+    /// Decode language while no evidence has ever arrived.
     static let defaultLanguage = "en"
 
-    /// Minimum detection probability for a window to decide itself: the
-    /// detected language must hold the majority of the model's probability
-    /// mass — it beats every other language combined. Full in-language
-    /// sentences clear this; ambiguous backchannel windows fall back instead
-    /// of deciding anything. Pinned here as the single named constant; tuned
-    /// against the mixed-language fixtures (ADR-020 follow-up).
+    /// Detection probability at which a window decides itself ALONE — no
+    /// dual decode. High on purpose: below it the detection is a hint, not a
+    /// verdict, and the field evidence shows Whisper reporting the wrong
+    /// language in the 0.5–0.8 band on real meeting audio. Tuned against the
+    /// mixed-language fixtures (ADR-020 follow-up).
+    static let decisiveConfidence: Float = 0.8
+
+    /// Minimum probability for a detection to count as language *evidence*
+    /// at all — below it the argmax is noise and may not even pick the
+    /// uncertain primary (majority of the model's probability mass: the
+    /// detected language beats every other language combined).
     static let confidenceFloor: Float = 0.5
 
-    /// The most recent confident in-whitelist detection — the fallback, and
-    /// nothing more: it never overrides a confident detection.
+    /// The most recent decisive detection or dual-decode winner — a prior
+    /// for uncertain windows, never an override of a decisive one.
     private(set) var sessionLanguage: String?
 
-    /// The language this window decodes with. Pure over (state, detection,
+    /// One window's language decision.
+    struct Decision: Equatable, Sendable {
+        /// The prompt-carrying primary decode's language.
+        let language: String
+        /// False = language-uncertain: the window must dual-decode both
+        /// whitelist languages and keep the better mean logprob, whatever
+        /// the quality flags say.
+        let isDecisive: Bool
+    }
+
+    /// The decision for this window. Pure over (state, detection,
     /// probabilities) — the FinalPassLanguageTests tables drive exactly this.
     mutating func decodeLanguage(
         detection: String?,
         probabilities: [String: Float]
-    ) -> String {
-        guard let detection,
-              TranscriptionPipeline.allowedTranscriptionLanguages.contains(detection),
-              probabilities[detection, default: 0] >= Self.confidenceFloor else {
-            return sessionLanguage ?? Self.defaultLanguage
+    ) -> Decision {
+        let whitelisted = detection.flatMap { candidate in
+            TranscriptionPipeline.allowedTranscriptionLanguages.contains(candidate) ? candidate : nil
         }
-        sessionLanguage = detection
-        return detection
+        let probability = whitelisted.map { probabilities[$0, default: 0] } ?? 0
+
+        if let whitelisted, probability >= Self.decisiveConfidence {
+            sessionLanguage = whitelisted
+            return Decision(language: whitelisted, isDecisive: true)
+        }
+        // Uncertain: the session prior picks the primary; the A/B winner —
+        // not this hint — is what may move the session evidence.
+        if let sessionLanguage {
+            return Decision(language: sessionLanguage, isDecisive: false)
+        }
+        if let whitelisted, probability >= Self.confidenceFloor {
+            return Decision(language: whitelisted, isDecisive: false)
+        }
+        return Decision(language: Self.defaultLanguage, isDecisive: false)
+    }
+
+    /// The dual decode's kept language is real evidence of what the meeting
+    /// sounds like — feeding it back converges the prior without re-creating
+    /// the session lock (decisive windows still decide alone). Whitelist
+    /// languages only, defensively: the wiring can never hand anything else.
+    mutating func noteABWinner(_ language: String) {
+        guard TranscriptionPipeline.allowedTranscriptionLanguages.contains(language) else { return }
+        sessionLanguage = language
     }
 }
