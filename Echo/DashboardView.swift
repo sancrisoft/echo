@@ -78,7 +78,6 @@ struct DashboardView: View {
     /// window (not the menu-bar popover, which would dismiss an alert as it
     /// closes) so both surfaces route through it; its CTA just closes the
     /// dialog, leaving the live download status visible in the banners behind.
-    @State private var showGateAlert = false
 
     var body: some View {
         // A plain HStack instead of NavigationSplitView: on this macOS the
@@ -116,29 +115,11 @@ struct DashboardView: View {
             // The menu bar opens this window on a gated press; the notice was
             // set before the window existed, so onChange can't catch it —
             // consume it here as the window appears.
-            consumeSpeechModelGateNotice()
         }
         // The window may already be open when the menu bar's Stop asks for the
         // live detail — onAppear won't re-fire then, so follow the flag too.
         .onChange(of: controller.pendingLiveDetailOpen) { _, pending in
             if pending { consumePendingLiveDetailOpen() }
-        }
-        // A record attempt gated on the speech-model download: its callout
-        // lives on the meetings list, so any open detail must step aside.
-        .onChange(of: controller.recordingAwaitingSpeechModel) { _, gated in
-            if gated { opened = nil }
-        }
-        // Raise the "can't record yet" dialog on each blocked press. The
-        // one-shot fires even when the sticky gate flag was already set (a
-        // repeat press), and covers the case where the window was already open.
-        .onChange(of: controller.pendingSpeechModelGateNotice) { _, pending in
-            if pending { consumeSpeechModelGateNotice() }
-        }
-        .alert("Can't start recording yet", isPresented: $showGateAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(RecordingGateDecision.decide(controller.speechModelState).message
-                ?? "The speech model isn't ready yet.")
         }
         #if DEBUG
         // Dev-only verification loop: with ECHO_SNAPSHOT_PATH set (and the
@@ -420,11 +401,6 @@ struct DashboardView: View {
         opened = OpenedDetail(target: .live, tab: summaryDone ? .summary : .transcript)
     }
 
-    private func consumeSpeechModelGateNotice() {
-        guard controller.pendingSpeechModelGateNotice else { return }
-        controller.pendingSpeechModelGateNotice = false
-        showGateAlert = true
-    }
 }
 
 /// The display title for the in-progress session: the auto title it will be
@@ -675,14 +651,6 @@ private struct AllMeetingsView: View {
             header
             if !settings.privacyBannerDismissed {
                 PrivacyBanner { settings.dismissPrivacyBanner() }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 8)
-            }
-            // The user pressed record before the speech model was on disk:
-            // explain that recording unlocks once the download finishes and
-            // hand off with a Start button when it does.
-            if controller.recordingAwaitingSpeechModel {
-                SpeechModelGateBanner(opened: $opened)
                     .padding(.horizontal, 20)
                     .padding(.bottom, 8)
             }
@@ -1165,8 +1133,10 @@ private struct LiveMeetingRow: View {
     }
 
     private var metadataText: String {
-        let words = MeetingMeta.wordCount(of: controller.state.segments)
-        var text = "\(recTimerString(controller.state.elapsed))  ·  \(words.formatted()) words"
+        // No transcript-derived number while recording: nothing is
+        // transcribed until the meeting stops. The word count reappears from
+        // `meta.wordCount` once the pass writes the transcript.
+        var text = recTimerString(controller.state.elapsed)
         // SP-008: a scoped session says so right on the row ("Zoom only") —
         // `captureScope` reflects the effective scope after any fallback, so
         // this never overstates the narrowing. A global session renders
@@ -1344,130 +1314,6 @@ private struct PrivacyBanner: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.green.opacity(0.20))
         )
-    }
-}
-
-// MARK: - Speech-model gate banner
-
-/// Shown when the user pressed record before the speech model was ready
-/// (`RecordingController.recordingAwaitingSpeechModel`). ADR-009's gate blocks
-/// every not-ready sub-state, so this callout tracks all of them — the live
-/// download percent, the "preparing" load, or a download/load failure with a
-/// Retry — and, the moment the model is ready, offers the Start button the
-/// original click was aiming for.
-private struct SpeechModelGateBanner: View {
-    @Environment(RecordingController.self) private var controller
-    @Binding var opened: OpenedDetail?
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: icon)
-                .foregroundStyle(tint)
-                .font(.title3)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.callout.weight(.semibold))
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            trailing
-            Button {
-                controller.dismissSpeechModelGate()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Dismiss")
-        }
-        .padding(12)
-        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(tint.opacity(0.20))
-        )
-    }
-
-    private var icon: String {
-        switch controller.speechModelState {
-        case .downloading: return "arrow.down.circle.fill"
-        case .loading: return "waveform.circle.fill"
-        case .ready: return "checkmark.circle.fill"
-        case .failed: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var tint: Color {
-        switch controller.speechModelState {
-        case .downloading, .loading: return .echoIndigo
-        case .ready: return .green
-        case .failed: return .orange
-        }
-    }
-
-    private var title: String {
-        switch controller.speechModelState {
-        case .downloading: return "Downloading the speech model"
-        case .loading: return "Preparing the speech model"
-        case .ready: return "Speech model ready"
-        // Covers a failed load too, not only a failed download — with the
-        // loading/load-failed hole closed (ADR-009), a load failure now routes
-        // to this callout as well, and "download failed" would misname it.
-        case .failed: return "Speech model isn't ready"
-        }
-    }
-
-    private var message: String {
-        switch controller.speechModelState {
-        case .downloading:
-            return "Recording will be available once the download finishes — this happens only on the first run."
-        case .loading:
-            return "Almost there — recording will be available in a moment."
-        case .ready:
-            return "You can start recording now."
-        case .failed(let message):
-            return message
-        }
-    }
-
-    @ViewBuilder
-    private var trailing: some View {
-        switch controller.speechModelState {
-        case .downloading(let fraction):
-            let progress = ModelDownloadProgress(fraction: fraction)
-            HStack(spacing: 8) {
-                ProgressView(value: progress.fraction)
-                    .frame(width: 140)
-                Text("\(progress.percent)%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        case .loading:
-            ProgressView()
-                .controlSize(.small)
-        case .ready:
-            Button {
-                Task {
-                    await controller.toggle()
-                    if controller.state.isRecording { opened = OpenedDetail(target: .live) }
-                }
-            } label: {
-                Label("Start recording", systemImage: "play.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.echoIndigo)
-            .controlSize(.small)
-        case .failed:
-            Button("Retry") {
-                Task { await controller.prepare() }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
     }
 }
 
@@ -2487,18 +2333,12 @@ private struct LiveTranscriptFooter: View {
 
                 Spacer(minLength: 12)
 
-                // Honest status: while the speech model isn't loaded the
-                // pipeline drops every sample, and "Transcribing…" would be
-                // a lie that costs the user the whole meeting.
-                if controller.state.transcriberUnavailable {
-                    Text("Not transcribing — speech model failed to load")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.orange)
-                } else {
-                    Text("Transcribing…")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(Color.echoIndigo)
-                }
+                // Honest status: nothing is transcribed during a recording —
+                // the audio is being captured and the meeting is transcribed
+                // once it stops. "Transcribing…" here would be a lie.
+                Text("Recording…")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(Color.echoIndigo)
 
                 HStack(spacing: 5) {
                     Image(systemName: "checkmark.shield")

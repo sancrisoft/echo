@@ -193,7 +193,6 @@ struct MenuBarView: View {
                     // which raises the explanatory dialog (a menu-bar popover
                     // would dismiss an alert as it closes) and shows the live
                     // download status behind it.
-                    if controller.recordingAwaitingSpeechModel { openDashboard() }
                 }
             } label: {
                 Label("Start Recording", systemImage: "play.fill")
@@ -254,21 +253,16 @@ struct MenuBarView: View {
     /// The most severe active capture-health notice, if any. Ordered so a
     /// device-lost notice is never masked by an input-health one (the same
     /// priority the stacked notices used before). All of these clear on stop.
-    /// A dead transcriber outranks everything: audio is captured but every
-    /// sample is dropped, so nothing of this session will be transcribed.
     private var activeWarning: String? {
         let s = controller.state
-        if s.transcriberUnavailable {
-            return "Speech model isn't loaded — this recording won't be transcribed. Retry from the dashboard's model banner."
-        }
         return s.inputNotice ?? s.micHealthNotice ?? s.systemHealthNotice ?? s.echoNotice
     }
 
     /// The default info line for the current face.
     private var metaText: String? {
-        // While recording, no transcript-derived numbers (SP-007 final-only
-        // UX): the segments keep accumulating invisibly, and the word count
-        // reappears once the meeting resolves.
+        // While recording, no transcript-derived numbers: nothing is
+        // transcribed until the meeting stops, and the word count appears
+        // once its pass resolves.
         if controller.state.isRecording {
             // SP-008: a scoped session says so ("Zoom only") — `captureScope`
             // already reflects the effective scope after any fallback, so this
@@ -285,7 +279,9 @@ struct MenuBarView: View {
             return controller.state.status
         }
         if let last = lastMeeting {
-            return "Last meeting · \(Self.minutesString(last.duration)) · \(last.words.formatted()) words"
+            let stats = "Last meeting · \(Self.minutesString(last.duration))"
+            guard let words = last.words else { return stats }
+            return "\(stats) · \(words.formatted()) words"
         }
         return nil
     }
@@ -308,27 +304,24 @@ struct MenuBarView: View {
         }
     }
 
+    /// The last meeting's stats, straight off its meta — the word count is
+    /// denormalized there and re-derived whenever a pass writes the transcript,
+    /// so this never has to load (or wait for) a transcript that may not exist
+    /// yet. A meeting still being transcribed simply shows no word count.
     private func loadLastMeeting() async {
+        await controller.library.refresh()
         guard let meta = controller.library.metas.first else {
             lastMeeting = nil
             return
         }
-        guard let record = await controller.library.loadRecord(meta.id) else { return }
-        lastMeeting = LastMeetingStat(
-            duration: meta.duration,
-            words: Self.wordCount(of: record.segments)
-        )
+        lastMeeting = LastMeetingStat(duration: meta.duration, words: meta.wordCount)
     }
 
     // MARK: - Formatting helpers
 
     private struct LastMeetingStat {
         var duration: TimeInterval
-        var words: Int
-    }
-
-    private static func wordCount(of segments: [TranscriptSegment]) -> Int {
-        segments.reduce(0) { $0 + $1.text.split(whereSeparator: \.isWhitespace).count }
+        var words: Int?
     }
 
     private static func timerString(_ interval: TimeInterval) -> String {

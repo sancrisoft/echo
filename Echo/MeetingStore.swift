@@ -59,10 +59,16 @@ actor MeetingStore {
 
     // MARK: - Write
 
-    /// Creates the meeting folder and writes `meta.json` + `transcript.json`
-    /// (+ `summary.json` when the record already carries one). `meta` is
-    /// normalized to the record it is saved with — `segmentCount` and
-    /// `hasSummary` always reflect what actually landed on disk.
+    /// Creates the meeting folder and writes `meta.json` (+ `transcript.json`
+    /// when the record carries segments, + `summary.json` when it carries a
+    /// summary). `meta` is normalized to the record it is saved with —
+    /// `segmentCount` and `hasSummary` always reflect what actually landed on
+    /// disk.
+    ///
+    /// A segment-less save is the normal stop path now: a just-stopped meeting
+    /// has retained audio and no words yet, and writing an empty
+    /// `transcript.json` beside it would claim a transcript that doesn't
+    /// exist. `ParakeetPass` writes the real one through `replaceTranscript`.
     func save(_ record: MeetingRecord) async throws {
         let directory = directory(for: record.meta.id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -71,7 +77,9 @@ actor MeetingStore {
         meta.segmentCount = record.segments.count
         meta.hasSummary = record.summary != nil
 
-        try writeJSON(record.segments, to: directory.appending(path: Filename.transcript))
+        if !record.segments.isEmpty {
+            try writeJSON(record.segments, to: directory.appending(path: Filename.transcript))
+        }
         if let summary = record.summary {
             try await writeSummary(summary, to: directory.appending(path: Filename.summary))
         }
@@ -150,14 +158,24 @@ actor MeetingStore {
         return metas.sorted { $0.startedAt > $1.startedAt }
     }
 
-    /// The full meeting (header + transcript + summary if present). Throws if the
-    /// folder / meta / transcript is missing or corrupt.
+    /// The full meeting (header + transcript + summary if present). Throws if
+    /// the folder / meta is missing or corrupt, or if a transcript that exists
+    /// can't be read.
+    ///
+    /// A meeting with NO `transcript.json` loads with no segments rather than
+    /// throwing: that is the honest state of a meeting whose pass hasn't
+    /// produced words yet (pending) or never will (terminal failure). Only an
+    /// absent file reads that way — an unreadable one still throws, so real
+    /// corruption is never silently rendered as "no transcript".
     func loadRecord(_ id: UUID) async throws -> MeetingRecord {
         let directory = directory(for: id)
         let meta = try decode(MeetingMeta.self, from: directory.appending(path: Filename.meta))
         // The transcript is the big payload (MBs for a 3 h meeting); it decodes
         // here in the actor, off the main thread, via its nonisolated conformance.
-        let segments = try decode([TranscriptSegment].self, from: directory.appending(path: Filename.transcript))
+        let transcriptURL = directory.appending(path: Filename.transcript)
+        let segments = FileManager.default.fileExists(atPath: transcriptURL.path)
+            ? try decode([TranscriptSegment].self, from: transcriptURL)
+            : []
         let summaryURL = directory.appending(path: Filename.summary)
         let summary = FileManager.default.fileExists(atPath: summaryURL.path)
             ? try await readSummary(from: summaryURL)

@@ -86,9 +86,8 @@ nonisolated struct FinalizationMachine: Sendable {
     enum Action: Equatable, Sendable {
         case startPass(meetingID: UUID, attempt: Int)
         /// Retries exhausted this run (terminal convergence, ADR-016/ADR-024):
-        /// record live-floor provenance on the meeting's meta — one atomic
-        /// write, the retained audio stays KEPT for the manual Retry; the
-        /// summary generates from the live floor.
+        /// record the terminal provenance on the meeting's meta — one atomic
+        /// write, the retained audio stays KEPT for the manual Retry.
         case converge(meetingID: UUID)
         /// Resume `count` waiting summary-work requests.
         case grantSummary(count: Int)
@@ -268,10 +267,13 @@ final class FinalizationCoordinator {
     /// Outcome of the just-stopped meeting's own pass, awaited by the stop
     /// path so the summary grounds in the best transcript the meeting has.
     enum StopOutcome: Equatable {
-        /// The pass succeeded and the transcript was replaced — summarize these.
+        /// The pass succeeded and the transcript was written — summarize these.
         case replaced([TranscriptSegment])
-        /// Retries exhausted (terminal, ADR-016): summarize the live floor.
-        case floorStands
+        /// Retries exhausted (terminal, ADR-016). There is no live floor to
+        /// fall back on any more: the meeting has NO transcript, so nothing
+        /// downstream may summarize it — the honest failure face plus a manual
+        /// Retry is the whole outcome.
+        case failed
         /// A new recording preempted the pass (or blocked its retry): the
         /// meeting stays pending, its pass resumes after stop, and the
         /// summary follows THAT pass — the stop path does nothing more.
@@ -297,7 +299,7 @@ final class FinalizationCoordinator {
     /// Runs before every pass starts: release any idle-warm summary model so
     /// it is never resident while a pass decodes (ADR-014 admission).
     var prepareForPass: @MainActor () async -> Void = {}
-    /// Terminal convergence (ADR-024): record live-floor provenance on the
+    /// Terminal convergence (ADR-024): record the terminal provenance on the
     /// meeting's meta — ONE atomic write, nothing else beside it. The
     /// retained audio is KEPT for the manual Retry; the provenance bit is
     /// what reclassifies the meeting out of pending (a crash before the
@@ -486,7 +488,7 @@ final class FinalizationCoordinator {
         case .replaced(let segments):
             outcome = .replaced(segments)
         case .failed where converged:
-            outcome = .floorStands
+            outcome = .failed
         case .failed:
             // A retry is owed. If it started right away, keep waiting for its
             // conclusion; if admission blocked it (a new recording), resolve
@@ -504,13 +506,13 @@ final class FinalizationCoordinator {
     private func converge(_ meetingID: UUID) {
         Self.log.error("""
         Finalization retries exhausted for meeting \(meetingID.uuidString, privacy: .public) — \
-        live transcript stands as a draft, retained audio kept for manual Retry (terminal, ADR-024)
+        the meeting has no transcript, retained audio kept for manual Retry (terminal, ADR-024)
         """)
         // Captured now: `converge` runs before the stop awaiter (if any) is
-        // resolved, and an awaited meeting's summary comes from its own stop
-        // pipeline — only unawaited (launch-resumed) conclusions kick the
-        // backfill, and only after the provenance write reclassifies the
-        // draft out of pending (its floor summary may then generate).
+        // resolved. The backfill kick still matters for unawaited
+        // (launch-resumed) conclusions: the provenance write reclassifies the
+        // meeting out of pending, which unblocks OTHER meetings' summaries —
+        // this one has no transcript to summarize.
         let awaited = stopAwaiters[meetingID] != nil
         Task { [weak self] in
             guard let self else { return }

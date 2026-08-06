@@ -241,12 +241,6 @@ final class CallDetectionController {
         Task { [weak self] in
             guard let self, !self.recording.state.isRecording else { return }
             await self.recording.start(scope: scope)
-            // Blocked on a not-ready speech model (ADR-009): the island never
-            // shows a recording face it can't back up — the dashboard opens
-            // with the explanatory dialog and the live download state.
-            if self.recording.recordingAwaitingSpeechModel {
-                DashboardOpener.shared.openDashboard()
-            }
         }
     }
 

@@ -4,7 +4,8 @@
 //
 //  Orchestrates a recording session: starts the two native capture channels,
 //  routes their loudness levels into `RecordingState` for the waveforms, and
-//  feeds 16 kHz mono Float frames into the transcription pipeline.
+//  feeds 16 kHz mono Float frames into the live input monitor (gate/health
+//  classification only — nothing transcribes during a recording).
 //
 //  This is the object the UI talks to (injected via the environment).
 //
@@ -19,7 +20,7 @@ import os
 /// takes the mic down (device-switch rebuild, lost-device degradation, or a
 /// session that starts with no input device), and the first delivered batch
 /// afterwards closes it; the measured gap is reported to
-/// `TranscriptionPipeline.noteCaptureGap` so the mic clock stays wall-aligned
+/// `LiveInputMonitor.noteCaptureGap` so the mic clock stays wall-aligned
 /// with the Team channel (SP-001's 100 ms skew budget, ADR-003's timing gate).
 ///
 /// `ContinuousClock` on purpose: the gap feeds a clock *correction*, so the
@@ -110,7 +111,7 @@ final class RecordingController {
     // app. `nil` for global sessions (today's single tap serves both
     // consumers) and after every stop.
     private var referenceTap: SystemAudioCapture?
-    private let pipeline: TranscriptionPipeline
+    private let monitor: LiveInputMonitor
     // Controller-long, reset per session via begin/endSession: consumes the
     // gate-decision record stream and the input-device signals to drive the
     // input-health notices (SP-002 "no silent dropout"). Observational by
@@ -153,9 +154,6 @@ final class RecordingController {
     /// Dashboard-facing lifecycle of the summary model (download/load/ready).
     /// Owned here so the UI never talks to the manager actor directly.
     private(set) var summaryModelState: SummaryModelState = .notDownloaded
-    /// Same for the speech model — fed by the pipeline's phase handler. Starts
-    /// as `.loading` because `prepare()` kicks the (cache-first) load at init.
-    private(set) var speechModelState: SpeechModelState = .loading
     /// And for the transcription model — fed by `ParakeetModelManager`'s state
     /// handler, which reflects the real on-disk state the moment it is wired.
     private(set) var parakeetModelState: ParakeetModelState = .absent
@@ -165,26 +163,6 @@ final class RecordingController {
     /// the finished one, via the detail's auto-switch to the AI Summary tab —
     /// is actually seen. Consumed and cleared by `DashboardView`.
     var pendingLiveDetailOpen = false
-
-    /// Set when the user pressed record but the speech model still needed its
-    /// (multi-minute) download — fresh install, or an earlier one that failed.
-    /// While true the dashboard shows the "downloading — recording unlocks
-    /// when it finishes" callout and the menu bar opens the dashboard onto it.
-    /// Cleared when a session actually starts or the callout is dismissed.
-    private(set) var recordingAwaitingSpeechModel = false
-
-    /// One-shot request (set on every record press blocked by a not-ready
-    /// speech model) for the dashboard to raise the explanatory "can't record
-    /// yet" dialog. Distinct from the sticky flag above — that one drives the
-    /// persistent progress banner and stays set, so it can't re-trigger the
-    /// modal on a repeat press. Consumed and cleared by `DashboardView`; the
-    /// dashboard is the stable host (a menu-bar popover would dismiss the
-    /// alert as it closes), so the menu bar routes here by opening the window.
-    var pendingSpeechModelGateNotice = false
-
-    /// The gate callout's dismiss. The download itself keeps running — only
-    /// the "you pressed record too early" framing goes away.
-    func dismissSpeechModelGate() { recordingAwaitingSpeechModel = false }
 
     /// One-shot per app run: the record gesture primes both capture-permission
     /// prompts exactly once, ahead of the readiness check (ADR-009).
@@ -199,7 +177,7 @@ final class RecordingController {
         // observational consumers, neither able to influence the decision.
         let inputHealth = InputHealthTracker()
         self.inputHealth = inputHealth
-        self.pipeline = TranscriptionPipeline(
+        self.monitor = LiveInputMonitor(
             gateDiagnostics: FanOutGateDiagnosticsSink([OSLogGateDiagnosticsSink(), inputHealth])
         )
         inputHealth.onEffect = { [weak self] generation, effect in
@@ -237,7 +215,12 @@ final class RecordingController {
             guard let self else { return }
             await self.library.recordLiveFloorProvenance(
                 for: meetingID,
-                provenance: Self.liveFloorProvenance()
+                provenance: TranscriptProvenance(
+                    source: .liveFloor,
+                    modelName: ParakeetModelManager.modelID,
+                    tier: Self.provenanceTier,
+                    servedByFallback: false
+                )
             )
         }
         finalization.onPassConcluded = { [weak self] meetingID in
@@ -260,17 +243,10 @@ final class RecordingController {
         // without these tasks, and tests drive their own instances.
         guard !TestHost.isActive else { return }
 
-        // Warm up the speech model at launch so pressing record is instant,
-        // then resume finalizations a quit or crash interrupted (SP-005 S4 —
-        // the passes themselves queue behind the coordinator's admission),
-        // then eagerly fetch the summary model — chained AFTER the speech
-        // preload so a fresh install's bandwidth goes to the record-gating
-        // speech download first and the two never co-saturate the link (OQ6).
-        // The optional final-pass model (ADR-015) fetches LAST — behind the
-        // record-gating speech download and the summary model — and defers
-        // while a recording is active or a pass is running/pending (ADR-014:
-        // the 947 MB transfer never competes with a pass either). It never
-        // gates recording (ADR-009).
+        // Resume finalizations a quit or crash interrupted (the passes
+        // themselves queue behind the coordinator's admission), then eagerly
+        // fetch the summary model, then the transcription model. Recording is
+        // never behind any of it — there is no model in the record path.
         Task {
             // Wire the transcription model's dashboard row first (cheap): the
             // handler reflects the manager's current state immediately, so
@@ -278,7 +254,6 @@ final class RecordingController {
             await parakeetModelManager.setStateHandler { [weak self] state in
                 Task { @MainActor in self?.parakeetModelState = state }
             }
-            await prepare()
             await resumePendingFinalizations()
             await startEagerSummaryDownloadIfNeeded()
             // The transcription model fetches in the background, deferring
@@ -295,16 +270,6 @@ final class RecordingController {
         // Catch up on summaries a quit interrupted (or that never ran): scan
         // the saved meetings once the library loads.
         kickSummaryBackfill()
-    }
-
-    /// Loads the transcription models ahead of time. Idempotent — also the
-    /// banner's speech-model Retry action (a failed load resets itself so a
-    /// later call genuinely retries).
-    func prepare() async {
-        await pipeline.setModelPhaseHandler { [weak self] phase in
-            Task { @MainActor in self?.speechModelState = phase }
-        }
-        await pipeline.preload(updating: state)
     }
 
     // MARK: - Control
@@ -334,35 +299,10 @@ final class RecordingController {
         // and then the "can't record yet" gate — the accepted order (OQ5).
         await primeCapturePermissions()
 
-        // Recording readiness is "the speech model is LOADED and transcribing-
-        // capable", not merely present on disk (ADR-009). Gate on the observed
-        // lifecycle: still downloading, still loading, or a failed download/load
-        // must NOT enter a recording state. The old `needsModelDownload` gate
-        // (absent-only) let the loading and load-failed cases slip straight to
-        // `markStarted`, flipping `isRecording` before (or despite) the load
-        // resolving — the hole this closes. Reading `speechModelState`
-        // synchronously is authoritative: it becomes `.ready` only after the
-        // pipeline reports the load finished, and the speech model never
-        // unloads once ready.
-        switch RecordingGateDecision.decide(speechModelState) {
-        case .blocked(let message):
-            // Don't start: surface the sub-state-accurate callout on the
-            // dashboard (the menu bar routes here off this same flag) and make
-            // sure the download/load is running. `prepare()` is idempotent and
-            // also retries a failed load, so a record press on a failed model
-            // IS the retry gesture. No `markStarted` — the record button must
-            // not lie on any surface.
-            Self.log.info("Record gesture blocked — speech model not ready: \(message, privacy: .public)")
-            recordingAwaitingSpeechModel = true
-            // Fire the one-shot so the dashboard raises the dialog on THIS press
-            // (the sticky flag above already being set can't re-trigger it).
-            pendingSpeechModelGateNotice = true
-            Task { await prepare() }
-            return
-        case .record:
-            recordingAwaitingSpeechModel = false
-        }
-
+        // No model gate any more: nothing is loaded during a recording, so
+        // the record gesture is bounded only by capture permissions (raised
+        // above). The meeting's words come from the post-stop pass, which
+        // waits for the model instead of making the user wait.
         sessionGeneration += 1
         // Recording preempts all post-meeting model work (ADR-014): a running
         // pass sees this signal at its next decode-window check and yields;
@@ -394,12 +334,7 @@ final class RecordingController {
         startInputDeviceHandling()
 
         do {
-            await pipeline.start(appendingTo: state)
-            // `pipeline.start` awaits the (re)load, so "not ready" here means
-            // the model genuinely failed to load and this session's audio is
-            // being dropped — surface it instead of pretending to transcribe.
-            let transcriberReady = await pipeline.isReady
-            state.markTranscriberUnavailable(!transcriberReady)
+            await monitor.start()
             try await startMicIfExpected()
             let effectiveScope = try await startSystemCapture(
                 requestedScope: requestedScope,
@@ -411,9 +346,7 @@ final class RecordingController {
             state.setCaptureScope(effectiveScope)
             state.status = ""
             // Recording is the implicit request for this meeting's summary:
-            // fetch the model's files during the session, after the speech
-            // model is up (so on a fresh install Whisper's download — the one
-            // that gates recording — never shares bandwidth with this one).
+            // fetch the model's files during the session.
             prefetchSummaryModelIfNeeded()
         } catch {
             state.status = error.localizedDescription
@@ -807,13 +740,12 @@ final class RecordingController {
         referenceTap?.stop()
         referenceTap = nil
         stopEchoHandling()
-        await pipeline.stop()
-        // After the pipeline flush: the end-of-session chunks still classify
+        await monitor.stop()
+        // After the monitor flush: the end-of-session chunks still classify
         // (their effects are dropped by the isRecording guard once
         // `markStopped` runs), and from here the tracker is inert until the
         // next session begins.
         inputHealth.endSession()
-        let transcript = state.segments
         let generation = sessionGeneration
         // Capture before `markStopped` clears it — the meeting's real start.
         let startedAt = state.startedAt ?? Date()
@@ -836,114 +768,103 @@ final class RecordingController {
             return
         }
 
-        // Persist BEFORE the summary runs (SPEC-03 criterion 1): a crash in the
-        // LLM must never lose the transcript. Empty transcripts are not saved.
-        var meetingID: UUID?
-        if !transcript.isEmpty {
-            meetingID = await library.persist(
-                segments: transcript,
-                startedAt: startedAt,
-                endedAt: Date(),
-                captureScope: captureScope.map(CaptureScopeRecord.init(scope:))
-            )
-        }
+        // The meeting is persisted from its retained audio, NOT from a
+        // transcript: there is no live text any more, so the audio is both
+        // the payload and the ADR-016 pending marker. A session that captured
+        // nothing has nothing to transcribe and saves no meeting.
+        let meetingID = await armFinalization(
+            writer: writer,
+            startedAt: startedAt,
+            endedAt: Date(),
+            captureScope: captureScope
+        )
         lastSavedMeetingID = meetingID
+        guard let meetingID else {
+            finalization.notePostStopWorkFinished()
+            return
+        }
 
         // Fire-and-forget: `stop()` returns once the meeting is persisted, so
         // the UI (the popover's Stop → dashboard hand-off in particular) never
-        // sits blocked behind minutes of generation. The summary streams into
-        // `state.summaryState` and the open detail follows it live.
+        // sits blocked behind minutes of transcription. The detail follows the
+        // pass's progress and then its summary live.
         Task { [weak self] in
             guard let self else { return }
-            // SP-005 post-stop sequence (ADR-014, serial by dependency): the
-            // final pass runs first, on the speech model alone, and only then
-            // may summary work begin — grounded in the final transcript when
-            // the pass succeeded, in the live floor when it terminally
-            // couldn't (ADR-016).
-            var summaryInput = transcript
-            if let meetingID, let writer {
-                switch await self.runFinalizationPass(for: meetingID, writer: writer) {
-                case .replaced(let final):
-                    summaryInput = final
-                    // SP-005 S6 swap-in: an open detail of this just-stopped
-                    // meeting renders the in-memory live segments — surface
-                    // the final set that now exists on disk. Generation-
-                    // guarded: a session that started meanwhile owns
-                    // `state.segments` (and `replaceSegments` re-checks
-                    // `isRecording` itself).
-                    if generation == self.sessionGeneration {
-                        self.state.replaceSegments(final)
-                    }
-                case .floorStands, nil:
-                    break   // the live floor stands — the summary grounds in it
-                case .deferred:
-                    // A new recording preempted the pass: the meeting stays
-                    // pending (backfill-excluded), its pass resumes after
-                    // that recording stops, and the summary follows THAT
-                    // pass's conclusion. This pipeline is done.
-                    self.finalization.notePostStopWorkFinished()
-                    return
+            // Serial by dependency: the pass produces the transcript, and only
+            // a transcript can be summarized. A meeting whose pass failed
+            // terminally has no words at all, so it gets no summary — the
+            // honest failure face plus a manual Retry is the whole story.
+            switch await self.finalization.finalizeStopped(meetingID) {
+            case .replaced(let final):
+                // An open detail of this just-stopped meeting is rendering the
+                // (empty) in-memory segments — surface the set that now exists
+                // on disk. Generation-guarded: a session that started meanwhile
+                // owns `state.segments` (and `replaceSegments` re-checks
+                // `isRecording` itself).
+                if generation == self.sessionGeneration {
+                    self.state.replaceSegments(final)
                 }
-            } else if let writer {
-                // The meeting never persisted — retention has nothing to
-                // finalize against.
-                await writer.discard()
+                await self.generateSummary(
+                    from: final,
+                    sessionGeneration: generation,
+                    meetingID: meetingID
+                )
+            case .failed, .deferred:
+                // Terminal failure: no transcript, so nothing to summarize.
+                // Deferred: a new recording preempted the pass, the meeting
+                // stays pending, and the summary follows THAT pass. Either
+                // way this pipeline is done.
+                break
             }
-            await self.generateSummary(from: summaryInput, sessionGeneration: generation, meetingID: meetingID)
             self.finalization.notePostStopWorkFinished()
-            // A stop is also a natural catch-up point: the model is warm, and
-            // any meeting still missing its summary (one whose backfill was
-            // aborted when this session began, or this very meeting if its
-            // generation just failed) gets an attempt without waiting for a
-            // relaunch.
+            // A stop is also a natural catch-up point: any meeting still
+            // missing its summary (one whose backfill was aborted when this
+            // session began, or this very meeting if its generation just
+            // failed) gets an attempt without waiting for a relaunch.
             self.kickSummaryBackfill()
         }
     }
 
-    // MARK: - Final re-transcription pass (SP-005 S1/S4)
+    // MARK: - Finalization arming
 
-    /// The stop path's finalization: stage → adopt (arming the ADR-016
-    /// pending marker) → hand the meeting to the coordinator, which runs the
-    /// pass under the admission rule (ADR-014) with bounded retries
-    /// (ADR-016). Returns the awaited outcome, or `nil` when no pass could be
-    /// armed for this meeting (retention disabled mid-session, nothing
-    /// captured, or adoption failed) — the live transcript stands either way.
-    private func runFinalizationPass(
-        for meetingID: UUID,
-        writer: RetainedAudioWriter
-    ) async -> FinalizationCoordinator.StopOutcome? {
+    /// The stop path's arming step: close the retention writer, persist the
+    /// meeting's meta (no transcript.json — there are no words yet), and move
+    /// the staged audio into the meeting folder, which IS the pending marker
+    /// (ADR-016). Returns the meeting id, or nil when nothing was captured, the
+    /// meta write failed, or adoption failed — in every one of those cases
+    /// there is no audio to transcribe, so no pass is armed.
+    private func armFinalization(
+        writer: RetainedAudioWriter?,
+        startedAt: Date,
+        endedAt: Date,
+        captureScope: CaptureScope?
+    ) async -> UUID? {
+        guard let writer else { return nil }
         let staged = await writer.finish()
         guard !staged.isEmpty else {
-            // Retention was disabled mid-session (or nothing was captured):
-            // no final pass for this meeting, the live transcript stands.
-            // That outcome is known and permanent — record it (ADR-022: a
-            // meeting whose retention never armed records liveFloor).
+            // Retention was disabled mid-session, or nothing was captured.
             await writer.discard()
-            await library.recordLiveFloorProvenance(for: meetingID, provenance: Self.liveFloorProvenance())
+            return nil
+        }
+        guard let meetingID = await library.persist(
+            segments: [],
+            startedAt: startedAt,
+            endedAt: endedAt,
+            captureScope: captureScope.map(CaptureScopeRecord.init(scope:))
+        ) else {
+            await writer.discard()
             return nil
         }
         guard await library.adoptRetainedAudio(staged, for: meetingID) != nil else {
+            // The meeting's meta stands (the recording did happen) but it has
+            // no audio and will never have words — the adoption failure is
+            // already traced by the library.
             await writer.discard()
-            await library.recordLiveFloorProvenance(for: meetingID, provenance: Self.liveFloorProvenance())
             return nil
         }
         // The staged files just moved out; drop the empty staging folder.
         await writer.discard()
-        return await finalization.finalizeStopped(meetingID)
-    }
-
-    /// The provenance of a meeting that keeps its live transcript: produced by
-    /// the live turbo checkpoint, on this machine's tier, no fallback involved
-    /// (whether retention never armed or a pass cycle terminally converged,
-    /// no pass output ever landed — the persisted words are the live model's,
-    /// and the floor tier reusing it is by design).
-    private static func liveFloorProvenance() -> TranscriptProvenance {
-        TranscriptProvenance(
-            source: .liveFloor,
-            modelName: TranscriptionPipeline.modelVariant,
-            tier: Self.provenanceTier,
-            servedByFallback: false
-        )
+        return meetingID
     }
 
     /// There is one model class now — no RAM tier decides anything, so every
@@ -1205,7 +1126,7 @@ final class RecordingController {
         // the same task, so the retained timeline can't diverge from the
         // live clock. Captured directly — the callbacks never touch `self`.
         let writer = retainedWriter
-        mic.onSamples = { [pipeline] frames in
+        mic.onSamples = { [monitor] frames in
             // Every batch feeds the gap tracker at arrival; the first one
             // after a mic outage closes the episode and carries the measured
             // gap.
@@ -1217,8 +1138,8 @@ final class RecordingController {
             // realignment always lands immediately before the first post-gap
             // samples, never after them.
             Task {
-                if let gap { await pipeline.noteCaptureGap(seconds: gap, on: .microphone) }
-                await pipeline.ingest(cleaned, from: .microphone)
+                if let gap { await monitor.noteCaptureGap(seconds: gap, on: .microphone) }
+                await monitor.ingest(cleaned, from: .microphone)
                 if let gap { await writer?.noteGap(seconds: gap, on: .microphone) }
                 await writer?.append(cleaned, to: .microphone)
             }
@@ -1237,12 +1158,12 @@ final class RecordingController {
         system.onLevel = { [state] level in
             Task { @MainActor in state.pushOutput(level) }
         }
-        system.onSamples = { [pipeline] frames in
+        system.onSamples = { [monitor] frames in
             // Read-only fan-out (ADR-002): the far end gets a value copy; the
             // Team ingest path below must stay byte-identical to today.
             aecStage.feedFarEnd(frames)
             Task {
-                await pipeline.ingest(frames, from: .system)
+                await monitor.ingest(frames, from: .system)
                 await writer?.append(frames, to: .system)
             }
         }
@@ -1259,9 +1180,9 @@ final class RecordingController {
         system.onLevel = { [state] level in
             Task { @MainActor in state.pushOutput(level) }
         }
-        system.onSamples = { [pipeline] frames in
+        system.onSamples = { [monitor] frames in
             Task {
-                await pipeline.ingest(frames, from: .system)
+                await monitor.ingest(frames, from: .system)
                 await writer?.append(frames, to: .system)
             }
         }

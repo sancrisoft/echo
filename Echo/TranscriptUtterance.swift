@@ -51,9 +51,9 @@ nonisolated struct TranscriptUtterance: Identifiable, Hashable, Sendable {
 
     /// The build-owned backchannel table (SP-007 open question 1), seeded
     /// from the 2026-08-04 real meeting's mic channel (es + en) plus close
-    /// spelling variants. Entries are `TranscriptionPipeline.normalizedWords`
-    /// forms — lowercase, punctuation stripped, hyphens/commas split words
-    /// ("Mm-hmm." → "mm hmm"). Tuning the filter is editing these rows.
+    /// spelling variants. Entries are `normalizedWords` forms — lowercase,
+    /// punctuation stripped, hyphens/commas split words ("Mm-hmm." → "mm
+    /// hmm"). Tuning the filter is editing these rows.
     static let backchannelTokens: Set<String> = [
         // English
         "mm hmm", "mm", "hmm", "mhm", "uh huh", "okay", "ok", "yeah",
@@ -65,13 +65,23 @@ nonisolated struct TranscriptUtterance: Identifiable, Hashable, Sendable {
 
     // MARK: - Backchannel classifier
 
+    /// Word-level normalization the backchannel table is written against:
+    /// lowercase, split on anything non-alphanumeric (so punctuation,
+    /// hyphens and apostrophes all become word breaks). Moved here from the
+    /// retired live pipeline — this is its only remaining consumer.
+    static func normalizedWords(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
     /// True when the segment's normalized text consists ONLY of backchannel
     /// tokens within the length bound — a standalone acknowledgment that
     /// should not interrupt the other speaker's paragraph. The word sequence
     /// must partition into table entries ("ah ok" is one entry, "yeah okay"
     /// is two), so any non-token word keeps the segment in the flow.
     static func isStandaloneBackchannel(_ text: String) -> Bool {
-        let words = TranscriptionPipeline.normalizedWords(text)
+        let words = normalizedWords(text)
         guard !words.isEmpty, words.count <= maxBackchannelWords else { return false }
         // Tiny DP over word positions (bounded by maxBackchannelWords):
         // reachable[i] means words[0..<i] partitions into table entries.
