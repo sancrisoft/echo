@@ -206,17 +206,18 @@ final class RecordingController {
         finalization.prepareForPass = { [summaryModelManager] in
             await summaryModelManager.unload()
         }
-        // Terminal convergence (ADR-024): ONE atomic act — record liveFloor
-        // provenance on the meeting's meta. The retained audio is KEPT for
-        // the manual Retry, and the single write is the crash safety: a
-        // crash BEFORE it re-enters pending on the next launch and simply
-        // converges again; after it, the scan reads the draft.
+        // Terminal convergence (ADR-024): ONE atomic act — record the
+        // terminal-failure provenance on the meeting's meta. The retained
+        // audio is KEPT for the manual Retry, and the single write is the
+        // crash safety: a crash BEFORE it re-enters pending on the next
+        // launch and simply converges again; after it, the scan reads the
+        // failed meeting and never auto-resumes it.
         finalization.convergeTerminally = { [weak self] meetingID in
             guard let self else { return }
-            await self.library.recordLiveFloorProvenance(
+            await self.library.recordTerminalProvenance(
                 for: meetingID,
                 provenance: TranscriptProvenance(
-                    source: .liveFloor,
+                    source: .terminalFailure,
                     modelName: ParakeetModelManager.modelID,
                     tier: Self.provenanceTier,
                     servedByFallback: false
@@ -945,15 +946,15 @@ final class RecordingController {
         }
     }
 
-    /// SP-005 S4 launch resume (ADR-016: crash-resume is a directory scan),
-    /// three-way since ADR-024: sweep staging a previous run orphaned, sweep
-    /// the audio of finalPass orphans (a success whose cleanup crashed —
-    /// already final, never re-run), then enqueue only the TRUE pending
-    /// meetings (retained audio, no provenance), newest first. Terminal
-    /// drafts (audio + liveFloor) are never auto-resumed — the pending query
-    /// excludes them; only the user's Retry re-opens one. The coordinator
-    /// runs the queue one at a time — never while recording, never alongside
-    /// summary work.
+    /// Launch resume (ADR-016: crash-resume is a directory scan), four-way:
+    /// sweep staging a previous run orphaned, sweep the audio of finalPass
+    /// orphans (a success whose cleanup crashed — already final, never
+    /// re-run), then enqueue only the TRUE pending meetings (retained audio,
+    /// no provenance), newest first. Neither a terminal failure (audio +
+    /// `terminalFailure`) nor a legacy draft (audio + `liveFloor`) is ever
+    /// auto-resumed — the pending query excludes both; only the user's Retry
+    /// re-opens one. The coordinator runs the queue one at a time — never
+    /// while recording, never alongside summary work.
     private func resumePendingFinalizations() async {
         // A session started before this ran (unlikely — it is chained right
         // after the model preload): its staging is live, so skip the sweeps;
@@ -971,23 +972,25 @@ final class RecordingController {
 
     // MARK: - Terminal-draft actions (SP-007, ADR-024)
 
-    /// User-initiated Retry from the terminal-draft state: re-admits the
-    /// meeting's pass with a FRESH bounded attempt budget at the front of
-    /// the deferred queue (the user-request discipline). Admission is not
-    /// bypassed — an active recording, summary work, or an open post-stop
-    /// pipeline still gates the start — and a cycle that converges again
-    /// returns to the draft with the audio still kept. Valid whether the
-    /// meeting converged this run (clears the coordinator's terminal mark)
-    /// or in a previous one (nothing to clear; the on-disk audio is the
-    /// checkpoint the resumed pass reads).
+    /// User-initiated Retry from a terminal state (a failed meeting, or a
+    /// legacy draft): re-admits the meeting's pass with a FRESH bounded
+    /// attempt budget at the front of the deferred queue (the user-request
+    /// discipline). Admission is not bypassed — an active recording, summary
+    /// work, or an open post-stop pipeline still gates the start — and a cycle
+    /// that converges again returns to the failed face with the audio still
+    /// kept. Valid whether the meeting converged this run (clears the
+    /// coordinator's terminal mark) or in a previous one (nothing to clear;
+    /// the on-disk audio is the checkpoint the resumed pass reads).
     func retryFinalization(_ meetingID: UUID) {
         finalization.requestManualRetry(meetingID)
     }
 
-    /// "Keep draft" (ADR-024): the user accepts the draft as the meeting's
-    /// final transcript and ends retention — deletes exactly this meeting's
-    /// kept audio; transcript and liveFloor provenance stay untouched (the
-    /// Draft badge survives; the Retry disappears with its audio). The
+    /// "Keep draft" (ADR-024) — LEGACY meetings only: a pre-migration draft
+    /// has real (Whisper) text, so the user may accept it as final and end
+    /// retention. Deletes exactly this meeting's kept audio; transcript and
+    /// `liveFloor` provenance stay untouched (the Draft badge survives; the
+    /// Retry disappears with its audio). A `terminalFailure` meeting has no
+    /// text at all, so it is offered Retry and Delete, never this. The
     /// coordinator's in-memory terminal set deliberately keeps the meeting:
     /// that set only blocks AUTO re-admission, which is exactly right for an
     /// accepted draft — and with the audio gone there is nothing a pass

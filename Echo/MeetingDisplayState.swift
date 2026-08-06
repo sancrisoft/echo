@@ -12,8 +12,9 @@
 //  Recording → Pending (waiting ⇄ transcribing) → Final, or → Draft (audio
 //  kept, manual Retry — ADR-024), with Keep-draft / retention-never-armed as
 //  the Retry-less draft. Provenance is the disambiguating bit that survives
-//  relaunch (ADR-022/ADR-024): `liveFloor` is a terminal draft, `finalPass`
-//  is final, absence with retained audio is a pending meeting awaiting its
+//  relaunch (ADR-022/ADR-024): `terminalFailure` is a failed meeting (no
+//  words at all), `liveFloor` a legacy pre-migration draft, `finalPass` is
+//  final, absence with retained audio is a pending meeting awaiting its
 //  launch resume.
 //
 
@@ -65,8 +66,7 @@ nonisolated struct MeetingDisplaySnapshot: Equatable, Sendable {
 }
 
 /// The one face a meeting shows. The transcript is readable only in `draft`
-/// and `final` (SP-007 final-only UX — SP-005's read-during-the-pass story is
-/// deliberately retired).
+/// and `final` (final-only UX).
 nonisolated enum MeetingDisplayState: Equatable, Sendable {
     case recording
     /// Queued, deferred behind an active recording, or awaiting launch
@@ -74,8 +74,12 @@ nonisolated enum MeetingDisplayState: Equatable, Sendable {
     case waiting
     /// The pass is decoding right now, with its real fraction.
     case transcribing(fraction: Double)
-    /// Terminal draft: the live floor stands, labeled. Retry exists exactly
-    /// while the meeting's kept audio does (ADR-024).
+    /// The pass exhausted its retries: this meeting has NO transcript. Retry
+    /// exists exactly while its kept audio does (ADR-024).
+    case failed(retryAvailable: Bool)
+    /// Legacy pre-migration draft: a Whisper live transcript stood in for a
+    /// terminally failed pass. Those meetings have real text, so they keep
+    /// their draft face and their Keep-draft action.
     case draft(retryAvailable: Bool)
     case final
 
@@ -83,7 +87,7 @@ nonisolated enum MeetingDisplayState: Equatable, Sendable {
     var isTranscriptReadable: Bool {
         switch self {
         case .draft, .final: return true
-        case .recording, .waiting, .transcribing: return false
+        case .recording, .waiting, .transcribing, .failed: return false
         }
     }
 
@@ -93,8 +97,9 @@ nonisolated enum MeetingDisplayState: Equatable, Sendable {
     ///      when it is yielding and must read as waiting.
     ///   3. Queued (including a manual Retry waiting its turn — the queue
     ///      outranks the liveFloor provenance still on disk mid-cycle).
-    ///   4. Provenance: `liveFloor` is the terminal draft (Retry iff the kept
-    ///      audio exists); `finalPass` is final.
+    ///   4. Provenance: `terminalFailure` is the failed face and `liveFloor`
+    ///      the legacy draft (each with Retry iff the kept audio exists);
+    ///      `finalPass` is final.
     ///   5. No provenance: retained audio means pending, awaiting its launch
     ///      resume (still waiting, never a bare floor transcript); no audio
     ///      means final — pre-SP-007 meetings and plain success-path
@@ -109,6 +114,8 @@ nonisolated enum MeetingDisplayState: Equatable, Sendable {
         }
         if snapshot.isQueued { return .waiting }
         switch snapshot.transcriptSource {
+        case .terminalFailure:
+            return .failed(retryAvailable: snapshot.hasRetainedAudio)
         case .liveFloor:
             return .draft(retryAvailable: snapshot.hasRetainedAudio)
         case .finalPass:

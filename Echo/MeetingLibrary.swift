@@ -250,13 +250,13 @@ final class MeetingLibrary {
         }
     }
 
-    /// Records that the meeting's persisted transcript is the live floor —
-    /// one atomic meta write, nothing else touched (SP-007, ADR-022/ADR-024).
-    /// Best-effort: a failure is logged and the meeting stays diagnosable as
-    /// "unknown" provenance rather than blocking the stop path.
-    func recordLiveFloorProvenance(for id: UUID, provenance: TranscriptProvenance) async {
+    /// Records the meeting's terminal provenance — one atomic meta write,
+    /// nothing else touched (SP-007, ADR-022/ADR-024). Best-effort: a failure
+    /// is logged and the meeting stays classified as pending, so the next
+    /// launch simply converges again.
+    func recordTerminalProvenance(for id: UUID, provenance: TranscriptProvenance) async {
         do {
-            try await store.recordLiveFloorProvenance(for: id, provenance: provenance)
+            try await store.recordTerminalProvenance(for: id, provenance: provenance)
             await refresh()
         } catch {
             ErrorTrace.record(

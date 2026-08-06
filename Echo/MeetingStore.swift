@@ -222,14 +222,14 @@ actor MeetingStore {
         try writeJSON(meta, to: metaURL)
     }
 
-    /// Records that the meeting's persisted transcript is (and will remain)
-    /// the live floor — a single atomic `meta.json` write, no other file
-    /// touched (ADR-022/ADR-024: the terminal transition is safe as a state
-    /// bit precisely because nothing else is written beside it). Called when
-    /// the live-floor outcome is known: retention never armed, or a pass
-    /// cycle terminally converged (the ADR-024 slice). Throws if the meeting
-    /// folder / meta is missing.
-    func recordLiveFloorProvenance(for id: UUID, provenance: TranscriptProvenance) throws {
+    /// Records the meeting's terminal transcript provenance — a single atomic
+    /// `meta.json` write, no other file touched (ADR-022/ADR-024: the terminal
+    /// transition is safe as a state bit precisely because nothing else is
+    /// written beside it). Called when a pass cycle terminally converged: the
+    /// retained audio stays for the manual Retry, and this bit is what ends
+    /// the meeting's pending classification. Throws if the meeting folder /
+    /// meta is missing.
+    func recordTerminalProvenance(for id: UUID, provenance: TranscriptProvenance) throws {
         let metaURL = directory(for: id).appending(path: Filename.meta)
         var meta = try decode(MeetingMeta.self, from: metaURL)
         meta.transcriptProvenance = provenance
@@ -284,8 +284,12 @@ actor MeetingStore {
         /// Audio with no transcript provenance: an unfinished cycle — the
         /// launch scan auto-resumes it (ADR-016, unchanged).
         case pending
-        /// Audio with `liveFloor` provenance: a terminally converged draft —
-        /// never auto-resumed; only the user's Retry opens a new cycle.
+        /// Audio with `terminalFailure` provenance: the pass exhausted its
+        /// retries and the meeting has no transcript — never auto-resumed;
+        /// only the user's Retry opens a new cycle.
+        case terminalFailure
+        /// Audio with legacy `liveFloor` provenance: a pre-migration draft
+        /// whose live transcript stands — never auto-resumed either.
         case terminalDraft
         /// Audio with `finalPass` provenance: the orphan of a success whose
         /// cleanup crashed between the transcript replace and the audio
@@ -302,6 +306,7 @@ actor MeetingStore {
         guard present else { return .none }
         switch transcriptSource {
         case nil: return .pending
+        case .terminalFailure: return .terminalFailure
         case .liveFloor: return .terminalDraft
         case .finalPass: return .finalPassOrphan
         }
@@ -321,8 +326,8 @@ actor MeetingStore {
 
     /// ADR-016 amended by ADR-024: retained audio marks a meeting pending
     /// only while no transcript provenance is recorded — the terminal
-    /// transition's single atomic meta write (`liveFloor`) is what ends the
-    /// pending classification while the audio stays for the manual Retry.
+    /// transition's single atomic meta write is what ends the pending
+    /// classification while the audio stays for the manual Retry.
     func isPendingFinalization(_ id: UUID) -> Bool {
         retainedAudioDisposition(for: id) == .pending
     }
@@ -330,9 +335,8 @@ actor MeetingStore {
     /// Meetings still pending finalization, newest first — the launch-resume
     /// work queue (ADR-016: crash-resume is a directory scan) and the
     /// summary backfill's exclusion set. Only the true pending class
-    /// qualifies (ADR-024): terminal drafts rest until the user retries (and
-    /// their floor summary may generate), finalPass orphans are sweep
-    /// targets. Trashed meetings are excluded: the user set them aside, and
+    /// qualifies (ADR-024): terminal failures and legacy drafts rest until
+    /// the user retries, finalPass orphans are sweep targets. Trashed meetings are excluded: the user set them aside, and
     /// their retention is deleted with the folder (a restore surfaces them
     /// to the next launch's scan).
     func pendingFinalizationMeetingIDs() -> [UUID] {

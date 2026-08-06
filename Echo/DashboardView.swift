@@ -1052,6 +1052,7 @@ private struct MeetingRow: View {
         switch meetingDisplayState(for: meta.id, controller: controller) {
         case .transcribing(let fraction): return .finalizing(fraction)
         case .waiting: return .waiting
+        case .failed: return .failed
         case .draft: return .draft
         case .recording, .final: return nil
         }
@@ -1210,12 +1211,13 @@ private struct TrashRow: View {
 }
 
 private struct StatusPill: View {
-    /// The row's finalization face (SP-005 S6 + SP-007 S6): a running pass
-    /// with its honest fraction, a queued/deferred/pending pass waiting its
-    /// turn, or a terminal draft (persisted liveFloor provenance).
+    /// The row's finalization face: a running pass with its honest fraction,
+    /// a queued/deferred/pending pass waiting its turn, a terminally failed
+    /// meeting, or a legacy draft (persisted `liveFloor` provenance).
     enum Finalization: Equatable {
         case finalizing(Double?)
         case waiting
+        case failed
         case draft
     }
 
@@ -1252,6 +1254,11 @@ private struct StatusPill: View {
             return ("Finalizing \(percent)%", .echoIndigo, "clock", true)
         case .waiting:
             return ("Waiting to finalize", .secondary, "clock", false)
+        case .failed:
+            // Persistent, like the detail's face: keyed on persisted
+            // provenance, and it outranks every summary state below (a
+            // meeting with no transcript has nothing to summarize).
+            return ("Transcription failed", .red, "exclamationmark.triangle", false)
         case .draft:
             // Persistent, like the detail's badge: it keys on persisted
             // provenance and outranks the summary states below (a draft's
@@ -1701,6 +1708,12 @@ private struct MeetingTranscriptFace: View {
             case .transcribing(let fraction):
                 transcribing(fraction: fraction)
 
+            case .failed(let retryAvailable):
+                // No transcript exists — an empty transcript shell would read
+                // as "the meeting had no words" instead of "we couldn't
+                // transcribe it".
+                failedFace(retryAvailable: retryAvailable)
+
             case .draft(let retryAvailable):
                 VStack(spacing: 0) {
                     draftStrip(retryAvailable: retryAvailable)
@@ -1773,9 +1786,36 @@ private struct MeetingTranscriptFace: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// The draft chrome above the floor transcript: the persistent badge
-    /// (keyed on persisted liveFloor provenance — survives relaunch), plus
-    /// Retry / Keep draft exactly while the kept audio exists (ADR-024).
+    /// The honest terminal-failure face: the meeting's audio is kept and the
+    /// user decides — Retry (a fresh bounded cycle from that audio) or Delete
+    /// from the meeting's own menu. No Keep action: there is no text to keep.
+    @ViewBuilder
+    private func failedFace(retryAvailable: Bool) -> some View {
+        VStack(spacing: 14) {
+            ContentUnavailableView(
+                "Transcription failed",
+                systemImage: "exclamationmark.triangle",
+                description: Text(retryAvailable
+                    ? "The audio is kept. Retry to transcribe again."
+                    : "The audio is no longer available, so this meeting can't be transcribed.")
+            )
+            if retryAvailable {
+                Button {
+                    if let meetingID { controller.retryFinalization(meetingID) }
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Run a fresh transcription pass from the meeting's kept audio")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// LEGACY (pre-migration meetings only): the draft chrome above a floor
+    /// transcript — the persistent badge keyed on persisted `liveFloor`
+    /// provenance, plus Retry / Keep draft exactly while the kept audio
+    /// exists (ADR-024). Nothing writes `liveFloor` any more.
     private func draftStrip(retryAvailable: Bool) -> some View {
         HStack(spacing: 10) {
             Text("Draft")
@@ -2185,14 +2225,16 @@ private struct PastMeetingDetail: View {
         } else if controller.backfillingMeetingID == id {
             SummaryGenerationProgressView(subject: "this meeting's transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if isPendingFinalization {
-            // The summary is deliberately held back until the pass resolves
-            // (SP-005 sequencing) — say so instead of offering to generate
-            // one from a transcript that is about to be replaced.
+        } else if hasNoTranscriptYet {
+            // Nothing to ground a summary in: the pass is still owed (or
+            // failed outright). Offering "Generate summary" here would
+            // promise notes over words that don't exist.
             ContentUnavailableView(
-                "Summary after finalization",
+                "Summary after transcription",
                 systemImage: "sparkles",
-                description: Text("Echo will generate this once the transcript finishes finalizing.")
+                description: Text(isTranscriptionFailed
+                    ? "This meeting has no transcript. Retry transcription first."
+                    : "Echo will generate this once the transcript is ready.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -2230,15 +2272,20 @@ private struct PastMeetingDetail: View {
         return "Generating one needs the summary model. Download it and this meeting will be processed automatically."
     }
 
-    /// Waiting or transcribing, from the same pure function as the faces —
-    /// the sync subset (no audio probe: a pending meeting is enqueued or
-    /// running by the time this tab can be read, and the drafts/finals this
-    /// check misses are exactly the ones allowed to generate).
-    private var isPendingFinalization: Bool {
+    /// The meeting has no transcript to summarize — still owed (waiting /
+    /// transcribing) or permanently absent (failed). From the same pure
+    /// function as the faces: the sync subset (no audio probe, which only
+    /// distinguishes Retry availability — irrelevant here).
+    private var hasNoTranscriptYet: Bool {
         switch meetingDisplayState(for: id, controller: controller) {
-        case .waiting, .transcribing: return true
+        case .waiting, .transcribing, .failed: return true
         case .recording, .draft, .final: return false
         }
+    }
+
+    private var isTranscriptionFailed: Bool {
+        if case .failed = meetingDisplayState(for: id, controller: controller) { return true }
+        return false
     }
 }
 
