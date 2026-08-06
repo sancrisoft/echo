@@ -342,6 +342,23 @@ struct DashboardView: View {
                 Text(openedTitle)
                     .font(.headline)
                     .lineLimit(1)
+
+                // SP-008 scope chip (resolved open question 5): a scoped
+                // meeting's detail says so right next to its title — the
+                // detail's meta lives up here since the redesign, so this
+                // *is* its meta row. Quiet capsule (the meetings-count
+                // badge's register, not the red REC pill's): the scope is
+                // provenance, not an alert. No chip means full coverage —
+                // Everything sessions and pre-SP-008 meetings render nothing.
+                if let scopeLabel = openedScopeLabel {
+                    Text(scopeLabel)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.quaternary, in: Capsule())
+                        .help("System audio was captured from this app only")
+                }
             } else {
                 MeetingGlyph(size: 20)
                 Text("Echo").font(.headline)
@@ -368,6 +385,27 @@ struct DashboardView: View {
             return liveMeetingTitle(controller)
         case nil:
             return ""
+        }
+    }
+
+    /// The opened detail's scope chip label: "Zoom only" for a scoped
+    /// meeting; `nil` — no chip — for everything sessions, pre-SP-008
+    /// meetings, and unknown future kinds (absence means full coverage,
+    /// ADR-027). `scopedDisplayLabel` already encodes exactly that rule,
+    /// so this only routes the opened target to its persisted meta.
+    private var openedScopeLabel: String? {
+        switch opened?.target {
+        case .saved(let id):
+            return controller.library.meta(for: id)?.captureScope?.scopedDisplayLabel
+        case .live:
+            // The live target has no meta until the stop-save lands; while
+            // recording the pinned live row (and menu bar) carry the scope,
+            // and the chip appears here the moment the meeting persists.
+            return controller.library.activeMeetingID.flatMap {
+                controller.library.meta(for: $0)?.captureScope?.scopedDisplayLabel
+            }
+        case nil:
+            return nil
         }
     }
 
@@ -1128,7 +1166,16 @@ private struct LiveMeetingRow: View {
 
     private var metadataText: String {
         let words = MeetingMeta.wordCount(of: controller.state.segments)
-        return "\(recTimerString(controller.state.elapsed))  ·  \(words.formatted()) words"
+        var text = "\(recTimerString(controller.state.elapsed))  ·  \(words.formatted()) words"
+        // SP-008: a scoped session says so right on the row ("Zoom only") —
+        // `captureScope` reflects the effective scope after any fallback, so
+        // this never overstates the narrowing. A global session renders
+        // exactly as today: the row's red badge already says it's recording,
+        // and "Everything" here would add words without information.
+        if let scope = controller.state.captureScope, scope.scopedApp != nil {
+            text += "  ·  \(scope.indicatorLabel)"
+        }
+        return text
     }
 }
 
