@@ -22,8 +22,9 @@ struct EchoApp: App {
     /// Persisted UI state (e.g. the dismissed privacy banner). Loaded once from
     /// `settings.json`; the dashboard reads and mutates it.
     @State private var settings: AppSettings
-    /// SP-006's call-detection island. Held here so it lives as long as the app
-    /// does; nothing reads it — it drives its own AppKit panel.
+    /// SP-006's call-detection island. Held here so it lives as long as the
+    /// app does; it drives its own AppKit panel, and the menu-bar popup reads
+    /// its `appsInCall` for the SP-008 scope selector.
     @State private var callDetection: CallDetectionController
 
     init() {
@@ -75,6 +76,9 @@ struct EchoApp: App {
             MenuBarView()
                 .environment(controller)
                 .environment(settings)
+                // SP-008: the popup's scope selector reads `appsInCall` —
+                // the same detection state the island renders from.
+                .environment(callDetection)
         } label: {
             Image(systemName: controller.isRecording ? "waveform.circle.fill" : "waveform")
                 // Captures SwiftUI's `openWindow` for the AppKit side (SP-006's
