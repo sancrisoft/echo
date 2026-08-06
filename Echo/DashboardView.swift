@@ -18,6 +18,7 @@
 import SwiftUI
 #if DEBUG
 import AppKit
+import ScreenCaptureKit
 #endif
 
 private enum DetailTab: Hashable { case transcript, summary }
@@ -146,12 +147,55 @@ struct DashboardView: View {
         // CLI without screen-recording permission. Inert in normal runs.
         .task {
             guard let path = ProcessInfo.processInfo.environment["ECHO_SNAPSHOT_PATH"] else { return }
+            // ECHO_APPEARANCE=dark|light forces the app-wide appearance so
+            // dark-mode rendering can be verified regardless of the system
+            // setting. Verification mode only.
+            if let forced = ProcessInfo.processInfo.environment["ECHO_APPEARANCE"] {
+                NSApp.appearance = NSAppearance(named: forced == "dark" ? .darkAqua : .aqua)
+            }
+            // ECHO_DUMP_ONESHOT=1: activate the window (so scroll-edge
+            // effects and toolbar chrome are in their real, focused state),
+            // capture once via ScreenCaptureKit (real pixels; works because
+            // Echo already holds a capture entitlement for system audio),
+            // write the dumps, and quit. Avoids stealing the user's focus
+            // every 2 s like the recurring loop would.
+            let oneShot = ProcessInfo.processInfo.environment["ECHO_DUMP_ONESHOT"] == "1"
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard let window = NSApp.windows.first(where: { $0.identifier?.rawValue == EchoWindow.dashboard }),
                       let frameView = window.contentView?.superview,
                       let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds)
                 else { continue }
+                if oneShot {
+                    NSApp.activate(ignoringOtherApps: true)
+                    window.makeKeyAndOrderFront(nil)
+                    // The dump is only meaningful once the meeting list has
+                    // loaded (the List doesn't exist in the empty state).
+                    for _ in 0..<20 where controller.library.metas.isEmpty {
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                    try? await Task.sleep(for: .milliseconds(1200))
+                    do {
+                        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                        if let scWindow = content.windows.first(where: { $0.windowID == CGWindowID(window.windowNumber) }) {
+                            let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+                            let config = SCStreamConfiguration()
+                            let scale = window.backingScaleFactor
+                            config.width = Int(window.frame.width * scale)
+                            config.height = Int(window.frame.height * scale)
+                            config.showsCursor = false
+                            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                            let pngRep = NSBitmapImageRep(cgImage: image)
+                            if let data = pngRep.representation(using: .png, properties: [:]) {
+                                try? data.write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-sck.png")))
+                            }
+                        }
+                    } catch {
+                        try? "SCK capture failed: \(error)".write(
+                            toFile: path.replacingOccurrences(of: ".png", with: "-sck-error.txt"),
+                            atomically: true, encoding: .utf8)
+                    }
+                }
                 // An occluded window (user on another app/space) never gets a
                 // display pass, so both capture paths render blank. Join the
                 // active space and force a paint — verification mode only.
@@ -165,6 +209,73 @@ struct DashboardView: View {
                 frameView.cacheDisplay(in: frameView.bounds, to: rep)
                 if let data = rep.representation(using: .png, properties: [:]) {
                     try? data.write(to: URL(fileURLWithPath: path))
+                }
+                // Third verification path: dump the layer tree's background
+                // colors. When neither pixel capture path composites the
+                // SwiftUI content (occluded window, locked screen), this still
+                // answers "which layer paints which color where".
+                do {
+                    var lines: [String] = []
+                    func hex(_ color: NSColor?) -> String {
+                        guard let srgb = color?.usingColorSpace(.sRGB) else { return "nil" }
+                        return String(format: "#%02X%02X%02X a=%.2f",
+                                      Int(srgb.redComponent * 255), Int(srgb.greenComponent * 255),
+                                      Int(srgb.blueComponent * 255), srgb.alphaComponent)
+                    }
+                    func walk(_ view: NSView, depth: Int) {
+                        var desc = String(repeating: "  ", count: depth) + "\(type(of: view))"
+                        let f = view.convert(view.bounds, to: nil)
+                        desc += String(format: " (%.0f,%.0f %.0fx%.0f)", f.origin.x, f.origin.y, f.width, f.height)
+                        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+                            if let scroll = view as? NSScrollView {
+                                desc += " drawsBG=\(scroll.drawsBackground) bg=\(hex(scroll.backgroundColor))"
+                            }
+                            if let table = view as? NSTableView {
+                                desc += " tableBG=\(hex(table.backgroundColor)) style=\(table.style.rawValue)"
+                            }
+                            if let clip = view as? NSClipView {
+                                desc += " clipDrawsBG=\(clip.drawsBackground) bg=\(hex(clip.backgroundColor))"
+                            }
+                            if let effect = view as? NSVisualEffectView {
+                                desc += " material=\(effect.material.rawValue) blend=\(effect.blendingMode.rawValue)"
+                            }
+                            if let bg = view.layer?.backgroundColor, bg.alpha > 0 {
+                                desc += " layerBG=\(hex(NSColor(cgColor: bg)))"
+                            }
+                        }
+                        if view.isHidden { desc += " hidden" }
+                        lines.append(desc)
+                        for sub in view.subviews { walk(sub, depth: depth + 1) }
+                    }
+                    walk(frameView, depth: 0)
+                    try? lines.joined(separator: "\n")
+                        .write(toFile: path.replacingOccurrences(of: ".png", with: "-views.txt"),
+                               atomically: true, encoding: .utf8)
+                    // Companion dump of the CALayer tree: SwiftUI paints into
+                    // layers with no NSView counterpart, so only this shows
+                    // the opaque backgrounds the view walk can't see.
+                    if let root = frameView.layer {
+                        var layerLines: [String] = []
+                        func walkLayer(_ layer: CALayer, depth: Int) {
+                            var desc = String(repeating: "  ", count: depth) + "\(type(of: layer))"
+                            if let d = layer.delegate { desc += "/\(type(of: d))" }
+                            let f = layer.convert(layer.bounds, to: root)
+                            desc += String(format: " (%.0f,%.0f %.0fx%.0f)", f.origin.x, f.origin.y, f.width, f.height)
+                            if let bg = layer.backgroundColor, bg.alpha > 0 {
+                                desc += " bg=\(hex(NSColor(cgColor: bg)))"
+                            }
+                            if layer.contents != nil { desc += " has-contents" }
+                            if let filter = layer.compositingFilter { desc += " filter=\(filter)" }
+                            if layer.opacity < 1 { desc += String(format: " opacity=%.2f", layer.opacity) }
+                            if layer.isHidden { desc += " hidden" }
+                            layerLines.append(desc)
+                            for sub in layer.sublayers ?? [] { walkLayer(sub, depth: depth + 1) }
+                        }
+                        walkLayer(root, depth: 0)
+                        try? layerLines.joined(separator: "\n")
+                            .write(toFile: path.replacingOccurrences(of: ".png", with: "-layers.txt"),
+                                   atomically: true, encoding: .utf8)
+                    }
                 }
                 // Second capture path: render the committed CALayer tree.
                 // cacheDisplay misses layer-only SwiftUI content on this OS;
@@ -189,6 +300,7 @@ struct DashboardView: View {
                         }
                     }
                 }
+                if oneShot { NSApp.terminate(nil) }
             }
         }
         #endif
