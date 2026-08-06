@@ -7,11 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		5CA250182FF3399500E2563C /* SpeakerKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5CA250172FF3399500E2563C /* SpeakerKit */; };
 		5CA2501A2FF3399500E2563C /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5CA250192FF3399500E2563C /* WhisperKit */; };
 		5CB100000000000000000B02 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5CB100000000000000000A02 /* MLXLLM */; };
 		5CB100000000000000000B03 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 5CB100000000000000000A03 /* MLXLMCommon */; };
 		5CB100000000000000000B04 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = 5CB100000000000000000A04 /* MLXEmbedders */; };
+		5CF100000000000000000B02 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF100000000000000000A02 /* FluidAudio */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,7 +48,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5CA2501A2FF3399500E2563C /* WhisperKit in Frameworks */,
-				5CA250182FF3399500E2563C /* SpeakerKit in Frameworks */,
+				5CF100000000000000000B02 /* FluidAudio in Frameworks */,
 				5CB100000000000000000B02 /* MLXLLM in Frameworks */,
 				5CB100000000000000000B03 /* MLXLMCommon in Frameworks */,
 				5CB100000000000000000B04 /* MLXEmbedders in Frameworks */,
@@ -103,8 +103,8 @@
 			);
 			name = Echo;
 			packageProductDependencies = (
-				5CA250172FF3399500E2563C /* SpeakerKit */,
 				5CA250192FF3399500E2563C /* WhisperKit */,
+				5CF100000000000000000A02 /* FluidAudio */,
 				5CB100000000000000000A02 /* MLXLLM */,
 				5CB100000000000000000A03 /* MLXLMCommon */,
 				5CB100000000000000000A04 /* MLXEmbedders */,
@@ -167,6 +167,7 @@
 			packageReferences = (
 				5CA250162FF3399500E2563C /* XCRemoteSwiftPackageReference "argmax-oss-swift" */,
 				5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5CDE08DE2FEA41D600DFAFA7 /* Products */;
@@ -519,14 +520,17 @@
 				version = 3.31.4;
 			};
 		};
+		5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio";
+			requirement = {
+				kind = exactVersion;
+				version = 0.15.5;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		5CA250172FF3399500E2563C /* SpeakerKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5CA250162FF3399500E2563C /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
-			productName = SpeakerKit;
-		};
 		5CA250192FF3399500E2563C /* WhisperKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5CA250162FF3399500E2563C /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
@@ -546,6 +550,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
 			productName = MLXEmbedders;
+		};
+		5CF100000000000000000A02 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

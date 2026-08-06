@@ -1485,26 +1485,17 @@ private struct ModelStatusBanner: View {
             VStack(alignment: .leading, spacing: 10) {
                 row(
                     icon: "waveform",
-                    name: "Speech · \(TranscriptionPipeline.modelDisplayName) · \(TranscriptionPipeline.modelDisplaySize)",
-                    purpose: "Turns meeting audio into the transcript"
-                ) { speechStatus }
+                    name: "Transcription · \(ParakeetModelManager.modelDisplayName) · \(ParakeetModelManager.modelDisplaySize)",
+                    // CC-BY-4.0 attribution rides with the model's name — the
+                    // one surface that names it.
+                    purpose: "Transcribes each meeting after it ends · \(ParakeetModelManager.attribution)"
+                ) { transcriptionStatus }
                 Divider()
                 row(
                     icon: "sparkles",
                     name: "Summary · \(SummaryModelManager.modelDisplayName) · \(SummaryModelManager.modelDisplaySize)",
                     purpose: "Writes the meeting notes after each recording"
                 ) { summaryStatus }
-                // The optional final-pass model (SP-005 story 16): a row only
-                // while it is genuinely doing something or honestly failed —
-                // hidden on the tier that never needs it, quiet once ready.
-                if finalPassNeedsAttention {
-                    Divider()
-                    row(
-                        icon: "waveform.badge.magnifyingglass",
-                        name: "Accuracy · \(FinalPassModelManager.modelDisplayName) · \(FinalPassModelManager.modelDisplaySize)",
-                        purpose: "Re-transcribes each meeting after it ends — optional, never blocks recording"
-                    ) { finalPassStatus }
-                }
             }
             .padding(12)
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -1513,33 +1504,27 @@ private struct ModelStatusBanner: View {
         }
     }
 
-    /// Both required models ready and the optional one quiet → the banner
-    /// disappears entirely.
+    /// Both models ready → the banner disappears entirely.
     private var needsAttention: Bool {
-        if finalPassNeedsAttention { return true }
-        if case .ready = controller.speechModelState,
+        if case .ready = controller.parakeetModelState,
            case .ready = controller.summaryModelState {
             return false
         }
         return true
     }
 
-    /// The final-pass model earns a row only while downloading (honest
-    /// fraction) or failed (honest line). `.notNeeded` (8 GB tier), `.absent`
-    /// (download not started yet), and `.ready` all stay quiet — an optional
-    /// model at rest needs no chrome.
-    private var finalPassNeedsAttention: Bool {
-        switch controller.finalPassModelState {
-        case .downloading, .failed: return true
-        case .notNeeded, .absent, .ready: return false
-        }
-    }
-
     @ViewBuilder
-    private var finalPassStatus: some View {
-        switch controller.finalPassModelState {
+    private var transcriptionStatus: some View {
+        switch controller.parakeetModelState {
+        case .absent:
+            // Queued behind the launch sequence; the fetch starts on its own.
+            Text("Waiting to download")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         case .downloading(let fraction):
             downloadProgress(fraction)
+        case .ready:
+            readyLabel
         case .failed(let message):
             // No Retry button: acquisition is once per launch by design (the
             // manager resumes the transfer on the next launch, skipping the
@@ -1550,8 +1535,6 @@ private struct ModelStatusBanner: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: 280, alignment: .trailing)
-        case .notNeeded, .absent, .ready:
-            EmptyView()
         }
     }
 
@@ -1574,22 +1557,6 @@ private struct ModelStatusBanner: View {
             }
             Spacer(minLength: 12)
             trailing()
-        }
-    }
-
-    @ViewBuilder
-    private var speechStatus: some View {
-        switch controller.speechModelState {
-        case .downloading(let fraction):
-            downloadProgress(fraction)
-        case .loading:
-            loadingIndicator
-        case .ready:
-            readyLabel
-        case .failed(let message):
-            failure(message) {
-                Task { await controller.prepare() }
-            }
         }
     }
 

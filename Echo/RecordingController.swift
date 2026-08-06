@@ -144,6 +144,10 @@ final class RecordingController {
     /// SP-005 S5 (ADR-015): the optional final-pass model's tier/download/
     /// completeness lifecycle. Never consulted by recording readiness.
     private let finalPassModelManager = FinalPassModelManager()
+    /// The transcription model Echo is migrating to: `parakeet-tdt-0.6b-v3`,
+    /// downloaded in the background and consulted only by the post-meeting
+    /// pass. Never consulted by recording readiness.
+    private let parakeetModelManager = ParakeetModelManager()
     /// SP-005 S4 (ADR-014/ADR-016): owns finalization admission — one pass at
     /// a time, never while recording or during summary work, bounded retries,
     /// launch-time resume. The UI reads its queue/current state (S6).
@@ -160,6 +164,9 @@ final class RecordingController {
     /// the moment it is wired in `init`. The dashboard hides the row entirely
     /// on the `.notNeeded` tier and while nothing needs attention.
     private(set) var finalPassModelState: FinalPassModelState = .notNeeded(.reuseLive)
+    /// And for the transcription model — fed by `ParakeetModelManager`'s state
+    /// handler, which reflects the real on-disk state the moment it is wired.
+    private(set) var parakeetModelState: ParakeetModelState = .absent
 
     /// One-shot request (set by the menu bar's Stop) for the dashboard to open
     /// straight onto the just-stopped meeting, so the streaming summary — and
@@ -279,10 +286,22 @@ final class RecordingController {
             await finalPassModelManager.setStateHandler { [weak self] state in
                 Task { @MainActor in self?.finalPassModelState = state }
             }
+            // Same for the transcription model's banner row.
+            await parakeetModelManager.setStateHandler { [weak self] state in
+                Task { @MainActor in self?.parakeetModelState = state }
+            }
             await prepare()
             await resumePendingFinalizations()
             await startEagerSummaryDownloadIfNeeded()
             await finalPassModelManager.initialize(deferWhile: { @MainActor [weak self] in
+                guard let self else { return false }
+                return self.isRecording || self.finalization.isBusy
+            })
+            // The transcription model fetches in the background too, deferring
+            // while a recording or a pass is running — it never gates
+            // recording, and a meeting recorded before it lands simply stays
+            // pending until it is ready.
+            await parakeetModelManager.initialize(deferWhile: { @MainActor [weak self] in
                 guard let self else { return false }
                 return self.isRecording || self.finalization.isBusy
             })
