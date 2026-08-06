@@ -90,9 +90,14 @@ struct DashboardView: View {
             LibrarySidebar(opened: $opened)
                 .frame(width: 240)
             Divider()
+            // No explicit background: the window's native contentBackground
+            // material must show through. On macOS 26 that material carries a
+            // wallpaper tint (CAChameleonLayer) that the title bar, sidebar,
+            // and the List's own scroll background all render — an opaque
+            // color here covers it only under the list header, which then
+            // reads as a mismatched band in dark mode.
             MeetingLibraryDetail(opened: $opened)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .textBackgroundColor))
         }
         .frame(
             minWidth: 900, idealWidth: 1100, maxWidth: .infinity,
