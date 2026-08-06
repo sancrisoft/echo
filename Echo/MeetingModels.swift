@@ -46,6 +46,53 @@ nonisolated struct TranscriptProvenance: Codable, Hashable, Sendable {
     }
 }
 
+/// The session's *effective* capture scope, persisted on the meeting's meta
+/// (SP-008, ADR-027): what the system tap actually covered — which, under the
+/// start-time fallback, may be wider than what the user requested. Inherits
+/// ADR-022's register discipline wholesale: written with the artifacts it
+/// describes, display and diagnostics only, never scheduling. Absent on
+/// pre-SP-008 meetings.
+nonisolated struct CaptureScopeRecord: Codable, Hashable, Sendable {
+
+    /// The canonical kind strings — an on-disk contract, so they never change.
+    nonisolated static let everythingKind = "everything"
+    nonisolated static let appKind = "app"
+
+    /// "everything" or "app" — a plain string (not an enum) so a meta written
+    /// by a future build with a new scope kind still decodes here instead of
+    /// tumbling the whole meeting out of the list.
+    var kind: String
+    /// The scoped app's display name (island copy, e.g. "Zoom"); `nil` for an
+    /// everything session.
+    var appName: String?
+
+    nonisolated init(kind: String, appName: String? = nil) {
+        self.kind = kind
+        self.appName = appName
+    }
+
+    /// The mapping from a session's effective `CaptureScope` to its persisted
+    /// record — the only place the two shapes meet.
+    nonisolated init(scope: CaptureScope) {
+        switch scope {
+        case .everything:
+            self.init(kind: Self.everythingKind)
+        case .app(let app):
+            self.init(kind: Self.appKind, appName: app.displayName)
+        }
+    }
+
+    /// The dashboard's scope caption for a *past* meeting: "Zoom only" for a
+    /// scoped record; `nil` for everything — and for any unknown future kind,
+    /// which must render as nothing rather than guess (ADR-027: absent or not
+    /// understood is never an error). An absent record reads as `nil` via
+    /// optional chaining, completing the everything/absent/unknown triple.
+    var scopedDisplayLabel: String? {
+        guard kind == Self.appKind, let appName else { return nil }
+        return "\(appName) only"
+    }
+}
+
 /// The small, always-loaded header for one meeting. `listMetas` reads only
 /// these (never the full transcript) so opening the app stays cheap even with a
 /// long history — the transcript and summary live in sibling files.
@@ -91,6 +138,13 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
     /// additive-optional discipline as `transcriptProvenance`.
     var summaryModelName: String?
 
+    /// The session's effective capture scope (SP-008, ADR-027). Same
+    /// additive-optional discipline as `transcriptProvenance`: pre-SP-008
+    /// metas decode to `nil` (rendered as nothing), an untouched old
+    /// `meta.json` keeps its exact bytes. Written once, at persist time — the
+    /// scope is fixed by the end of session start and never changes after.
+    var captureScope: CaptureScopeRecord?
+
     /// When the meeting was moved to Trash, or `nil` if it is live in the
     /// library. A trashed meeting keeps all its files; the library hides it from
     /// "All Meetings", lists it under "Trash", and permanently deletes it once
@@ -116,6 +170,7 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
         oneLineDescription: String? = nil,
         transcriptProvenance: TranscriptProvenance? = nil,
         summaryModelName: String? = nil,
+        captureScope: CaptureScopeRecord? = nil,
         trashedAt: Date? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -129,6 +184,7 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
         self.oneLineDescription = oneLineDescription
         self.transcriptProvenance = transcriptProvenance
         self.summaryModelName = summaryModelName
+        self.captureScope = captureScope
         self.trashedAt = trashedAt
     }
 

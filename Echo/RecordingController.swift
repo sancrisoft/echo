@@ -103,6 +103,13 @@ final class RecordingController {
 
     private let mic = MicrophoneCapture()
     private let system = SystemAudioCapture()
+    // Per-session, scoped sessions only (SP-008, ADR-025): the second tap of
+    // the dual topology — a *global* tap that feeds the echo canceller's
+    // far-end reference and nothing else, so the canceller keeps hearing
+    // everything the speakers play while `system` records only the scoped
+    // app. `nil` for global sessions (today's single tap serves both
+    // consumers) and after every stop.
+    private var referenceTap: SystemAudioCapture?
     private let pipeline: TranscriptionPipeline
     // Controller-long, reset per session via begin/endSession: consumes the
     // gate-decision record stream and the input-device signals to drive the
@@ -298,7 +305,12 @@ final class RecordingController {
         }
     }
 
-    func start() async {
+    /// Starts a session with the given system-channel coverage (SP-008).
+    /// `.everything` is today's session, byte-for-byte; `.app` runs the
+    /// ADR-025 dual-tap topology, collapsing to a global session if scoped
+    /// establishment fails at start (ADR-027). The *effective* scope is fixed
+    /// by the end of this method and published on `state.captureScope`.
+    func start(scope requestedScope: CaptureScope = .everything) async {
         guard !state.isRecording else { return }
 
         // Permissions are a gesture effect, not a download-wait effect
@@ -377,7 +389,14 @@ final class RecordingController {
             let transcriberReady = await pipeline.isReady
             state.markTranscriberUnavailable(!transcriberReady)
             try await startMicIfExpected()
-            try await system.start()
+            let effectiveScope = try await startSystemCapture(
+                requestedScope: requestedScope,
+                aecStage: aecStage
+            )
+            // Fixed for the whole session (ADR-027: a running session never
+            // silently widens) — the one value every surface renders and the
+            // stop path persists onto the meeting's meta.
+            state.setCaptureScope(effectiveScope)
             state.status = ""
             // Recording is the implicit request for this meeting's summary:
             // fetch the model's files during the session, after the speech
@@ -771,6 +790,10 @@ final class RecordingController {
         await stopInputDeviceHandling()
         mic.stop()
         system.stop()
+        // A scoped session's second tap (ADR-025) dies with the session; a
+        // global session has none and this is a no-op.
+        referenceTap?.stop()
+        referenceTap = nil
         stopEchoHandling()
         await pipeline.stop()
         // After the pipeline flush: the end-of-session chunks still classify
@@ -782,6 +805,11 @@ final class RecordingController {
         let generation = sessionGeneration
         // Capture before `markStopped` clears it — the meeting's real start.
         let startedAt = state.startedAt ?? Date()
+        // Likewise the session's effective scope (SP-008, ADR-027): fixed at
+        // start, persisted below onto the meeting's meta. `nil` only for a
+        // session that aborted before system capture came up — which never
+        // persists a meeting anyway.
+        let captureScope = state.captureScope
         state.markStopped()
         // The post-stop pipeline (this meeting's pass → its summary) opens
         // here; deferred passes stay held until it closes (ADR-014). Every
@@ -800,7 +828,12 @@ final class RecordingController {
         // LLM must never lose the transcript. Empty transcripts are not saved.
         var meetingID: UUID?
         if !transcript.isEmpty {
-            meetingID = await library.persist(segments: transcript, startedAt: startedAt, endedAt: Date())
+            meetingID = await library.persist(
+                segments: transcript,
+                startedAt: startedAt,
+                endedAt: Date(),
+                captureScope: captureScope.map(CaptureScopeRecord.init(scope:))
+            )
         }
         lastSavedMeetingID = meetingID
 
@@ -1202,6 +1235,17 @@ final class RecordingController {
                 await writer?.append(cleaned, to: .microphone)
             }
         }
+        // Every session starts wired in the global combined shape; a scoped
+        // start rewires the system side (`startSystemCapture`) before any
+        // tap runs, so no sample is ever routed by the wrong shape.
+        wireGlobalSystemCallbacks(aecStage: aecStage)
+    }
+
+    /// The system side of a *global* session — today's single tap serving
+    /// both consumers, verbatim (ADR-025: global sessions carry zero change).
+    /// Also the shape a scoped start falls back to (ADR-027).
+    private func wireGlobalSystemCallbacks(aecStage: any AECStage) {
+        let writer = retainedWriter
         system.onLevel = { [state] level in
             Task { @MainActor in state.pushOutput(level) }
         }
@@ -1213,6 +1257,78 @@ final class RecordingController {
                 await pipeline.ingest(frames, from: .system)
                 await writer?.append(frames, to: .system)
             }
+        }
+    }
+
+    /// The system side of a *scoped* session (SP-008, ADR-025): the scoped
+    /// tap feeds exactly what the system callback feeds today MINUS the far
+    /// end — pipeline ingest, retention, the output meter — and the global
+    /// reference tap feeds ONLY `aecStage.feedFarEnd`. Nothing from the
+    /// reference tap is ever persisted, transcribed, metered, or shown, so
+    /// its `onLevel` deliberately stays nil.
+    private func wireScopedSystemCallbacks(aecStage: any AECStage, referenceTap: SystemAudioCapture) {
+        let writer = retainedWriter
+        system.onLevel = { [state] level in
+            Task { @MainActor in state.pushOutput(level) }
+        }
+        system.onSamples = { [pipeline] frames in
+            Task {
+                await pipeline.ingest(frames, from: .system)
+                await writer?.append(frames, to: .system)
+            }
+        }
+        referenceTap.onSamples = { frames in
+            // Synchronous, like today's fan-out line — the canceller's
+            // far-end buffer is fed on the capture callback, no Task hop.
+            aecStage.feedFarEnd(frames)
+        }
+    }
+
+    /// Starts the session's system-side capture in the requested scope and
+    /// returns the scope the session actually runs with. `.everything` is
+    /// exactly today's single-tap path. `.app` establishes the ADR-025 dual
+    /// topology — reference tap first, so a scoped tap never runs without
+    /// the far-end that keeps SP-001's invariant intact; if EITHER tap fails
+    /// the session collapses to the known-good global topology with one
+    /// `ErrorTrace` and effective scope Everything (ADR-027 — recording more
+    /// than intended, visibly, beats a silently degraded You channel). If
+    /// that global start also fails, the throw aborts the session exactly as
+    /// today.
+    private func startSystemCapture(
+        requestedScope: CaptureScope,
+        aecStage: any AECStage
+    ) async throws -> CaptureScope {
+        guard let app = requestedScope.scopedApp else {
+            // Global session: the combined wiring from `wireCallbacks` is
+            // already in place; nothing else changes.
+            try await system.start()
+            return .everything
+        }
+
+        let reference = SystemAudioCapture()
+        wireScopedSystemCallbacks(aecStage: aecStage, referenceTap: reference)
+        referenceTap = reference
+        do {
+            try await reference.start()
+            try await system.start(scope: requestedScope)
+            return requestedScope
+        } catch {
+            // ADR-027 start-time fallback. Both taps down first (`stop` is
+            // idempotent — a failed scoped start already unwound `system`
+            // itself), then the one trace, then rewire to the combined shape
+            // so the global tap feeds the far end again.
+            reference.stop()
+            system.stop()
+            referenceTap = nil
+            ErrorTrace.record(
+                "Scoped capture failed — falling back to a global session",
+                error: error,
+                category: "RecordingController",
+                metadata: ["app": app.displayName]
+            )
+            wireGlobalSystemCallbacks(aecStage: aecStage)
+            try await system.start()
+            return .everything
         }
     }
 

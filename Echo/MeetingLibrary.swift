@@ -123,9 +123,17 @@ final class MeetingLibrary {
     /// Persists a freshly stopped recording (SPEC-03 criterion 1: saved BEFORE
     /// summary generation, so an LLM crash never loses the transcript). The word
     /// count is denormalized here — the library owns the segments at save time,
-    /// so the list never has to load a transcript to show it. Returns the new
-    /// id, or `nil` if the write failed (logged; the session is not interrupted).
-    func persist(segments: [TranscriptSegment], startedAt: Date, endedAt: Date) async -> UUID? {
+    /// so the list never has to load a transcript to show it. `captureScope` is
+    /// the session's *effective* scope record (SP-008, ADR-027 — the one value
+    /// fixed at session start), landing in the same meta write as the meeting
+    /// it describes. Returns the new id, or `nil` if the write failed (logged;
+    /// the session is not interrupted).
+    func persist(
+        segments: [TranscriptSegment],
+        startedAt: Date,
+        endedAt: Date,
+        captureScope: CaptureScopeRecord? = nil
+    ) async -> UUID? {
         let meta = MeetingMeta(
             id: UUID(),
             title: MeetingMeta.autoTitle(startedAt: startedAt),
@@ -133,7 +141,8 @@ final class MeetingLibrary {
             endedAt: endedAt,
             segmentCount: segments.count,
             hasSummary: false,
-            wordCount: MeetingMeta.wordCount(of: segments)
+            wordCount: MeetingMeta.wordCount(of: segments),
+            captureScope: captureScope
         )
         do {
             try await store.save(MeetingRecord(meta: meta, segments: segments, summary: nil))

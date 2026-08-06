@@ -63,6 +63,15 @@ final class RecordingState {
     private(set) var micHealthNotice: String?
     private(set) var systemHealthNotice: String?
 
+    /// The running session's *effective* capture scope (SP-008, ADR-027):
+    /// the single per-session value every recording surface renders — island,
+    /// popover, dashboard live row all read this and nothing else, so a
+    /// scoped request that fell back to global is visibly "Everything" on
+    /// every surface at once. Fixed by the end of `RecordingController.start`
+    /// and never changed mid-session (a running session never silently
+    /// widens); `nil` while idle.
+    private(set) var captureScope: CaptureScope?
+
     /// Set when a session starts although the speech model never loaded
     /// (e.g. its download failed at launch): every ingested sample is being
     /// dropped, so the UI must say "not transcribing" instead of pretending.
@@ -97,6 +106,7 @@ final class RecordingState {
     func markStopped() {
         isRecording = false
         startedAt = nil
+        captureScope = nil
         echoNotice = nil
         inputNotice = nil
         micHealthNotice = nil
@@ -104,6 +114,14 @@ final class RecordingState {
         transcriberUnavailable = false
         inputLevels = Array(repeating: Self.idleLevel, count: barCount)
         outputLevels = Array(repeating: Self.idleLevel, count: barCount)
+    }
+
+    // MARK: - Capture scope (called by RecordingController)
+
+    /// Publishes the session's effective scope once `start` has fixed it
+    /// (SP-008, ADR-027). Cleared by `markStopped`, never by callers.
+    func setCaptureScope(_ scope: CaptureScope) {
+        captureScope = scope
     }
 
     // MARK: - Echo handling (called by RecordingController)
