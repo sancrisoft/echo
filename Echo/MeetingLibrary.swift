@@ -64,7 +64,15 @@ final class MeetingLibrary {
 
     init(store: MeetingStore = MeetingStore()) {
         self.store = store
-        Task { await refresh() }
+        // The launch refresh is NOT a read-only load: it purges expired
+        // trash (deletes meeting folders) and kicks the word-count backfill
+        // (rewrites metas). Under a test host that would run against the
+        // real store the host app opens by default — skipped (see
+        // `TestHost`); tests that need a populated library call `refresh()`
+        // themselves on their temp store.
+        if !TestHost.isActive {
+            Task { await refresh() }
+        }
     }
 
     // MARK: - Sidecar contract (reveal / export)

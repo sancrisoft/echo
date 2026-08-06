@@ -252,6 +252,15 @@ final class RecordingController {
             self.kickSummaryBackfill()
         }
 
+        // Under a test host every launch side effect below is skipped (see
+        // `TestHost`): the hosted app must not load models, download
+        // anything, sweep staging dirs, resume finalizations or backfill
+        // summaries against the REAL store — a test run doing so raced a
+        // concurrently recording Echo instance and destroyed a meeting.
+        // Everything above (handler wiring, pure setup) stays: it is inert
+        // without these tasks, and tests drive their own instances.
+        guard !TestHost.isActive else { return }
+
         // Warm up the speech model at launch so pressing record is instant,
         // then resume finalizations a quit or crash interrupted (SP-005 S4 —
         // the passes themselves queue behind the coordinator's admission),

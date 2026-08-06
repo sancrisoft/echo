@@ -36,20 +36,31 @@ struct EchoApp: App {
         // sequencing: the eager summary download is chained behind the
         // speech-model preload (RecordingController.init), while this fires
         // immediately.
-        Task.detached(priority: .utility) {
-            RetiredModelCleanup.run()
-            // Bound the error trace log's disk footprint: drop daily files
-            // older than the retention window. Same fire-and-forget slot —
-            // non-fatal, never competes with startup on the main thread.
-            await ErrorTrace.shared.prune()
+        //
+        // Skipped entirely under a test host (see `TestHost`): the host app
+        // must be inert scaffolding, never a second instance mutating the
+        // real data folder while tests — or a concurrently running real
+        // Echo — are working.
+        if !TestHost.isActive {
+            Task.detached(priority: .utility) {
+                RetiredModelCleanup.run()
+                // Bound the error trace log's disk footprint: drop daily files
+                // older than the retention window. Same fire-and-forget slot —
+                // non-fatal, never competes with startup on the main thread.
+                await ErrorTrace.shared.prune()
+            }
         }
 
         // The three long-lived objects, wired here because SP-006's call
-        // detection needs both of the others.
+        // detection needs both of the others. Constructing them is required
+        // even under a test host (SwiftUI @State needs values); the side
+        // effects live in `start()` and the launch tasks, both gated.
         let recording = RecordingController()
         let settings = AppSettings()
         let callDetection = CallDetectionController(recording: recording, settings: settings)
-        callDetection.start()
+        if !TestHost.isActive {
+            callDetection.start()
+        }
         _controller = State(initialValue: recording)
         _settings = State(initialValue: settings)
         _callDetection = State(initialValue: callDetection)
