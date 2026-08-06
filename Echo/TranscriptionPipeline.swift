@@ -180,11 +180,8 @@ actor TranscriptionPipeline {
     /// name — the naming-honesty register wants the real id, not the display
     /// string.
     static let modelVariant = "large-v3-v20240930_626MB"
-    /// Human name + size for the models banner. Honest surfaces (SP-005 user
-    /// story 17): the display name says "turbo" because that is what runs —
-    /// plain "large-v3" would claim an accuracy class the live model isn't.
-    /// The full large-v3 exists only as the final-pass model
-    /// (`FinalPassModelManager.modelDisplayName`).
+    /// Human name + size, kept alongside the id while the live path is being
+    /// retired (S3 deletes both with the pipeline itself).
     static let modelDisplayName = "Whisper large-v3-turbo"
     static let modelDisplaySize = "626 MB"
 
@@ -445,20 +442,6 @@ actor TranscriptionPipeline {
         detectedLanguages.removeAll()
     }
 
-    // MARK: - Final-pass decode seam (SP-005 S1)
-
-    /// Lends the already-loaded live WhisperKit instance to a final-pass
-    /// decode (ADR-015's floor tier: the pass adds no model to memory). The
-    /// narrow seam `LivePipelineModelProvider` is built on — the final pass
-    /// never reaches into the pipeline's buffers, clocks, or session state,
-    /// and nothing here can disturb live behavior.
-    func withModelForFinalPass<T: Sendable>(
-        _ body: @Sendable (WhisperKit) async throws -> T
-    ) async throws -> T {
-        guard loaded, let whisper else { throw FinalizationPass.PassError.modelUnavailable }
-        return try await body(whisper)
-    }
-
     // MARK: - Ingestion
 
     func ingest(_ frames: [Float], from channel: AudioChannel) async {
@@ -649,46 +632,6 @@ actor TranscriptionPipeline {
             }
         }
         return segments
-    }
-
-    /// SP-007 (ADR-019 rule 2): the final pass's segment assembly. Judges
-    /// every raw segment against energy stats sliced from ITS OWN time span
-    /// of the window's samples, through the SAME cleaned/noise/boilerplate
-    /// filters as the live path — per-segment granularity is what catches a
-    /// hallucination inside a window that has speech elsewhere. Live callers
-    /// keep the chunk-level `transcriptSegments` above: live chunks are
-    /// short, gate-checked whole, and bound to the show-something contract
-    /// (SP-007 Reliability NFR — the live path must not move).
-    static func evidenceJudgedSegments(
-        from segments: [TranscriptionSegment],
-        channel: AudioChannel,
-        offset: TimeInterval,
-        windowSamples: [Float]
-    ) -> [TranscriptSegment] {
-        let who = speaker(for: channel)
-        var produced: [TranscriptSegment] = []
-        for segment in segments {
-            let span = sampleSpan(of: segment, within: windowSamples.count)
-            let stats = AudioStats.compute(from: Array(windowSamples[span]))
-            guard let text = cleaned(segment.text, channel: channel, segment: segment, audio: stats) else { continue }
-            produced.append(TranscriptSegment(
-                channel: channel,
-                speaker: who,
-                text: text,
-                start: offset + Double(segment.start),
-                end: offset + Double(segment.end)
-            ))
-        }
-        return produced
-    }
-
-    /// The window-relative sample range a segment's timestamps cover, clamped
-    /// to the window. An out-of-range span degrades to an empty slice, whose
-    /// all-zero stats fail the gates — the conservative direction (ADR-019).
-    private static func sampleSpan(of segment: TranscriptionSegment, within count: Int) -> Range<Int> {
-        let start = max(0, min(count, Int(Double(segment.start) * AudioConstants.sampleRate)))
-        let end = max(start, min(count, Int(Double(segment.end) * AudioConstants.sampleRate)))
-        return start..<end
     }
 
     private func restrictedLanguage(for audio: [Float], from channel: AudioChannel, using whisper: WhisperKit) async -> String? {

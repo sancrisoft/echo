@@ -141,12 +141,9 @@ final class RecordingController {
     private var retainedWriter: RetainedAudioWriter?
     private let summarizer = SummarizationPipeline()
     private let summaryModelManager = SummaryModelManager()
-    /// SP-005 S5 (ADR-015): the optional final-pass model's tier/download/
-    /// completeness lifecycle. Never consulted by recording readiness.
-    private let finalPassModelManager = FinalPassModelManager()
-    /// The transcription model Echo is migrating to: `parakeet-tdt-0.6b-v3`,
-    /// downloaded in the background and consulted only by the post-meeting
-    /// pass. Never consulted by recording readiness.
+    /// The transcription model: `parakeet-tdt-0.6b-v3`, downloaded in the
+    /// background and consulted only by the post-meeting pass. Never consulted
+    /// by recording readiness.
     private let parakeetModelManager = ParakeetModelManager()
     /// SP-005 S4 (ADR-014/ADR-016): owns finalization admission — one pass at
     /// a time, never while recording or during summary work, bounded retries,
@@ -159,11 +156,6 @@ final class RecordingController {
     /// Same for the speech model — fed by the pipeline's phase handler. Starts
     /// as `.loading` because `prepare()` kicks the (cache-first) load at init.
     private(set) var speechModelState: SpeechModelState = .loading
-    /// And for the optional final-pass model (SP-005 S6, story 16) — fed by
-    /// the manager's state handler, which reflects the real tier/disk state
-    /// the moment it is wired in `init`. The dashboard hides the row entirely
-    /// on the `.notNeeded` tier and while nothing needs attention.
-    private(set) var finalPassModelState: FinalPassModelState = .notNeeded(.reuseLive)
     /// And for the transcription model — fed by `ParakeetModelManager`'s state
     /// handler, which reflects the real on-disk state the moment it is wired.
     private(set) var parakeetModelState: ParakeetModelState = .absent
@@ -280,24 +272,16 @@ final class RecordingController {
         // the 947 MB transfer never competes with a pass either). It never
         // gates recording (ADR-009).
         Task {
-            // Wire the final-pass model's dashboard row first (cheap): the
+            // Wire the transcription model's dashboard row first (cheap): the
             // handler reflects the manager's current state immediately, so
             // the row never sits on the placeholder default.
-            await finalPassModelManager.setStateHandler { [weak self] state in
-                Task { @MainActor in self?.finalPassModelState = state }
-            }
-            // Same for the transcription model's banner row.
             await parakeetModelManager.setStateHandler { [weak self] state in
                 Task { @MainActor in self?.parakeetModelState = state }
             }
             await prepare()
             await resumePendingFinalizations()
             await startEagerSummaryDownloadIfNeeded()
-            await finalPassModelManager.initialize(deferWhile: { @MainActor [weak self] in
-                guard let self else { return false }
-                return self.isRecording || self.finalization.isBusy
-            })
-            // The transcription model fetches in the background too, deferring
+            // The transcription model fetches in the background, deferring
             // while a recording or a pass is running — it never gates
             // recording, and a meeting recorded before it lands simply stays
             // pending until it is ready.
@@ -957,18 +941,23 @@ final class RecordingController {
         TranscriptProvenance(
             source: .liveFloor,
             modelName: TranscriptionPipeline.modelVariant,
-            tier: FinalPassTier.current.rawValue,
+            tier: Self.provenanceTier,
             servedByFallback: false
         )
     }
 
+    /// There is one model class now — no RAM tier decides anything, so every
+    /// provenance record carries the same honest constant (the field itself is
+    /// an on-disk contract and keeps decoding old metas' tier strings).
+    static let provenanceTier = "universal"
+
     /// One pass attempt — the mechanics the coordinator's `runPass` seam
     /// invokes (the coordinator owns WHEN; this owns HOW): read the retained
     /// files (the audio is the checkpoint, so a launch-resumed attempt needs
-    /// nothing else), window-decode on the tiered model, atomically replace
-    /// the transcript, and delete exactly this meeting's retained files on
-    /// success. Any failure leaves the live transcript byte-identical and the
-    /// retained audio in place (the coordinator decides retry vs terminal).
+    /// nothing else), decode them on Parakeet, atomically write the transcript,
+    /// and delete exactly this meeting's retained files on success. Any failure
+    /// leaves the meeting untouched with its retained audio in place (the
+    /// coordinator decides retry vs terminal).
     private func performFinalizationPass(
         for meetingID: UUID,
         shouldYield: @escaping @Sendable () -> Bool
@@ -980,28 +969,10 @@ final class RecordingController {
             Self.log.error("Final pass found no retained audio for \(meetingID.uuidString, privacy: .public)")
             return .failed
         }
-        // A local so the success path can read back which model actually
-        // served the pass (`lastServed`) for the provenance record (ADR-022).
-        let provider = TieredFinalPassModelProvider(
-            manager: finalPassModelManager,
-            fallback: LivePipelineModelProvider(pipeline: pipeline),
-            onServed: { [weak self] choice in
-                // Degraded-pass honesty (SP-005 S6): worth a caption
-                // only when a full-tier machine fell back to the live
-                // model — the floor tier reusing it is by design.
-                let fallback = choice == .liveModel && FinalPassTier.current == .fullLargeV3
-                Task { @MainActor [weak self] in
-                    self?.finalization.noteServedModel(
-                        isFallbackOnFullTier: fallback,
-                        for: meetingID
-                    )
-                }
-            }
-        )
         do {
-            let final = try await FinalizationPass.run(
+            let final = try await ParakeetPass.run(
                 retainedFiles: retained,
-                model: provider,
+                models: ManagedParakeetModelProvider(manager: parakeetModelManager),
                 shouldYield: shouldYield,
                 onProgress: { [weak self] fraction in
                     // The single ADR-007 fraction, hopped to the main actor;
@@ -1012,24 +983,14 @@ final class RecordingController {
                     }
                 }
             )
-            // An empty `final` here is a legitimate success: `run` returns
-            // empty only when the energy evidence itself says nobody spoke
-            // (ADR-019 — speech regions with all segments dropped throws
-            // `emptyDisciplinedOutput` and lands in `.failed` below).
-            // Which checkpoint actually decoded this pass (ADR-022): the
-            // provider recorded its per-lend choice. A silence-only pass may
-            // never lend the model (`lastServed` nil) — it records the live
-            // checkpoint name and NO fallback flag, because no degraded
-            // decode happened.
-            let served = await provider.lastServed
-            let tier = FinalPassTier.current
+            // An empty `final` is a legitimate success: the model heard no
+            // speech. There is one model class and one checkpoint, so the
+            // provenance is a constant.
             let provenance = TranscriptProvenance(
                 source: .finalPass,
-                modelName: served == .fullLargeV3
-                    ? FinalPassModelManager.variant
-                    : TranscriptionPipeline.modelVariant,
-                tier: tier.rawValue,
-                servedByFallback: served == .liveModel && tier == .fullLargeV3
+                modelName: ParakeetModelManager.modelID,
+                tier: Self.provenanceTier,
+                servedByFallback: false
             )
             guard await library.replaceTranscript(final, provenance: provenance, for: meetingID) else {
                 return .failed
@@ -1048,7 +1009,7 @@ final class RecordingController {
             \(final.count, privacy: .public) segments, retained audio deleted
             """)
             return .replaced(final)
-        } catch FinalizationPass.PassError.preempted {
+        } catch ParakeetPass.PassError.preempted {
             Self.log.info("""
             Final pass deferred for meeting \(meetingID.uuidString, privacy: .public) — \
             a recording started (resumes after stop)
@@ -1057,8 +1018,7 @@ final class RecordingController {
         } catch {
             Self.log.error("""
             Final pass failed for meeting \(meetingID.uuidString, privacy: .public) — \
-            live transcript stands, retained audio kept: \
-            \(error.localizedDescription, privacy: .public)
+            retained audio kept: \(error.localizedDescription, privacy: .public)
             """)
             return .failed
         }
