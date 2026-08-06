@@ -10,11 +10,13 @@
 import AVFoundation
 
 enum AudioConstants {
-    /// WhisperKit (and SpeakerKit) consume 16 kHz mono Float32 samples.
+    /// The canonical ingest format: 16 kHz mono Float32, which is what the
+    /// capture path downmixes to, what retention writes, and what the
+    /// transcription model consumes.
     nonisolated static let sampleRate: Double = 16_000
     nonisolated static let channels: AVAudioChannelCount = 1
 
-    nonisolated static var whisperFormat: AVAudioFormat {
+    nonisolated static var captureFormat: AVAudioFormat {
         AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
@@ -122,7 +124,7 @@ final class BufferResampler {
     private let converter: AVAudioConverter
     private let targetFormat: AVAudioFormat
 
-    init?(from inputFormat: AVAudioFormat, to targetFormat: AVAudioFormat = AudioConstants.whisperFormat) {
+    init?(from inputFormat: AVAudioFormat, to targetFormat: AVAudioFormat = AudioConstants.captureFormat) {
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else { return nil }
         self.converter = converter
         self.targetFormat = targetFormat

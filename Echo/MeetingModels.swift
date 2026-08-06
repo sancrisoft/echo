@@ -139,7 +139,7 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
     /// encoded only when present, like `wordCount`: pre-SP-007 metas decode to
     /// `nil` (the UI renders "unknown"), and an untouched old `meta.json`
     /// keeps its exact bytes. Written only in the same step as the transcript
-    /// it describes (`replaceTranscript` / `recordLiveFloorProvenance`).
+    /// it describes (`replaceTranscript` / `recordTerminalProvenance`).
     var transcriptProvenance: TranscriptProvenance?
 
     /// The real name of the summary model that wrote `summary.json` (SP-007,

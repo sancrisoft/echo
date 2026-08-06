@@ -355,7 +355,7 @@ struct FinalizationCoordinatorTests {
 
         let outcome = await coordinator.finalizeStopped(meeting)
 
-        #expect(outcome == .floorStands)
+        #expect(outcome == .failed)
         #expect(runner.calledMeetingIDs.count == 2)
         // The honest in-memory notice, and the retained-audio deletion seam.
         #expect(coordinator.terminalFailureIDs == [meeting])
@@ -376,7 +376,7 @@ struct FinalizationCoordinatorTests {
         enterStopPipeline(coordinator)
 
         let outcome = await coordinator.finalizeStopped(meeting)
-        #expect(outcome == .floorStands)
+        #expect(outcome == .failed)
         #expect(coordinator.terminalFailureIDs == [meeting])
         coordinator.notePostStopWorkFinished()
 

@@ -108,58 +108,6 @@ struct FinalDedupCompositionTests {
         #expect(policy.dedupe(final: segments).map(\.id) == segments.map(\.id))
     }
 
-    /// SP-007 composition (ADR-019 before ADR-003): run collapse keeps the
-    /// FIRST run member precisely so the collapsed Team run stays a matchable
-    /// dedup timing anchor — its mic echo starts within the 2.5 s gate of the
-    /// run's first member, not its last.
-    @Test("a collapsed Team run's surviving representative still catches its mic echo")
-    func collapsedTeamRunStillCatchesItsMicEcho() {
-        let teamRun = (0..<3).map { index in
-            team(
-                "the certificate renewal is blocking the deploy",
-                start: 10.0 + Double(index) * 2.0,
-                end: 11.5 + Double(index) * 2.0
-            )
-        }
-        let echo = mic(
-            "The certificate renewal is blocking the deploy",
-            start: 10.8, end: 12.3
-        )
-
-        let collapsedTeam = FinalPassDiscipline.collapseRuns(teamRun)
-        #expect(collapsedTeam.map(\.id) == [teamRun[0].id])
-
-        let batch = (collapsedTeam + [echo]).sorted { $0.start < $1.start }
-        let result = policy.dedupe(final: batch)
-
-        #expect(result.map(\.id) == [teamRun[0].id])
-    }
-
-    /// SP-007 composition, mic side: a mic repetition run collapsed to one
-    /// candidate is still suppressed when that candidate is bleed of a Team
-    /// segment (in-gate, high similarity).
-    @Test("a mic run collapsed to one candidate is still suppressed when it is bleed")
-    func collapsedMicRunBleedIsSuppressed() {
-        let teamSegment = team(
-            "we should freeze the schema before the migration",
-            start: 10.0, end: 12.5
-        )
-        let micRun = (0..<3).map { index in
-            mic(
-                "we should freeze the schema before the migration",
-                start: 10.5 + Double(index) * 2.0,
-                end: 12.5 + Double(index) * 2.0
-            )
-        }
-
-        let collapsedMic = FinalPassDiscipline.collapseRuns(micRun)
-        #expect(collapsedMic.map(\.id) == [micRun[0].id])
-
-        let result = policy.dedupe(final: [teamSegment] + collapsedMic)
-
-        #expect(result.map(\.id) == [teamSegment.id])
-    }
-
     /// ADR-003 asymmetry holds in batch: Team segments always pass, and the
     /// filter preserves the input's timeline order.
     @Test("Team segments are never suppressed and order is preserved")

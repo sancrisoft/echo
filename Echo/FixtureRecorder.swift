@@ -291,7 +291,7 @@ final class FixtureRecorder {
     nonisolated static func writeWAV(_ samples: [Float], to url: URL) throws {
         try? FileManager.default.removeItem(at: url)
 
-        let format = AudioConstants.whisperFormat
+        let format = AudioConstants.captureFormat
         let file = try AVAudioFile(
             forWriting: url,
             settings: format.settings,

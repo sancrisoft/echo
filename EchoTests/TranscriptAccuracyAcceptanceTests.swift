@@ -2,15 +2,16 @@
 //  TranscriptAccuracyAcceptanceTests.swift
 //  EchoTests
 //
-//  SP-005 S2 (Testing Decisions layer 5): the WER harness — the executable
-//  form of the "measured baseline" Success Criterion. Each local fixture
-//  case replays through the LIVE pipeline and through the FINAL PASS, both
-//  hypotheses are scored per channel against local human-corrected
-//  references, and the live-vs-final WER table is printed (the printed
-//  table IS the recorded baseline). Asserted here: the containment criteria
-//  computable today — never-worse (final WER ≤ live WER + tolerance) and
-//  no-text-on-silence. Per-tier improvement targets are pinned only after
-//  this baseline exists (SP-005 open question 1).
+//  The WER harness — the executable form of the "measured baseline" Success
+//  Criterion. Each local fixture case is transcribed by the production pass
+//  and scored per channel against a local human-corrected reference, and the
+//  WER table is printed (the printed table IS the recorded baseline).
+//
+//  There is one engine now, so there is no live-vs-final comparison left to
+//  make: the never-worse assertion died with the live pipeline it was
+//  relative to. What remains asserted is no-text-on-silence, plus the
+//  vacuity guard. Absolute WER targets are the user's to set against a
+//  printed baseline — this harness measures, it does not judge.
 //
 //  Local fixture convention (fixtures are personal recordings and are NEVER
 //  committed — SP-005 Privacy):
@@ -28,9 +29,9 @@
 //  its references may be absent (the implied reference is empty) and the
 //  final pass must produce NO segments for it.
 //
-//  Slow: loads the live Whisper model (shared Acceptance.pipeline, once per
-//  process), so it is gated on ECHO_ACCEPTANCE=1 in addition to the local
-//  fixtures — see Acceptance.gate for the invocation.
+//  Slow: loads the Parakeet model (which must already be on disk), so it is
+//  gated on ECHO_ACCEPTANCE=1 in addition to the local fixtures — see
+//  Acceptance.gate for the invocation.
 //
 
 import Foundation
@@ -116,15 +117,9 @@ nonisolated enum AccuracyFixtures {
 @Suite(.serialized, .enabled(if: Acceptance.isEnabled, Acceptance.gate))
 struct TranscriptAccuracyAcceptanceTests {
 
-    /// The "never worse" half of SP-005's two-sided containment, with an
-    /// absolute margin absorbing normal Whisper run-to-run variance (the
-    /// SP-001/SP-002 transcription-parity register): the final pass must not
-    /// exceed the live WER by more than 2 points on any channel.
-    private static let containmentTolerance = 0.02
-
     @Test(.enabled(if: !AccuracyFixtures.caseNames().isEmpty, AccuracyFixtures.instructions))
-    func finalPassWERIsContainedByTheLiveBaseline() async throws {
-        var rows = ["case | channel | live WER (S/I/D) | final WER (S/I/D) | ref words"]
+    func transcriptionWERBaseline() async throws {
+        var rows = ["case | channel | WER (S/I/D) | ref words"]
         var sawSpeechSegments = false
 
         for caseName in AccuracyFixtures.caseNames() {
@@ -134,57 +129,29 @@ struct TranscriptAccuracyAcceptanceTests {
                 audio[fixture.channel] = try Fixtures.loadWAV(at: fixture.wav)
             }
 
-            let liveSegments = try await liveTranscribe(audio)
-
-            let retained = try retainedFiles(for: fixtures, audio: audio)
-            defer { for url in retained.values where url.path.hasPrefix(FileManager.default.temporaryDirectory.path) {
-                try? FileManager.default.removeItem(at: url)
-            } }
-            let finalSegments = try await FinalizationPass.run(
-                retainedFiles: retained,
-                model: LivePipelineModelProvider(pipeline: Acceptance.pipeline)
-            )
+            let segments = try await Acceptance.transcribe(audio)
 
             if AccuracyFixtures.isSilenceCase(caseName) {
-                // The no-text-on-silence half of containment: the live path's
-                // speech gates don't run on a full-timeline decode, so this
-                // must be fixture-verified, never assumed (SP-005).
+                // No text on silence — fixture-verified, never assumed.
                 #expect(
-                    finalSegments.isEmpty,
-                    "final pass invented text on silence (\(caseName)): \(finalSegments.map(\.text))"
+                    segments.isEmpty,
+                    "the pass invented text on silence (\(caseName)): \(segments.map(\.text))"
                 )
-            } else if !liveSegments.isEmpty || !finalSegments.isEmpty {
+            } else if !segments.isEmpty {
                 sawSpeechSegments = true
             }
 
             for fixture in fixtures {
-                let reference = AccuracyFixtures.reference(for: fixture)
-                let liveCounts = WERScorer.score(
-                    reference: reference,
-                    segments: liveSegments.filter { $0.channel == fixture.channel }
+                let counts = WERScorer.score(
+                    reference: AccuracyFixtures.reference(for: fixture),
+                    segments: segments.filter { $0.channel == fixture.channel }
                 )
-                let finalCounts = WERScorer.score(
-                    reference: reference,
-                    segments: finalSegments.filter { $0.channel == fixture.channel }
-                )
-                rows.append(Self.row(caseName, fixture.channel, live: liveCounts, final: finalCounts))
-
-                // Never-worse, asserted only where a reference makes WER
-                // computable — nothing is fabricated for silence cases.
-                if liveCounts.referenceWordCount > 0 {
-                    #expect(
-                        finalCounts.wer <= liveCounts.wer + Self.containmentTolerance,
-                        """
-                        final pass regressed \(caseName)/\(fixture.channel.rawValue): \
-                        live \(liveCounts.wer) → final \(finalCounts.wer)
-                        """
-                    )
-                }
+                rows.append(Self.row(caseName, fixture.channel, counts))
             }
         }
 
         // Sanity: with speech fixtures present, a segment-free run means the
-        // replay or model load is broken — containment would pass vacuously.
+        // replay or model load is broken — the table would be vacuous.
         if AccuracyFixtures.caseNames().contains(where: { !AccuracyFixtures.isSilenceCase($0) }) {
             try #require(
                 sawSpeechSegments,
@@ -192,70 +159,12 @@ struct TranscriptAccuracyAcceptanceTests {
             )
         }
 
-        // The printed table IS the recorded baseline (SP-005 Success
-        // Criteria). A copy lands in the local fixtures folder — outside the
-        // repo — as a dated record; failing to write it is non-fatal.
+        // The printed table IS the recorded baseline. A copy lands in the
+        // local fixtures folder — outside the repo — as a dated record;
+        // failing to write it is non-fatal.
         let table = rows.joined(separator: "\n")
         print("[WER] baseline table\n\(table)")
         Self.recordResults(table)
-    }
-
-    // MARK: - Live replay
-
-    /// Replays the fixture audio through the production live pipeline at the
-    /// 10 ms capture cadence, system first in each step (the production
-    /// ordering, as in AECAcceptanceTests). No AEC stage: accuracy fixtures
-    /// are recorded as the pipeline-ingested signal (ADR-013 — the same
-    /// audio the final pass will re-decode).
-    private func liveTranscribe(_ audio: [AudioChannel: [Float]]) async throws -> [TranscriptSegment] {
-        let state = RecordingState()
-        await Acceptance.pipeline.start(appendingTo: state)
-
-        let chunk = AECFixtureRunner.chunkSize
-        let total = audio.values.map(\.count).max() ?? 0
-        var offset = 0
-        while offset < total {
-            for channel in [AudioChannel.system, .microphone] {
-                guard let samples = audio[channel], offset < samples.count else { continue }
-                await Acceptance.pipeline.ingest(
-                    Array(samples[offset ..< min(offset + chunk, samples.count)]),
-                    from: channel
-                )
-            }
-            offset += chunk
-        }
-        await Acceptance.pipeline.stop()
-        return state.segments
-    }
-
-    // MARK: - Final-pass input
-
-    /// The final pass reads AVAudioFile URLs and assumes the retained
-    /// timeline is 16 kHz (ADR-013's canonical ingest format). Fixture WAVs
-    /// may arrive in any readable format, so the samples already loaded
-    /// canonically for the live replay are re-written as 16 kHz mono WAVs —
-    /// both paths then decode identical audio.
-    private func retainedFiles(
-        for fixtures: [AccuracyFixtures.ChannelFixture],
-        audio: [AudioChannel: [Float]]
-    ) throws -> [AudioChannel: URL] {
-        #if DEBUG
-        var files: [AudioChannel: URL] = [:]
-        for fixture in fixtures {
-            guard let samples = audio[fixture.channel] else { continue }
-            let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "echo-accuracy-\(fixture.channel.rawValue)-\(UUID().uuidString).wav"
-            )
-            try FixtureRecorder.writeWAV(samples, to: url)
-            files[fixture.channel] = url
-        }
-        return files
-        #else
-        // FixtureRecorder is DEBUG-only; a release-config run hands the
-        // fixture files to the pass directly (they must then already be in
-        // the canonical 16 kHz mono format).
-        return Dictionary(uniqueKeysWithValues: fixtures.map { ($0.channel, $0.wav) })
-        #endif
     }
 
     // MARK: - Reporting
@@ -263,17 +172,11 @@ struct TranscriptAccuracyAcceptanceTests {
     private nonisolated static func row(
         _ caseName: String,
         _ channel: AudioChannel,
-        live: WERScorer.Counts,
-        final finalCounts: WERScorer.Counts
+        _ counts: WERScorer.Counts
     ) -> String {
-        func wer(_ counts: WERScorer.Counts) -> String {
-            counts.wer.isFinite ? String(format: "%.3f", counts.wer) : "inf"
-        }
-        func sid(_ counts: WERScorer.Counts) -> String {
-            "\(counts.substitutions)/\(counts.insertions)/\(counts.deletions)"
-        }
-        return "\(caseName) | \(channel.rawValue) | \(wer(live)) (\(sid(live))) | "
-            + "\(wer(finalCounts)) (\(sid(finalCounts))) | \(live.referenceWordCount)"
+        let wer = counts.wer.isFinite ? String(format: "%.3f", counts.wer) : "inf"
+        let sid = "\(counts.substitutions)/\(counts.insertions)/\(counts.deletions)"
+        return "\(caseName) | \(channel.rawValue) | \(wer) (\(sid)) | \(counts.referenceWordCount)"
     }
 
     private nonisolated static func recordResults(_ table: String) {

@@ -132,7 +132,7 @@ actor RetainedAudioWriter {
 
     private func write(_ samples: [Float], to file: AVAudioFile) throws {
         guard let buffer = AVAudioPCMBuffer(
-            pcmFormat: AudioConstants.whisperFormat,
+            pcmFormat: AudioConstants.captureFormat,
             frameCapacity: AVAudioFrameCount(samples.count)
         ) else {
             throw WriteFailure(description: "Couldn't allocate a \(samples.count)-frame PCM buffer")

@@ -5,13 +5,13 @@
 //  SP-005 S4: the launch-time crash-resume scan (ADR-016 — pending state is a
 //  directory scan over retained audio) and the retention-staging sweep,
 //  against a real-FS temp meetings root (the MeetingStoreTests /
-//  FinalizationReplaceTests pattern). SP-007 (ADR-024) makes the scan
-//  three-way: terminal convergence now KEEPS the audio, so presence alone no
-//  longer means pending — the recorded transcript provenance disambiguates
-//  (none → pending; liveFloor → terminal draft, never auto-resumed;
-//  finalPass → orphan of a crashed success cleanup, swept). The pending-ID
-//  query under test here is also the summary backfill's eligibility
-//  exclusion — one primitive, both consumers.
+//  FinalizationReplaceTests pattern). Terminal convergence KEEPS the audio,
+//  so presence alone doesn't mean pending — the recorded transcript
+//  provenance disambiguates, four ways: none → pending; terminalFailure →
+//  a failed meeting, never auto-resumed; liveFloor → a legacy draft, never
+//  auto-resumed either; finalPass → orphan of a crashed success cleanup,
+//  swept. The pending-ID query under test here is also the summary
+//  backfill's eligibility exclusion — one primitive, both consumers.
 //
 
 import Foundation
@@ -61,10 +61,25 @@ struct FinalizationResumeScanTests {
         try Data("retained".utf8).write(to: url)
     }
 
-    /// Marks the meeting a terminal draft: liveFloor provenance recorded by
-    /// the same store call the converge path uses (ADR-024's atomic write).
-    private func markTerminalDraft(_ id: UUID, in store: MeetingStore) async throws {
-        try await store.recordLiveFloorProvenance(
+    /// Marks the meeting terminally failed: the provenance the converge path
+    /// writes, through the same store call it uses (ADR-024's atomic write).
+    private func markTerminalFailure(_ id: UUID, in store: MeetingStore) async throws {
+        try await store.recordTerminalProvenance(
+            for: id,
+            provenance: TranscriptProvenance(
+                source: .terminalFailure,
+                modelName: ParakeetModelManager.modelID,
+                tier: "universal",
+                servedByFallback: false
+            )
+        )
+    }
+
+    /// Marks the meeting a LEGACY draft: `liveFloor` provenance, as written
+    /// by a pre-migration build. Nothing writes this any more, but old metas
+    /// carry it and the scan must keep resting on them.
+    private func markLegacyDraft(_ id: UUID, in store: MeetingStore) async throws {
+        try await store.recordTerminalProvenance(
             for: id,
             provenance: TranscriptProvenance(
                 source: .liveFloor,
@@ -140,30 +155,34 @@ struct FinalizationResumeScanTests {
         }
     }
 
-    // MARK: - Three-way classification (ADR-024)
+    // MARK: - Four-way classification (ADR-024)
 
-    @Test("with retained audio, provenance disambiguates: none resumes, liveFloor is a draft, finalPass is an orphan")
+    @Test("with retained audio, provenance disambiguates all four ways")
     func scanClassifiesRetainedAudioByProvenance() async throws {
         try await withTempStore { store, _ in
-            let pending = try await saveMeeting(in: store, age: 3_000)
-            let draft = try await saveMeeting(in: store, age: 2_000)
+            let pending = try await saveMeeting(in: store, age: 4_000)
+            let failed = try await saveMeeting(in: store, age: 3_000)
+            let legacyDraft = try await saveMeeting(in: store, age: 2_000)
             let orphan = try await saveMeeting(in: store, age: 1_000)
-            for id in [pending, draft, orphan] {
+            for id in [pending, failed, legacyDraft, orphan] {
                 try plantRetainedAudio(for: id, in: store)
             }
-            try await markTerminalDraft(draft, in: store)
+            try await markTerminalFailure(failed, in: store)
+            try await markLegacyDraft(legacyDraft, in: store)
             try await markFinalized(orphan, in: store)
 
-            // Only the true pending meeting auto-resumes: the draft waits
-            // for the user's Retry; the orphan's transcript is already final.
+            // Only the true pending meeting auto-resumes: the failed one and
+            // the legacy draft both wait for the user's Retry; the orphan's
+            // transcript is already final.
             #expect(await store.pendingFinalizationMeetingIDs() == [pending])
             #expect(await store.retainedAudioDisposition(for: pending) == .pending)
-            #expect(await store.retainedAudioDisposition(for: draft) == .terminalDraft)
+            #expect(await store.retainedAudioDisposition(for: failed) == .terminalFailure)
+            #expect(await store.retainedAudioDisposition(for: legacyDraft) == .terminalDraft)
             #expect(await store.retainedAudioDisposition(for: orphan) == .finalPassOrphan)
         }
     }
 
-    @Test("the orphan sweep deletes exactly the finalPass orphan's audio — drafts and pending untouched")
+    @Test("the orphan sweep deletes exactly the finalPass orphan's audio — failed and pending untouched")
     func orphanSweepDeletesOnlyOrphanAudio() async throws {
         try await withTempStore { store, _ in
             let pending = try await saveMeeting(in: store, age: 4_000)
@@ -173,7 +192,7 @@ struct FinalizationResumeScanTests {
             for id in [pending, draft, orphan, trashedOrphan] {
                 try plantRetainedAudio(for: id, in: store)
             }
-            try await markTerminalDraft(draft, in: store)
+            try await markTerminalFailure(draft, in: store)
             try await markFinalized(orphan, in: store)
             try await markFinalized(trashedOrphan, in: store)
             let orphanTranscript = try Data(contentsOf: store.directory(for: orphan).appending(path: "transcript.json"))
@@ -183,8 +202,8 @@ struct FinalizationResumeScanTests {
             // The orphan's audio is gone; its final transcript is untouched.
             #expect(await !store.hasRetainedAudio(for: orphan))
             #expect(try Data(contentsOf: store.directory(for: orphan).appending(path: "transcript.json")) == orphanTranscript)
-            // The draft's kept audio (the Retry's fuel) and the pending
-            // meeting's checkpoint both survive the sweep.
+            // The failed meeting's kept audio (the Retry's fuel) and the
+            // pending meeting's checkpoint both survive the sweep.
             #expect(await store.hasRetainedAudio(for: draft))
             #expect(await store.hasRetainedAudio(for: pending))
             // Trashed meetings stay outside the scan (existing rule): their
@@ -193,19 +212,23 @@ struct FinalizationResumeScanTests {
         }
     }
 
-    @Test("a terminal draft is never enqueued — across relaunches, only the user re-opens it")
-    func terminalDraftIsNeverAutoResumed() async throws {
+    @Test("neither terminal state is ever enqueued — across relaunches, only the user re-opens one")
+    func terminalStatesAreNeverAutoResumed() async throws {
         try await withTempStore { store, _ in
-            let draft = try await saveMeeting(in: store, age: 1_000)
-            try plantRetainedAudio(for: draft, in: store)
-            try await markTerminalDraft(draft, in: store)
+            let failed = try await saveMeeting(in: store, age: 2_000)
+            let legacyDraft = try await saveMeeting(in: store, age: 1_000)
+            try plantRetainedAudio(for: failed, in: store)
+            try plantRetainedAudio(for: legacyDraft, in: store)
+            try await markTerminalFailure(failed, in: store)
+            try await markLegacyDraft(legacyDraft, in: store)
 
-            // However often the scan runs (every launch), the draft rests.
+            // However often the scan runs (every launch), both rest.
             #expect(await store.pendingFinalizationMeetingIDs() == [])
             await store.sweepFinalPassAudioOrphans()
             #expect(await store.pendingFinalizationMeetingIDs() == [])
-            // Its audio — the Retry affordance's exact lifetime — remains.
-            #expect(await store.hasRetainedAudio(for: draft))
+            // Their audio — the Retry affordance's exact lifetime — remains.
+            #expect(await store.hasRetainedAudio(for: failed))
+            #expect(await store.hasRetainedAudio(for: legacyDraft))
         }
     }
 
@@ -259,10 +282,11 @@ struct FinalizationResumeScanTests {
             #expect(excluded.contains(pending))
             #expect(!excluded.contains(eligible))
 
-            // Terminal convergence records liveFloor provenance with the
-            // audio KEPT (ADR-024): the draft is no longer pending, so its
-            // floor summary may generate — the same rule, new bit.
-            try await markTerminalDraft(pending, in: store)
+            // Terminal convergence records terminalFailure provenance with
+            // the audio KEPT (ADR-024): the meeting is no longer pending, so
+            // it stops blocking the backfill — it simply has no transcript
+            // to summarize.
+            try await markTerminalFailure(pending, in: store)
             #expect(await store.pendingFinalizationMeetingIDs() == [])
             #expect(await store.hasRetainedAudio(for: pending))
         }
