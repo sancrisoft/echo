@@ -44,8 +44,11 @@ nonisolated enum CallDetectionTiming {
 /// happening.
 nonisolated enum IslandFace: Equatable, Sendable {
     /// The one face that offers to record. `appName` is island copy only
-    /// (ADR-017: never persisted as meeting metadata).
-    case startPrompt(appName: String)
+    /// (ADR-017: never persisted as meeting metadata). `scoped` is whether the
+    /// tap will narrow the session to that app — set from the same derivation
+    /// that picks the scope, so the button's promise ("Record Zoom" vs "Start
+    /// recording") can never disagree with what the tap requests (SP-008).
+    case startPrompt(appName: String, scoped: Bool)
     /// The retracted start prompt: a dot and a word, re-expanding on click.
     case compactPill
     /// "Call ended — stopping in Ns". The countdown is rendered from the
@@ -110,8 +113,10 @@ nonisolated struct CallSessionMachine {
         /// Arm for `CallDetectionTiming.endGrace`.
         case startGraceTimer
         case cancelGraceTimer
-        /// Run the same gated start the menu bar's button runs (ADR-009).
-        case requestStartRecording
+        /// Run the same gated start the menu bar's button runs (ADR-009),
+        /// narrowed to the carried scope (SP-008: the app the island names,
+        /// or `.everything` when it names none).
+        case requestStartRecording(CaptureScope)
         /// Run the same stop the menu bar's button runs (SP-005 sequencing
         /// inherited, not reimplemented).
         case requestStopRecording
@@ -153,6 +158,23 @@ nonisolated struct CallSessionMachine {
     /// live (a call is only ever confirmed with a match in hand); the island
     /// renders an app-less prompt honestly rather than inventing a name.
     private var appName: String { currentApp?.displayName ?? "" }
+
+    /// The scope the island's start tap will request — SP-008's settled
+    /// policy in one expression: a scopeable attributed app records that app
+    /// (the one the island names — the first catalog match); an unscopeable
+    /// one (the FaceTime daemon) or an app-less call runs as an honest
+    /// Everything. `promptFace` derives its `scoped` flag from this same
+    /// value, so the button copy and the capture request cannot diverge.
+    private var startScope: CaptureScope {
+        currentApp.map { $0.scopeable ? .app($0) : .everything } ?? .everything
+    }
+
+    /// The start-prompt face for the current call, its `scoped` flag tied to
+    /// `startScope` (SP-008 quality safeguard: copy and capture agree by
+    /// construction).
+    private var promptFace: IslandFace {
+        .startPrompt(appName: appName, scoped: startScope.scopedApp != nil)
+    }
 
     @discardableResult
     mutating func handle(_ event: Event) -> [Action] {
@@ -270,7 +292,7 @@ nonisolated struct CallSessionMachine {
         // Already recording (any surface): the offer is moot, so the call runs
         // quietly and only its end raises the island (rules 5, 8).
         guard !isRecording, !dismissedThisCall else { return [] }
-        face = .startPrompt(appName: appName)
+        face = promptFace
         return [.setFace(face), .startRetractTimer(CallDetectionTiming.promptRetract)]
     }
 
@@ -341,12 +363,12 @@ nonisolated struct CallSessionMachine {
         // The single source of `requestStartRecording` in the whole feature.
         guard phase == .inCall, case .startPrompt = face else { return [] }
         face = nil
-        return [.cancelRetractTimer, .setFace(nil), .requestStartRecording]
+        return [.cancelRetractTimer, .setFace(nil), .requestStartRecording(startScope)]
     }
 
     private mutating func handlePillTapped() -> [Action] {
         guard phase == .inCall, face == .compactPill, !dismissedThisCall else { return [] }
-        face = .startPrompt(appName: appName)
+        face = promptFace
         return [.setFace(face), .startRetractTimer(CallDetectionTiming.promptRetract)]
     }
 

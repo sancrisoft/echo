@@ -23,12 +23,19 @@ import AppKit
 struct MenuBarView: View {
     @Environment(RecordingController.self) private var controller
     @Environment(AppSettings.self) private var settings
+    @Environment(CallDetectionController.self) private var callDetection
     @Environment(\.openWindow) private var openWindow
 
     /// Stats for the most recently saved meeting, shown on the idle face.
     /// Word count needs the transcript, so it is loaded lazily (the meta alone
     /// only carries a segment count) whenever the newest meeting changes.
     @State private var lastMeeting: LastMeetingStat?
+
+    /// The idle face's chosen capture scope (SP-008). Reseeded to the detected
+    /// app whenever `appsInCall` changes — so a popup opened mid-call
+    /// preselects the app the island names, and a call ending while the popup
+    /// is open degrades to `nil` (no selector row, Start records Everything).
+    @State private var scopeSelection: CaptureScope?
 
     #if DEBUG
     @State private var fixtureRecorder = FixtureRecorder()
@@ -153,9 +160,33 @@ struct MenuBarView: View {
 
             infoLine
 
+            // SP-008: with a call detected, offer to scope the recording to it.
+            // Derived from the same `appsInCall` the island attributes from —
+            // no call (or only unscopeable apps) means no row at all, so the
+            // popup is byte-for-byte today's outside a call.
+            if !scopeOptions.isEmpty {
+                HStack(spacing: 6) {
+                    Text("Record:")
+                        .foregroundStyle(.secondary)
+                    Picker("Record:", selection: $scopeSelection) {
+                        ForEach(scopeOptions, id: \.self) { option in
+                            Text(option.scopedApp?.displayName ?? "Everything")
+                                .tag(Optional(option))
+                        }
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize()
+                }
+                .font(.caption)
+            }
+
             Button {
                 Task {
-                    await controller.toggle()
+                    // Idle face, so this is always a start; the recording
+                    // face's Stop keeps using `toggle()`. `nil` selection
+                    // (no call detected) records everything — today's start.
+                    await controller.start(scope: scopeSelection ?? .everything)
                     // Blocked on a not-ready speech model — downloading,
                     // preparing, or a failed download/load (ADR-009): never a
                     // false recording face here. Open + focus the dashboard,
@@ -186,6 +217,19 @@ struct MenuBarView: View {
             .controlSize(.mini)
         }
         .frame(maxWidth: .infinity)
+        // `initial: true` covers a popup opened mid-call; later changes cover
+        // a call starting/ending while it is open. Reseeding (rather than
+        // preserving a manual pick) keeps the selection honest: it always
+        // names an app that is verifiably still on a call.
+        .onChange(of: callDetection.appsInCall, initial: true) {
+            scopeSelection = ScopeSelection.defaultSelection(appsInCall: callDetection.appsInCall)
+        }
+    }
+
+    /// The "Record:" dropdown's options — empty means "no selector row"
+    /// (see `ScopeSelection`).
+    private var scopeOptions: [CaptureScope] {
+        ScopeSelection.options(appsInCall: callDetection.appsInCall)
     }
 
     // MARK: - Info line (default stats, or a temporary health warning)
@@ -226,6 +270,13 @@ struct MenuBarView: View {
         // UX): the segments keep accumulating invisibly, and the word count
         // reappears once the meeting resolves.
         if controller.state.isRecording {
+            // SP-008: a scoped session says so ("Zoom only") — `captureScope`
+            // already reflects the effective scope after any fallback, so this
+            // line never overstates the narrowing. A global session keeps
+            // today's line: "Mic + system" already tells the whole truth.
+            if let scope = controller.state.captureScope, scope.scopedApp != nil {
+                return scope.indicatorLabel
+            }
             return "Mic + system"
         }
         // Idle: surface any pending status (e.g. "Generating summary…") first,

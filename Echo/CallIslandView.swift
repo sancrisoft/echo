@@ -56,8 +56,8 @@ struct CallIslandView: View {
     @ViewBuilder
     private func content(for face: IslandFace) -> some View {
         switch face {
-        case .startPrompt(let appName):
-            startPrompt(appName: appName)
+        case .startPrompt(let appName, let scoped):
+            startPrompt(appName: appName, scoped: scoped)
         case .compactPill:
             compactPill
         case .endGrace:
@@ -69,7 +69,7 @@ struct CallIslandView: View {
 
     // MARK: - Start prompt
 
-    private func startPrompt(appName: String) -> some View {
+    private func startPrompt(appName: String, scoped: Bool) -> some View {
         HStack(spacing: 10) {
             Circle()
                 .fill(.red)
@@ -87,7 +87,7 @@ struct CallIslandView: View {
 
             Spacer(minLength: 4)
 
-            Button("Start recording") { controller.startTapped() }
+            Button(Self.recordButtonTitle(appName: appName, scoped: scoped)) { controller.startTapped() }
                 .buttonStyle(IslandButtonStyle(kind: .filled(.echoIndigo)))
 
             Button {
@@ -110,6 +110,14 @@ struct CallIslandView: View {
     /// process reported no name we can attribute.
     private static func detectedTitle(appName: String) -> String {
         appName.isEmpty ? "Call detected" : "\(appName) call detected"
+    }
+
+    /// The island's explicit promise (SP-008): "Record Zoom" when the tap will
+    /// scope the session to the named app; the plain "Start recording" when it
+    /// will run as Everything (an unscopeable app, or no attributable name) —
+    /// the button never names an app the capture won't be narrowed to.
+    private static func recordButtonTitle(appName: String, scoped: Bool) -> String {
+        scoped && !appName.isEmpty ? "Record \(appName)" : "Start recording"
     }
 
     // MARK: - Compact pill

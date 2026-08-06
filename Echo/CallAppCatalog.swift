@@ -22,6 +22,20 @@ nonisolated struct CallApp: Equatable, Hashable, Sendable {
     /// The bundle-ID prefix this app is recognised by — see `matches(bundleID:)`.
     let bundlePrefix: String
 
+    /// SP-008: whether a recording session can honestly narrow its system
+    /// channel to this app — i.e. whether the processes this entry matches are
+    /// the ones that actually *play* the call's audio. When false, the island
+    /// offers a plain global recording instead of naming the app (open
+    /// question 3's settled policy: an unscopeable app runs as an honest
+    /// Everything, never a scope the tap can't deliver).
+    let scopeable: Bool
+
+    init(displayName: String, bundlePrefix: String, scopeable: Bool = true) {
+        self.displayName = displayName
+        self.bundlePrefix = bundlePrefix
+        self.scopeable = scopeable
+    }
+
     /// Exact match, or the prefix followed by a `.` so helper processes
     /// attribute to their parent app (`com.google.Chrome.helper` → Chrome)
     /// while neighbouring identifiers do not (`com.google.Chromecast`,
@@ -70,7 +84,13 @@ nonisolated enum CallAppCatalog {
         // daemon, so they attribute here too — they are calls as well, and the
         // island's copy is the only thing that reads slightly off.
         CallApp(displayName: "FaceTime", bundlePrefix: "com.apple.FaceTime"),
-        CallApp(displayName: "FaceTime", bundlePrefix: "com.apple.avconferenced"),
+        // Not scopeable (SP-008): the audio behind a FaceTime call is played
+        // by Apple's AV conferencing daemon, not by a process a per-app scope
+        // has been verified to tap. Until the build-phase measurement proves
+        // the daemon's output audio taps correctly, a call attributed here
+        // runs as an honest Everything (open question 3's policy) — flip this
+        // to true the day the measurement lands.
+        CallApp(displayName: "FaceTime", bundlePrefix: "com.apple.avconferenced", scopeable: false),
         CallApp(displayName: "Webex", bundlePrefix: "Cisco-Systems.Spark"),
         CallApp(displayName: "Google Chrome", bundlePrefix: "com.google.Chrome"),
         CallApp(displayName: "Microsoft Edge", bundlePrefix: "com.microsoft.edgemac"),
