@@ -105,6 +105,38 @@ nonisolated struct FinalPassProgress: Sendable {
     }
 }
 
+/// Lock-guarded holder for the pass's progress accumulator. The fraction is
+/// advanced from the engine's progress-stream consumer (its own child task)
+/// and from the channel loop, so the value type itself stays pure and
+/// table-testable while the sharing is explicit — the diagnostics-sink /
+/// preemption-signal pattern this codebase uses everywhere else.
+private final class SharedPassProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var progress: FinalPassProgress
+
+    init(channelTotalSamples: [Int]) {
+        progress = FinalPassProgress(channelTotalSamples: channelTotalSamples)
+    }
+
+    var fraction: Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return progress.fraction
+    }
+
+    func advance(channel: Int, decodedThrough samplePosition: Int) -> Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return progress.advance(channel: channel, decodedThrough: samplePosition)
+    }
+
+    func finishChannel(_ channel: Int) -> Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return progress.finishChannel(channel)
+    }
+}
+
 // MARK: - The pass
 
 nonisolated enum ParakeetPass {
@@ -220,7 +252,7 @@ nonisolated enum ParakeetPass {
         // fraction the UI sees (ADR-007 — no second counter). Totals come from
         // the files' own lengths; a file this header can't open reads 0 here
         // and throws honestly when the channel is read below.
-        var progress = FinalPassProgress(channelTotalSamples: channels.map {
+        let progress = SharedPassProgress(channelTotalSamples: channels.map {
             (try? AVAudioFile(forReading: $0.url)).map { Int($0.length) } ?? 0
         })
         onProgress(progress.fraction)
