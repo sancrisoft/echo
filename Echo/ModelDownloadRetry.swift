@@ -2,14 +2,14 @@
 //  ModelDownloadRetry.swift
 //  Echo
 //
-//  Stall detection + retry for the multi-GB model downloads (the Whisper
-//  variant and the summary LLM snapshot). A download whose connection goes
+//  Stall detection + retry for the large model downloads (the Parakeet
+//  model and the summary LLM snapshot). A download whose connection goes
 //  idle otherwise hangs forever with the UI stuck at its last percentage and
 //  every trigger button disabled — the only way out was relaunching the app.
 //
 //  A watchdog watches the progress callbacks; when no forward progress is
 //  reported for `stallTimeout`, the in-flight download is cancelled and the
-//  operation is retried (both Hub snapshots and WhisperKit downloads skip
+//  operation is retried (both Hub snapshots and FluidAudio downloads skip
 //  already-completed files, so a retry resumes rather than starting over).
 //  Only genuine stalls are retried — real errors (no network, no disk) still
 //  propagate immediately.

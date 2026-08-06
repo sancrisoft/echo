@@ -3,7 +3,7 @@
 //  Echo
 //
 //  Shared audio primitives used by both capture channels: the canonical format
-//  WhisperKit expects, an RMS level meter for the waveforms, and a resampler
+//  the transcription model expects, an RMS level meter for the waveforms, and a resampler
 //  that converts any input buffer to 16 kHz mono Float.
 //
 

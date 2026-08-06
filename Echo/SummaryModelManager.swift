@@ -27,7 +27,8 @@ import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
-import WhisperKit  // @_exported ArgmaxCore: HubApiWrapper / AutoTokenizerWrapper
+import Hub
+import Tokenizers
 import os
 
 /// Observable-friendly snapshot of the summary model's lifecycle, consumed by
@@ -384,8 +385,8 @@ actor SummaryModelManager {
     static let liveDownloader: SnapshotDownloader = { progress in
         try SummaryModelManager.checkDiskSpace()
         progress("Downloading summary model…", 0)
-        let hub = HubApiWrapper(downloadBase: EchoPaths.modelsDirectory)
-        let repo = HubApiWrapper.Repo(id: SummaryModelManager.modelID)
+        let hub = SummaryModelManager.hub
+        let repo = HubApi.Repo(id: SummaryModelManager.modelID)
         // The bar must not snap back to zero on a stall retry — remember the
         // fraction the download actually reached (callbacks arrive on
         // URLSession worker threads, hence the lock).
@@ -489,10 +490,18 @@ actor SummaryModelManager {
 
     // MARK: - Paths & validation
 
+    /// The Hub client every path here shares. `cache: nil` is mandatory, not
+    /// a preference: the default `HubCache.default` stores request caches
+    /// OUTSIDE the app's data folder, and everything Echo writes must stay
+    /// under ~/Library/Application Support/Echo. `hfToken` stays nil so auth
+    /// resolves from the environment (unset here) rather than a stale token.
+    nonisolated static var hub: HubApi {
+        HubApi(downloadBase: EchoPaths.modelsDirectory, cache: nil)
+    }
+
     /// downloadBase/models/<org>/<repo> — HubApi's snapshot layout.
     private static var snapshotDirectory: URL {
-        HubApiWrapper(downloadBase: EchoPaths.modelsDirectory)
-            .localRepoLocation(HubApiWrapper.Repo(id: modelID))
+        hub.localRepoLocation(HubApi.Repo(id: modelID))
     }
 
     /// Where the completeness manifest lives (ADR-012): beside the models
@@ -625,20 +634,19 @@ nonisolated final class FileDownloadPauseStore: DownloadPauseStore, @unchecked S
     }
 }
 
-/// Bridges the tokenizer stack Echo already ships (ArgmaxCore's vendored
-/// swift-transformers, surfaced as TokenizerWrapper) into MLXLMCommon's
-/// Tokenizer. Chat templating is deliberately unsupported: the wrapper does
-/// not expose it, and MLXTextEngine builds the ChatML turn format itself
-/// (ADR-010).
+/// Bridges swift-transformers' `Tokenizers.Tokenizer` into MLXLMCommon's
+/// same-named protocol. Chat templating is deliberately unsupported here:
+/// MLXTextEngine builds the turn format itself (ADR-010), so a template the
+/// two stacks might disagree about never enters the picture.
 nonisolated struct EchoTokenizerLoader: TokenizerLoader {
     func load(from directory: URL) async throws -> any MLXLMCommon.Tokenizer {
-        let wrapper = try await AutoTokenizerWrapper.from(modelFolder: directory)
+        let wrapper = try await AutoTokenizer.from(modelFolder: directory)
         return EchoBridgedTokenizer(wrapper: wrapper)
     }
 }
 
 private nonisolated struct EchoBridgedTokenizer: MLXLMCommon.Tokenizer {
-    let wrapper: TokenizerWrapper
+    let wrapper: any Tokenizers.Tokenizer
 
     func encode(text: String, addSpecialTokens: Bool) -> [Int] {
         wrapper.encode(text: text, addSpecialTokens: addSpecialTokens)

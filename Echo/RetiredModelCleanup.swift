@@ -24,7 +24,7 @@
 //
 
 import Foundation
-import WhisperKit  // @_exported ArgmaxCore: HubApiWrapper (Hub snapshot path layout)
+import Hub  // HubApi: the snapshot path layout the summary model downloads into
 import os
 
 nonisolated enum RetiredModelCleanup {
@@ -89,8 +89,8 @@ nonisolated enum RetiredModelCleanup {
             // for its snapshotDirectory (HubApi's layout) — going through the
             // same API means the cleanup's target can never drift from where
             // the manager actually put the files.
-            let directory = HubApiWrapper(downloadBase: modelsRoot)
-                .localRepoLocation(HubApiWrapper.Repo(id: repoID))
+            let directory = HubApi(downloadBase: modelsRoot, cache: nil)
+                .localRepoLocation(HubApi.Repo(id: repoID))
 
             // Already gone — the obligation is satisfied (ADR-011: durable by
             // repetition, no persisted trigger state). Checked instead of
