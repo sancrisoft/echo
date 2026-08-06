@@ -93,6 +93,18 @@ struct CallAppCatalogTests {
         #expect(CallAppCatalog.match(bundleID: "com.apple.FaceTime")?.displayName == "FaceTime")
     }
 
+    // MARK: - Scopeability (SP-008)
+
+    @Test func theFaceTimeDaemonIsTheOnlyUnscopeableEntry() {
+        // SP-008: the daemon's output audio is not verified to tap correctly,
+        // so a call attributed to it runs as an honest Everything (open
+        // question 3's policy). Every other entry — including the FaceTime
+        // *app*, whose own processes are exactly what a scope would include —
+        // can be named and scoped by the island.
+        let unscopeable = CallAppCatalog.apps.filter { !$0.scopeable }
+        #expect(unscopeable.map(\.bundlePrefix) == ["com.apple.avconferenced"])
+    }
+
     @Test func anEmptyBundleIDNeverMatches() {
         // Daemons and unbundled processes report no bundle ID; a nameless
         // capture must never be read as a call.

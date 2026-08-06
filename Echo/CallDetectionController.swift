@@ -35,6 +35,12 @@ final class CallDetectionController {
     /// deadline rather than a second clock that could drift from it.
     private(set) var graceDeadline: Date?
 
+    /// The catalogued apps currently capturing the mic — the exact deduped,
+    /// catalog-ordered set the machine attributes from (one detection path;
+    /// this is a mirror, never a second matcher). SP-008's scope popup reads
+    /// it to offer per-app choices. Empty while the monitor is off.
+    private(set) var appsInCall: [CallApp] = []
+
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
     @ObservationIgnored private var retractTask: Task<Void, Never>?
     @ObservationIgnored private var graceTask: Task<Void, Never>?
@@ -72,7 +78,9 @@ final class CallDetectionController {
 
         monitor.onClientsChanged = { [weak self] clients in
             guard let self else { return }
-            self.apply(self.machine.handle(.matchedAppsChanged(Self.matchedApps(from: clients))))
+            let apps = Self.matchedApps(from: clients)
+            self.appsInCall = apps
+            self.apply(self.machine.handle(.matchedAppsChanged(apps)))
         }
         observeRecordingState()
         observeSetting()
@@ -85,7 +93,7 @@ final class CallDetectionController {
     #if DEBUG
     private static func previewFace(named name: String) -> IslandFace? {
         switch name {
-        case "startPrompt": return .startPrompt(appName: "Zoom")
+        case "startPrompt": return .startPrompt(appName: "Zoom", scoped: true)
         case "compactPill": return .compactPill
         case "endGrace": return .endGrace(appName: "Zoom")
         case "saved": return .saved
@@ -148,6 +156,9 @@ final class CallDetectionController {
             monitor.start()
         } else {
             monitor.stop()
+            // A stopped monitor reports nothing, so the mirror empties with it
+            // — the popup must never offer apps nobody is watching.
+            appsInCall = []
         }
     }
 
@@ -186,8 +197,8 @@ final class CallDetectionController {
                 graceTask = nil
                 graceDeadline = nil
 
-            case .requestStartRecording:
-                startRecording()
+            case .requestStartRecording(let scope):
+                startRecording(scope: scope)
 
             case .requestStopRecording:
                 // "Meeting saved" must not lie: `stop()` returns once the
@@ -226,10 +237,10 @@ final class CallDetectionController {
 
     // MARK: - Recording (the same paths the menu bar runs)
 
-    private func startRecording() {
+    private func startRecording(scope: CaptureScope) {
         Task { [weak self] in
             guard let self, !self.recording.state.isRecording else { return }
-            await self.recording.start()
+            await self.recording.start(scope: scope)
             // Blocked on a not-ready speech model (ADR-009): the island never
             // shows a recording face it can't back up — the dashboard opens
             // with the explanatory dialog and the live download state.

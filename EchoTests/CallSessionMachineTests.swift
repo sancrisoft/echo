@@ -107,9 +107,9 @@ struct CallSessionMachineTests {
 
         let actions = machine.handle(.debounceFired)
 
-        #expect(actions == [.setFace(.startPrompt(appName: "Zoom")), .startRetractTimer(promptRetract)])
+        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer(promptRetract)])
         #expect(machine.phase == .inCall)
-        #expect(machine.face == .startPrompt(appName: "Zoom"))
+        #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
         #expect(!machine.keptRecordingLatch)
     }
 
@@ -143,8 +143,8 @@ struct CallSessionMachineTests {
 
         let actions = machine.handle(.pillTapped)
 
-        #expect(actions == [.setFace(.startPrompt(appName: "Zoom")), .startRetractTimer(promptRetract)])
-        #expect(machine.face == .startPrompt(appName: "Zoom"))
+        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer(promptRetract)])
+        #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
     }
 
     @Test func dismissSilencesTheIslandForTheRestOfTheCall() {
@@ -182,7 +182,7 @@ struct CallSessionMachineTests {
 
         let actions = machine.handle(.debounceFired)
 
-        #expect(actions == [.setFace(.startPrompt(appName: "Zoom")), .startRetractTimer(promptRetract)])
+        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer(promptRetract)])
     }
 
     // MARK: - Starting (rows 9–10)
@@ -192,10 +192,54 @@ struct CallSessionMachineTests {
 
         let actions = machine.handle(.startTapped)
 
-        #expect(actions == [.cancelRetractTimer, .setFace(nil), .requestStartRecording])
+        #expect(actions == [.cancelRetractTimer, .setFace(nil), .requestStartRecording(.app(zoom))])
         #expect(machine.face == nil)
         // A repeat tap on a face that is already gone requests nothing.
         #expect(machine.handle(.startTapped).isEmpty)
+    }
+
+    @Test func startTapScopesToTheAppTheIslandNames() {
+        // SP-008: the island's promise is explicit — the button says "Record
+        // Zoom" and the tap requests a session scoped to exactly that app.
+        var machine = promptingMachine()
+
+        let actions = machine.handle(.startTapped)
+
+        #expect(actions.contains(.requestStartRecording(.app(zoom))))
+    }
+
+    @Test func startTapScopesToTheFirstCatalogMatchWhenSeveralAppsCapture() {
+        // Two calls overlap: the scope follows the app the island *names* —
+        // the first catalog match — never a different member of the set
+        // (SP-008 settled decision).
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([zoom, chrome]))
+        machine.handle(.debounceFired)
+        #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
+
+        let actions = machine.handle(.startTapped)
+
+        #expect(actions == [.cancelRetractTimer, .setFace(nil), .requestStartRecording(.app(zoom))])
+    }
+
+    @Test func startTapOnAnUnscopeableAppRequestsAnHonestGlobalRecording() {
+        // SP-008 open question 3, resolved: the FaceTime daemon's output
+        // audio is not verified scopeable, so the face drops the scope claim
+        // (`scoped: false` → the plain "Start recording" button) and the tap
+        // requests Everything — copy and capture agree by construction. The
+        // real catalog entry is used so the test breaks if the flag flips.
+        let daemon = CallAppCatalog.match(bundleID: "com.apple.avconferenced")!
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([daemon]))
+
+        let confirm = machine.handle(.debounceFired)
+        #expect(confirm == [
+            .setFace(.startPrompt(appName: "FaceTime", scoped: false)),
+            .startRetractTimer(promptRetract),
+        ])
+
+        let actions = machine.handle(.startTapped)
+        #expect(actions == [.cancelRetractTimer, .setFace(nil), .requestStartRecording(.everything)])
     }
 
     @Test func manualStartWhileThePromptIsUpHidesItSilently() {
@@ -483,7 +527,7 @@ struct CallSessionMachineTests {
         // And detection works again from scratch.
         #expect(machine.handle(.matchedAppsChanged([zoom])) == [.startDebounceTimer])
         #expect(machine.handle(.debounceFired) == [
-            .setFace(.startPrompt(appName: "Zoom")),
+            .setFace(.startPrompt(appName: "Zoom", scoped: true)),
             .startRetractTimer(promptRetract),
         ])
     }
@@ -536,8 +580,8 @@ struct CallSessionMachineTests {
 
         #expect(actions == [
             .startDebounceTimer,
-            .setFace(.startPrompt(appName: "Zoom")), .startRetractTimer(promptRetract),
-            .cancelRetractTimer, .setFace(nil), .requestStartRecording,
+            .setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer(promptRetract),
+            .cancelRetractTimer, .setFace(nil), .requestStartRecording(.app(zoom)),
             .setFace(.endGrace(appName: "Zoom")), .startGraceTimer,
             .requestStopRecording, .setFace(.saved), .startRetractTimer(savedRetract),
             .setFace(nil),
@@ -551,7 +595,7 @@ struct CallSessionMachineTests {
         var machine = CallSessionMachine()
         machine.handle(.matchedAppsChanged([chrome]))
         machine.handle(.debounceFired)
-        #expect(machine.face == .startPrompt(appName: "Google Chrome"))
+        #expect(machine.face == .startPrompt(appName: "Google Chrome", scoped: true))
 
         machine.handle(.retractFired)
         #expect(machine.face == .compactPill)
@@ -620,10 +664,11 @@ struct CallSessionMachineTests {
         for sequence in sequences(of: sweepEventsWithoutStartTap, length: 4) {
             var machine = CallSessionMachine()
             for event in sequence {
-                #expect(
-                    !machine.handle(event).contains(.requestStartRecording),
-                    "recording requested without a tap: \(sequence)"
-                )
+                let requestedStart = machine.handle(event).contains {
+                    if case .requestStartRecording = $0 { return true }
+                    return false
+                }
+                #expect(!requestedStart, "recording requested without a tap: \(sequence)")
             }
         }
     }
