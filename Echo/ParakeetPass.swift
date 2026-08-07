@@ -728,7 +728,13 @@ nonisolated enum ParakeetPass {
             guard let first = current.first, let last = current.last else { return }
             let text = joinedText(current)
             current = []
-            guard !text.isEmpty else { return }
+            // A row with no letter and no digit in it says nothing — and
+            // dropping one can't cost a word, because it has none. Silence
+            // draws a lone "." out of the model, and cancelled bleed leaves
+            // long stretches of exactly that: a measured 25 s of "You: ."
+            // where the teammate's voice used to be. Same rule as the empty
+            // check this replaces, one character wider.
+            guard text.contains(where: { $0.isLetter || $0.isNumber }) else { return }
             produced.append(TranscriptSegment(
                 channel: channel,
                 speaker: speaker,

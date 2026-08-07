@@ -62,6 +62,39 @@ struct ParakeetSegmentShapingTests {
         #expect(result.map(\.text) == ["one two"])
     }
 
+    @Test("a segment with no word in it is dropped")
+    func wordlessSegmentsAreDropped() {
+        // What the model returns for a stretch that holds no speech: a lone
+        // punctuation token. Cancelled bleed leaves long stretches of exactly
+        // that, and a row reading "You: ." for 25 s is worse than no row.
+        let result = cut([
+            token("one", 0.0, 0.4),
+            TokenTiming(token: ".", tokenId: 0, startTime: 2.0, endTime: 27.3, confidence: 1),
+            token("two", 30.0, 30.4),
+        ])
+
+        #expect(result.map(\.text) == ["one", "two"])
+    }
+
+    @Test("punctuation attached to a word is kept")
+    func punctuationRidingOnAWordSurvives() {
+        // The rule is about rows with nothing in them, not about stripping
+        // punctuation out of real speech.
+        let result = cut([
+            token("hola", 0.0, 0.4),
+            TokenTiming(token: ".", tokenId: 0, startTime: 0.4, endTime: 0.5, confidence: 1),
+        ])
+
+        #expect(result.map(\.text) == ["hola."])
+    }
+
+    @Test("a digit counts as a word")
+    func numbersAreNotPunctuation() {
+        let result = cut([token("2026", 0.0, 0.4)])
+
+        #expect(result.map(\.text) == ["2026"])
+    }
+
     // MARK: - Silence from the audio
 
     /// The case this exists for. The user stops at 1.0 s, the room is quiet
