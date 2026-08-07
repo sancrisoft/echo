@@ -37,10 +37,22 @@ struct SettingsView: View {
                 get: { settings.callDetectionEnabled },
                 set: { settings.setCallDetection(enabled: $0) }
             ))
+
+            // One row per unique app name (a name owning several bundle
+            // prefixes appears once and covers all of them). Greyed out —
+            // not hidden — while the master is off.
+            ForEach(CallAppCatalog.uniqueDisplayNames, id: \.self) { name in
+                Toggle(name, isOn: Binding(
+                    get: { !settings.disabledCallApps.contains(name) },
+                    set: { settings.setCallApp(name, enabled: $0) }
+                ))
+                .toggleStyle(.checkbox)
+                .disabled(!settings.callDetectionEnabled)
+            }
         } header: {
             Text("Call Detection")
         } footer: {
-            Text("Echo watches for catalogued meeting apps using the microphone and offers to record.")
+            Text("Echo watches these apps for microphone use and offers to record. Browsers are detected because calls like Google Meet run in them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

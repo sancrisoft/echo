@@ -41,6 +41,11 @@ final class CallDetectionController {
     /// it to offer per-app choices. Empty while the monitor is off.
     private(set) var appsInCall: [CallApp] = []
 
+    /// The monitor's most recent raw report, kept so a settings change
+    /// (disabling an app mid-call) can re-run the filter without waiting for
+    /// the next Core Audio event. Cleared whenever the monitor stops.
+    @ObservationIgnored private var latestClients: [MicActivityMonitor.Client] = []
+
     @ObservationIgnored private var debounceTask: Task<Void, Never>?
     @ObservationIgnored private var retractTask: Task<Void, Never>?
     @ObservationIgnored private var graceTask: Task<Void, Never>?
@@ -78,9 +83,8 @@ final class CallDetectionController {
 
         monitor.onClientsChanged = { [weak self] clients in
             guard let self else { return }
-            let apps = Self.matchedApps(from: clients)
-            self.appsInCall = apps
-            self.apply(self.machine.handle(.matchedAppsChanged(apps)))
+            self.latestClients = clients
+            self.applyMatchedClients()
         }
         observeRecordingState()
         observeSetting()
@@ -103,10 +107,33 @@ final class CallDetectionController {
     #endif
 
     /// The catalogued apps behind a set of mic clients: deduped, in catalog
-    /// order, so attribution is deterministic when several apps capture at once.
-    private static func matchedApps(from clients: [MicActivityMonitor.Client]) -> [CallApp] {
+    /// order, so attribution is deterministic when several apps capture at
+    /// once. `disabledNames` drops apps the user excluded in Settings —
+    /// filtered HERE, the single matcher call site, so a disabled app is
+    /// invisible everywhere downstream (island, scope dropdown, auto-scope;
+    /// decision §2.6). Names, not prefixes: one displayName covers all of an
+    /// app's catalog prefixes, and a stale name (catalog renamed the app) is
+    /// harmlessly ignored because nothing matches it.
+    static func matchedApps(
+        from clients: [MicActivityMonitor.Client],
+        disabledNames: Set<String> = []
+    ) -> [CallApp] {
         let matched = Set(clients.compactMap { CallAppCatalog.match(bundleID: $0.bundleID) })
-        return CallAppCatalog.apps.filter(matched.contains)
+        return CallAppCatalog.apps.filter {
+            matched.contains($0) && !disabledNames.contains($0.displayName)
+        }
+    }
+
+    /// Runs the filter over the latest raw report and feeds the machine —
+    /// called on every monitor event and again when the disabled set changes,
+    /// so disabling an app mid-call dismisses its island immediately.
+    private func applyMatchedClients() {
+        let apps = Self.matchedApps(
+            from: latestClients,
+            disabledNames: Set(settings.disabledCallApps)
+        )
+        appsInCall = apps
+        apply(machine.handle(.matchedAppsChanged(apps)))
     }
 
     // MARK: - Island taps
@@ -138,11 +165,18 @@ final class CallDetectionController {
     private func observeSetting() {
         withObservationTracking {
             _ = settings.callDetectionEnabled
+            _ = settings.disabledCallApps
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 self.observeSetting()
                 self.applySetting(self.settings.callDetectionEnabled)
+                // A disabled-set change while detection runs re-filters the
+                // latest report in place — the mid-call island of a newly
+                // disabled app retracts without a Core Audio event.
+                if self.settings.callDetectionEnabled {
+                    self.applyMatchedClients()
+                }
             }
         }
     }
@@ -159,6 +193,7 @@ final class CallDetectionController {
             // A stopped monitor reports nothing, so the mirror empties with it
             // — the popup must never offer apps nobody is watching.
             appsInCall = []
+            latestClients = []
         }
     }
 
