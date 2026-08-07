@@ -258,6 +258,11 @@ nonisolated enum ParakeetPass {
         onProgress(progress.fraction)
 
         var segments: [TranscriptSegment] = []
+        // ADR-003 v2's optional evidence: each segment's level on its own
+        // channel, gathered while that channel's samples are still in hand and
+        // discarded with them. Never persisted — the on-disk schema is
+        // untouched.
+        var spanLevels: [UUID: Float] = [:]
         for (index, entry) in channels.enumerated() {
             if shouldYield() { throw PassError.preempted }
 
@@ -276,13 +281,59 @@ nonisolated enum ParakeetPass {
                 diagnostics: diagnostics
             )
             segments += produced
+            spanLevels.merge(spanRms(of: produced, in: samples)) { current, _ in current }
             onProgress(progress.finishChannel(index))
         }
 
         let ordered = segments.sorted { $0.start < $1.start }
         // ADR-003 over the complete set: the batch holds every Team segment,
         // so cross-channel echoes are caught here.
-        return EchoDedupPolicy().dedupe(final: ordered)
+        let kept = EchoDedupPolicy().dedupe(
+            final: ordered,
+            spanRms: spanLevels,
+            onSuppression: diagnostics.map { sink in
+                { candidate, verdict in sink(Self.suppressionReport(candidate, verdict)) }
+            }
+        )
+        // Numbers only — the reason each one went is the harness sink's job.
+        log.notice("Dedup: \(ordered.count - kept.count, privacy: .public) of \(ordered.count, privacy: .public) segments suppressed as bleed")
+        return kept
+    }
+
+    // MARK: Dedup evidence
+
+    /// Each segment's rms over its own span of its own channel's samples.
+    /// Segment times are file-relative and the retained files begin at
+    /// recording t=0, so the span maps straight onto the sample buffer; a span
+    /// that falls outside it contributes nothing rather than a wrong number.
+    static func spanRms(of segments: [TranscriptSegment], in samples: [Float]) -> [UUID: Float] {
+        var levels: [UUID: Float] = [:]
+        for segment in segments {
+            let start = max(0, Int((segment.start * AudioConstants.sampleRate).rounded(.down)))
+            let end = min(samples.count, Int((segment.end * AudioConstants.sampleRate).rounded(.up)))
+            guard start < end else { continue }
+            levels[segment.id] = AudioStats.rms(samples, from: start, count: end - start)
+        }
+        return levels
+    }
+
+    /// One harness line per suppressed segment: which tier fired and on what
+    /// evidence, so a replay shows *why* a row went. Carries transcript text,
+    /// which is why only the harness sink ever sees it.
+    private static func suppressionReport(
+        _ candidate: TranscriptSegment,
+        _ verdict: EchoDedupPolicy.SuppressionVerdict
+    ) -> String {
+        String(
+            format: "suppressed %@ %.2f–%.2fs tier=%@ containment=%.2f ratio=%@ team=%.2f–%.2fs text=%@",
+            candidate.channel.rawValue,
+            candidate.start, candidate.end,
+            verdict.tier.rawValue,
+            verdict.containment,
+            verdict.rmsRatio.map { String(format: "%.2f", $0) } ?? "n/a",
+            verdict.match.start, verdict.match.end,
+            candidate.text
+        )
     }
 
     // MARK: Per-channel decode
