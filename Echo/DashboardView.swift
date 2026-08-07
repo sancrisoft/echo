@@ -1683,6 +1683,15 @@ private struct MeetingDetailScreen: View {
         VStack(spacing: 0) {
             DetailTabBar(selection: $selectedTab)
 
+            // The saved-recording strip (settings-page retention §3.4):
+            // exists exactly while the meeting's folder holds preserved
+            // audio; renders nothing otherwise. The live target maps to the
+            // just-stopped meeting once its stop-save lands.
+            if let recordingMeetingID {
+                PreservedRecordingBar(meetingID: recordingMeetingID)
+                    .id(recordingMeetingID)
+            }
+
             switch target {
             case .live:
                 LiveMeetingDetail(selectedTab: $selectedTab)
@@ -1699,6 +1708,13 @@ private struct MeetingDetailScreen: View {
         }
         // Escape returns to the list.
         .onExitCommand(perform: onClose)
+    }
+
+    private var recordingMeetingID: UUID? {
+        switch target {
+        case .saved(let id): return id
+        case .live: return controller.library.activeMeetingID
+        }
     }
 }
 
