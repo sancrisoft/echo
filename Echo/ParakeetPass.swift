@@ -409,17 +409,27 @@ nonisolated enum ParakeetPass {
         })
         onProgress(progress.fraction)
 
+        // Both channels up front, because the echo pre-pass needs the pair in
+        // hand at once — it subtracts one from the other. Costs ~46 MB per
+        // hour more at peak than reading them one at a time, transiently, on
+        // a machine that has already unloaded the summary model for the pass.
+        var samplesByChannel: [AudioChannel: [Float]] = [:]
+        for entry in channels {
+            if shouldYield() { throw PassError.preempted }
+            samplesByChannel[entry.channel] = try readSamples(at: entry.url)
+        }
+        try cancelEchoIfPresent(in: &samplesByChannel, shouldYield: shouldYield, diagnostics: diagnostics)
+
         var segments: [TranscriptSegment] = []
-        // ADR-003 v2's optional evidence. Each channel's envelope is taken
-        // while its samples are in hand and outlives them, because the ratio
-        // that separates bleed from speech needs BOTH channels over the same
-        // window and the channels are decoded one at a time. Never persisted —
+        // ADR-003 v2's optional evidence. Built from the samples that are
+        // actually decoded — evidence has to describe the audio the words
+        // came from, so after the pre-pass, not before it. Never persisted —
         // the on-disk schema is untouched.
         var envelopes: [AudioChannel: EnergyEnvelope] = [:]
         for (index, entry) in channels.enumerated() {
             if shouldYield() { throw PassError.preempted }
 
-            let samples = try readSamples(at: entry.url)
+            let samples = samplesByChannel[entry.channel] ?? []
             let envelope = EnergyEnvelope(samples: samples)
             envelopes[entry.channel] = envelope
             let produced = try await transcribeChannel(
@@ -453,6 +463,42 @@ nonisolated enum ParakeetPass {
         // Numbers only — the reason each one went is the harness sink's job.
         log.notice("Dedup: \(ordered.count - kept.count, privacy: .public) of \(ordered.count, privacy: .public) segments suppressed as bleed")
         return kept
+    }
+
+    // MARK: Echo pre-pass
+
+    /// Replaces the mic samples with a copy the teammate's voice has been
+    /// subtracted out of, when the audio itself shows an echo path.
+    ///
+    /// Subordinate to the pass in the strongest sense: it needs both channels
+    /// to do anything, it decides from the audio rather than from stored
+    /// state (so Retry cleans meetings recorded before any of this existed),
+    /// and it cannot fail. `EchoCancellationPrePass` returns the mic it was
+    /// given whenever it cannot do better, and the only error it raises is
+    /// the pass's own preemption.
+    ///
+    /// Dedup, the own-voice guard and the silence cutter all still run
+    /// afterwards, on whatever survives subtraction — defence in depth, not a
+    /// replacement.
+    private static func cancelEchoIfPresent(
+        in samples: inout [AudioChannel: [Float]],
+        shouldYield: @escaping @Sendable () -> Bool,
+        diagnostics: DiagnosticSink?
+    ) throws {
+        guard let mic = samples[.microphone], let system = samples[.system] else { return }
+
+        let outcome = try EchoCancellationPrePass.run(
+            mic: mic,
+            system: system,
+            stage: WebRTCAECStage(),
+            shouldYield: shouldYield
+        )
+        samples[.microphone] = outcome.mic
+
+        // Numbers only, so this one line can go to the log as well as the
+        // harness — nothing here describes what anybody said.
+        log.notice("\(outcome.summary, privacy: .public)")
+        diagnostics?(outcome.summary)
     }
 
     // MARK: Dedup evidence
