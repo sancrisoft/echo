@@ -153,7 +153,16 @@ struct PreservedRecordingBar: View {
 
     var body: some View {
         Group {
-            if !files.isEmpty {
+            if files.isEmpty {
+                // The probe's host, and the reason this branch exists at all.
+                // A Group whose only branch is false renders no view, and a
+                // `.task` with nothing to attach to never runs — so `files`
+                // stayed empty forever and the bar was permanently invisible
+                // on every meeting, saved recording or not. A zero-height
+                // placeholder keeps the lifecycle alive; the detail's stack
+                // has spacing 0, so it takes up nothing.
+                Color.clear.frame(height: 0)
+            } else {
                 HStack(spacing: 12) {
                     Label(sizeText, systemImage: "waveform.circle")
                         .font(.caption.weight(.medium))
