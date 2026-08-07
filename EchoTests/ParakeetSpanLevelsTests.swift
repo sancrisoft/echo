@@ -1,5 +1,5 @@
 //
-//  ParakeetSpanRmsTests.swift
+//  ParakeetSpanLevelsTests.swift
 //  EchoTests
 //
 //  The pass's dedup evidence (ADR-003 v2 Tier B): both channels' rms over each
