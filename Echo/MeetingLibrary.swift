@@ -295,6 +295,38 @@ final class MeetingLibrary {
     }
     #endif
 
+    // MARK: - Preserved recordings (settings-page retention)
+
+    /// Renames the meeting's retained audio to its preserved `audio-*` names
+    /// (the "keep recordings" product feature). Returns whether anything was
+    /// preserved; failures are non-fatal and logged by the store.
+    @discardableResult
+    func preserveRetainedAudio(for id: UUID) async -> Bool {
+        await store.preserveRetainedAudio(for: id)
+    }
+
+    /// The preserved-audio files currently in the meeting's folder.
+    func preservedAudioFiles(for id: UUID) async -> [AudioChannel: URL] {
+        await store.preservedAudioFiles(for: id)
+    }
+
+    /// Whether the meeting holds a preserved recording — gates the detail's
+    /// player, Delete Recording and Re-transcribe affordances.
+    func hasPreservedAudio(for id: UUID) async -> Bool {
+        await store.hasPreservedAudio(for: id)
+    }
+
+    /// Deletes exactly the meeting's preserved-audio files (named targets,
+    /// never a sweep). Failures are non-fatal and logged by the store.
+    func deletePreservedAudio(for id: UUID) async {
+        await store.deletePreservedAudio(for: id)
+    }
+
+    /// Count and total bytes of the non-trashed meetings' saved recordings.
+    func preservedAudioTotals() async -> (meetings: Int, bytes: Int64) {
+        await store.preservedAudioTotals()
+    }
+
     /// Meetings pending finalization, newest first (retained audio with no
     /// recorded transcript provenance — ADR-016 amended by ADR-024) — feeds
     /// the launch resume and the backfill's eligibility check. Terminal

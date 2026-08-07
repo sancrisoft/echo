@@ -164,6 +164,14 @@ final class RecordingController {
     /// is actually seen. Consumed and cleared by `DashboardView`.
     var pendingLiveDetailOpen = false
 
+    /// Reads the user's keep-recordings preference (settings page §3.3). The
+    /// controller doesn't hold `AppSettings` — `EchoApp.init` wires this to
+    /// the live object, and the value read at pass-success time decides: a
+    /// toggle flipped mid-pass affects that pass, which is fine. The inert
+    /// default preserves nothing (today's behavior; tests that want retention
+    /// inject their own).
+    @ObservationIgnored var shouldKeepRecordingsAfterTranscription: @MainActor () -> Bool = { false }
+
     /// One-shot per app run: the record gesture primes both capture-permission
     /// prompts exactly once, ahead of the readiness check (ADR-009).
     private var capturePermissionsPrimed = false
@@ -921,10 +929,19 @@ final class RecordingController {
             // SP-007 keep flag (user story 12): preserve this meeting's audio
             // as a replayable fixture; the deletion below then finds nothing,
             // harmlessly. DEBUG-only and off by default (SP-007 Privacy).
+            // Takes precedence over product preservation (decision §2.8):
+            // with both armed, the audio lands under debug-kept-* (the replay
+            // harness scans those names) and the rename below finds nothing.
             if ProcessInfo.processInfo.environment["ECHO_KEEP_RETAINED_AUDIO"] == "1" {
                 await library.preserveRetainedAudioAsDebugFixture(for: meetingID)
             }
             #endif
+            // The one product retention seam: preservation renames the
+            // retained files to their audio-* names, so the deletion below —
+            // unchanged, the only success-path audio delete — finds nothing.
+            if shouldKeepRecordingsAfterTranscription() {
+                await library.preserveRetainedAudio(for: meetingID)
+            }
             await library.deleteRetainedAudio(for: meetingID)
             Self.log.info("""
             Final pass succeeded for meeting \(meetingID.uuidString, privacy: .public): \

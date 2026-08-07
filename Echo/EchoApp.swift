@@ -57,6 +57,9 @@ struct EchoApp: App {
         // effects live in `start()` and the launch tasks, both gated.
         let recording = RecordingController()
         let settings = AppSettings()
+        // The retention seam reads the preference at pass-success time; the
+        // controller deliberately doesn't hold AppSettings (§3.3).
+        recording.shouldKeepRecordingsAfterTranscription = { settings.keepRecordingsAfterTranscription }
         let callDetection = CallDetectionController(recording: recording, settings: settings)
         if !TestHost.isActive {
             callDetection.start()

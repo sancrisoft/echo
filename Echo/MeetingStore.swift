@@ -443,6 +443,121 @@ actor MeetingStore {
         }
     }
 
+    // MARK: - Preserved recordings (settings-page retention)
+
+    /// Canonical name of a channel's *preserved* audio file — the product
+    /// "keep recordings" feature's sibling of the retained and DEBUG-kept
+    /// names. Deliberately NOT `retained-*`: `retainedAudioFiles` never looks
+    /// for these, so a preserved meeting classifies `.none` under ADR-024 —
+    /// never auto-resumed, never swept. The files stay inside the meeting's
+    /// own folder, so trashing or deleting the meeting takes them along.
+    nonisolated static func preservedAudioFileName(for channel: AudioChannel) -> String {
+        switch channel {
+        case .microphone: return "audio-mic.m4a"
+        case .system: return "audio-system.m4a"
+        }
+    }
+
+    /// The preserved-audio files currently present in a meeting's folder.
+    func preservedAudioFiles(for id: UUID) -> [AudioChannel: URL] {
+        let directory = directory(for: id)
+        var files: [AudioChannel: URL] = [:]
+        for channel in [AudioChannel.microphone, .system] {
+            let url = directory.appending(
+                path: Self.preservedAudioFileName(for: channel),
+                directoryHint: .notDirectory
+            )
+            if FileManager.default.fileExists(atPath: url.path) {
+                files[channel] = url
+            }
+        }
+        return files
+    }
+
+    /// Whether the meeting's folder holds a preserved recording — the exact
+    /// lifetime of the detail's player/re-transcribe affordances.
+    func hasPreservedAudio(for id: UUID) -> Bool {
+        !preservedAudioFiles(for: id).isEmpty
+    }
+
+    /// Preserves the meeting's retained audio as its saved recording: each
+    /// retained file currently present is RENAMED to its preserved name in
+    /// the same folder (a move — cheap and atomic on the same volume, bytes
+    /// untouched), mirroring `preserveRetainedAudioAsDebugFixture`. The
+    /// success path's normal `deleteRetainedAudio` then finds nothing,
+    /// harmlessly. An existing preserved file is replaced first — the
+    /// overwrite case is a re-transcribe writing the same bytes back.
+    /// Returns whether anything was preserved. A per-file failure is
+    /// non-fatal: the file stays under its retained name and the normal
+    /// deletion cleans it up.
+    @discardableResult
+    func preserveRetainedAudio(for id: UUID) -> Bool {
+        var preserved = false
+        for (channel, url) in retainedAudioFiles(for: id) {
+            let destination = directory(for: id).appending(
+                path: Self.preservedAudioFileName(for: channel),
+                directoryHint: .notDirectory
+            )
+            do {
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.moveItem(at: url, to: destination)
+                preserved = true
+            } catch {
+                ErrorTrace.record(
+                    "Preserving retained audio failed",
+                    error: error,
+                    category: "MeetingStore",
+                    metadata: [
+                        "meetingID": id.uuidString,
+                        "file": url.lastPathComponent,
+                    ]
+                )
+            }
+        }
+        return preserved
+    }
+
+    /// Deletes exactly this meeting's preserved-audio files — named targets,
+    /// never a directory sweep, like `deleteRetainedAudio`. A per-file
+    /// failure is non-fatal (logged).
+    func deletePreservedAudio(for id: UUID) {
+        for url in preservedAudioFiles(for: id).values {
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                ErrorTrace.record(
+                    "Preserved-audio deletion failed",
+                    error: error,
+                    category: "MeetingStore",
+                    metadata: [
+                        "meetingID": id.uuidString,
+                        "file": url.lastPathComponent,
+                    ]
+                )
+            }
+        }
+    }
+
+    /// How many non-trashed meetings hold a preserved recording, and the
+    /// recordings' total bytes — the Settings page's "Delete All Saved
+    /// Recordings (3 — 214 MB)…" label and the storage breakdown's
+    /// saved-recordings row. Trashed meetings are excluded (their recordings
+    /// leave with the trash purge, and the breakdown counts them under Trash).
+    func preservedAudioTotals() -> (meetings: Int, bytes: Int64) {
+        var meetings = 0
+        var bytes: Int64 = 0
+        for meta in listMetas() where !meta.isTrashed {
+            let files = preservedAudioFiles(for: meta.id)
+            guard !files.isEmpty else { continue }
+            meetings += 1
+            for url in files.values {
+                let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey])
+                bytes += Int64(values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0)
+            }
+        }
+        return (meetings, bytes)
+    }
+
     // MARK: - DEBUG kept fixtures (SP-007 keep flag)
 
     #if DEBUG
