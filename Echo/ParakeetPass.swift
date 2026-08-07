@@ -366,8 +366,36 @@ nonisolated enum ParakeetPass {
         // multilingual long-form batch transcription (issue #594: the 80 ms
         // mel prepend makes the SOS-primed decoder drift back to its
         // English-biased prior — exactly the Spanish-meetings case).
-        // Everything else stays at library defaults.
-        let manager = AsrManager(config: ASRConfig(melChunkContext: false))
+        //
+        // `dualDecodeArbitration` is the other half of that same case. Left
+        // off, the batch path chunks one way and merges the pieces; where the
+        // chunks disagree the merger stitches, and the library reports the
+        // artifacts as "mid-word duplicates and dropped clauses on
+        // heterogeneous-confidence files like long Spanish narration". A
+        // meeting is exactly that file: a Spanish speaker whose technical
+        // nouns are English, so confidence moves span to span. Measured on
+        // one, the share of unambiguous English function words on the You
+        // channel fell from 17% to 10% — "Antes were all the features created
+        // in the epic branch" came back as "lo que hacían antes era como todas
+        // las features se creaban a partir de la epic branch". The residue is
+        // roughly what the speaker really code-switches.
+        //
+        // It is confidence-based — no text inspection, no vocabulary or script
+        // filtering, no language hint — which matters, because the hint
+        // FluidAudio does expose partitions by Unicode script, and Spanish and
+        // English are both Latin: it cannot reject a single English token and
+        // would be a fix in name only.
+        //
+        // Everything else stays at library defaults. Two costs, both accepted:
+        // the probe is documented at 1.1–1.5× and measured at 2.3× here (6.5 s
+        // for a 6.5 min meeting, against a pass already budgeted in minutes),
+        // and committing a file to one strategy still leaves the odd stitched
+        // span where the probe was close — one in that meeting, against the
+        // stretch of straight English it replaced.
+        let manager = AsrManager(config: ASRConfig(
+            melChunkContext: false,
+            dualDecodeArbitration: true
+        ))
         do {
             try await manager.loadModels(asrModels)
         } catch {
