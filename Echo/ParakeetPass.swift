@@ -255,7 +255,17 @@ nonisolated enum ParakeetPass {
     /// Split the token stream at any inter-token silence longer than this. The
     /// model emits per-token times, not sentences, so this is what turns a
     /// channel's tokens into readable, timeline-anchored segments.
-    static let segmentGapSeconds: TimeInterval = 1.0
+    ///
+    /// It is also the finest grain the dedup can work at, which is what set
+    /// this value. A segment is the unit of suppression, so any silence this
+    /// misses welds real speech to the bleed that follows it into one
+    /// indivisible row — kept whole with the echo inside, or deleted whole
+    /// with the speech. Measured on a field recording: a 0.7 s pause between
+    /// the user finishing and the teammate's echo starting, which 1.0 s
+    /// stepped straight over. Splitting there costs nothing the reader sees
+    /// (`TranscriptUtterance.derive` re-merges same-speaker runs) and lets
+    /// each side be judged on its own evidence.
+    static let segmentGapSeconds: TimeInterval = 0.6
 
     /// A running segment longer than this splits at the next word start —
     /// mirroring the 1–12 s granularity the rest of the app (dedup timing
