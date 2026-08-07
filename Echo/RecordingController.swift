@@ -607,7 +607,13 @@ final class RecordingController {
             // when its pass concludes — success OR terminal failure — and the
             // coordinator kicks this backfill at that moment. Re-read per
             // iteration: the marker is on-disk state a concluding pass clears.
-            let pending = Set(await library.pendingFinalizationMeetingIDs())
+            var pending = Set(await library.pendingFinalizationMeetingIDs())
+            // A queued or running re-transcribe isn't pending ON DISK (its
+            // clone carries finalPass provenance) but its transcript is
+            // equally about to be replaced — same ineligibility, read from
+            // the coordinator instead of the scan.
+            pending.formUnion(finalization.queuedMeetingIDs)
+            if let current = finalization.currentMeetingID { pending.insert(current) }
 
             // A user-requested meeting front-runs the newest-first scan;
             // consumed exactly once so the loop then resumes normal order.
@@ -999,6 +1005,26 @@ final class RecordingController {
     /// coordinator's terminal mark) or in a previous one (nothing to clear;
     /// the on-disk audio is the checkpoint the resumed pass reads).
     func retryFinalization(_ meetingID: UUID) {
+        finalization.requestManualRetry(meetingID)
+    }
+
+    /// Re-transcribe (settings page §3.5): re-runs the full final pass —
+    /// Parakeet, AEC pre-pass, dedup — over the meeting's preserved
+    /// recording, replacing its transcript and summary. The preserved copy
+    /// is never consumed: the pass reads a CLONE under the retained names,
+    /// so the archive survives crashes, terminal failures and a mid-flight
+    /// retention change. From the clone on, the EXISTING lifecycle runs
+    /// unmodified — manual-retry admission (fresh attempt budget, front of
+    /// queue, recording/summary work still preempt), the Transcribing faces,
+    /// `replaceTranscript`, the §3.3 preservation re-rename (same bytes
+    /// back), and `onPassConcluded` → backfill regenerating the summary the
+    /// artifact cleanup below made eligible.
+    func retranscribe(_ meetingID: UUID) async {
+        guard await library.hasPreservedAudio(for: meetingID) else { return }
+        guard await library.cloneAudioForRetranscription(for: meetingID) else { return }
+        // The old summary describes words about to be replaced; clearing
+        // `hasSummary` is also what re-admits the meeting to the backfill.
+        await library.removeSummaryArtifacts(for: meetingID)
         finalization.requestManualRetry(meetingID)
     }
 

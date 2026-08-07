@@ -243,6 +243,31 @@ struct FinalizationMachineTests {
         #expect(machine.runningMeetingID == meeting)
     }
 
+    /// Re-transcribe (settings page §3.5) rides `manualRetryRequested` for a
+    /// meeting that already SUCCEEDED — nothing terminal to clear, admission
+    /// unbent: idle starts the pass immediately on a fresh attempt 1; while
+    /// recording it only queues (front) and starts after the stop pipeline
+    /// closes.
+    @Test func retranscribeOfASuccessfulMeetingStartsWhenIdleAndQueuesWhileRecording() {
+        var machine = machineWithRunningStopPass()
+        _ = machine.handle(.passConcluded(.success))
+        _ = machine.handle(.pipelineFinished)
+
+        // Idle: the re-transcribe starts right away, attempt 1.
+        #expect(machine.handle(.manualRetryRequested(meeting))
+            == [.startPass(meetingID: meeting, attempt: 1)])
+        _ = machine.handle(.passConcluded(.success))
+
+        // While recording: queued at the front, no start until the recording
+        // stops AND its post-stop pipeline closes.
+        _ = machine.handle(.recordingStarted)
+        #expect(machine.handle(.manualRetryRequested(meeting)) == [])
+        #expect(machine.queue == [meeting])
+        #expect(machine.handle(.recordingStopped) == [])
+        #expect(machine.handle(.pipelineFinished)
+            == [.startPass(meetingID: meeting, attempt: 1)])
+    }
+
     @Test func attemptBudgetIsPerMeeting() {
         var machine = FinalizationMachine()
         // `meeting` exhausts its budget…

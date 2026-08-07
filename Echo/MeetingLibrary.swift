@@ -327,6 +327,33 @@ final class MeetingLibrary {
         await store.preservedAudioTotals()
     }
 
+    /// Clones the meeting's preserved audio back to its retained names —
+    /// re-transcribe's arming step. Returns whether the full channel set
+    /// cloned; failures are logged by the store.
+    func cloneAudioForRetranscription(for id: UUID) async -> Bool {
+        await store.cloneAudioForRetranscription(for: id)
+    }
+
+    /// Deletes the meeting's summary artifacts (summary.json + stale RAG
+    /// sidecar) and clears their meta bits, then refreshes so the list drops
+    /// the caption and pill immediately. Returns whether the write landed.
+    @discardableResult
+    func removeSummaryArtifacts(for id: UUID) async -> Bool {
+        do {
+            try await store.removeSummaryArtifacts(for: id)
+            await refresh()
+            return true
+        } catch {
+            ErrorTrace.record(
+                "Removing summary artifacts failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
+            return false
+        }
+    }
+
     /// Meetings pending finalization, newest first (retained audio with no
     /// recorded transcript provenance — ADR-016 amended by ADR-024) — feeds
     /// the launch resume and the backfill's eligibility check. Terminal

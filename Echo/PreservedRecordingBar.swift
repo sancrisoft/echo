@@ -149,6 +149,7 @@ struct PreservedRecordingBar: View {
     @State private var totalBytes: Int64 = 0
     @State private var model = PreservedRecordingPlayerModel()
     @State private var confirmDelete = false
+    @State private var confirmRetranscribe = false
 
     var body: some View {
         Group {
@@ -165,6 +166,11 @@ struct PreservedRecordingBar: View {
                     playerControls
 
                     Menu {
+                        Button {
+                            confirmRetranscribe = true
+                        } label: {
+                            Label("Re-transcribe", systemImage: "arrow.clockwise")
+                        }
                         Button {
                             MeetingActions.revealInFinder(controller.library.directory(for: meetingID))
                         } label: {
@@ -201,6 +207,12 @@ struct PreservedRecordingBar: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The saved audio (\(sizeText(totalBytes))) will be deleted. The transcript and summary stay. This cannot be undone.")
+        }
+        .confirmationDialog("Re-transcribe this meeting?", isPresented: $confirmRetranscribe) {
+            Button("Re-transcribe") { retranscribe() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Replaces this meeting's transcript and summary by re-running transcription on the saved recording. The recording itself is kept.")
         }
     }
 
@@ -274,6 +286,12 @@ struct PreservedRecordingBar: View {
             // The sidebar footer's number just shrank — recompute it.
             await controller.library.refresh()
         }
+    }
+
+    private func retranscribe() {
+        // Playback must not fight the pass for the files it's about to clone.
+        model.teardown()
+        Task { await controller.retranscribe(meetingID) }
     }
 
     // MARK: Formatting

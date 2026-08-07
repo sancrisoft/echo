@@ -199,6 +199,110 @@ struct MeetingStorePreservationTests {
         }
     }
 
+    // MARK: - Re-transcribe arming (§3.5)
+
+    /// The clone is a copy, never a rename: the preserved archive survives.
+    @Test func cloningForRetranscriptionLeavesTheOriginals() async throws {
+        try await withTempStore { store, _ in
+            let id = try await saveMeeting(in: store)
+            try plantRetainedAudio(for: id, in: store, bytes: "the take")
+            #expect(await store.preserveRetainedAudio(for: id))
+
+            #expect(await store.cloneAudioForRetranscription(for: id))
+
+            let preserved = await store.preservedAudioFiles(for: id)
+            let retained = await store.retainedAudioFiles(for: id)
+            #expect(preserved.count == 2)
+            #expect(retained.count == 2)
+            for url in preserved.values {
+                #expect(try Data(contentsOf: url) == Data("the take".utf8))
+            }
+            for url in retained.values {
+                #expect(try Data(contentsOf: url) == Data("the take".utf8))
+            }
+        }
+    }
+
+    @Test func cloningWithNoPreservedAudioReturnsFalse() async throws {
+        try await withTempStore { store, _ in
+            let id = try await saveMeeting(in: store)
+            #expect(await !store.cloneAudioForRetranscription(for: id))
+            #expect(await store.retainedAudioFiles(for: id).isEmpty)
+        }
+    }
+
+    /// A leftover retained file from a previous failed cycle is replaced by
+    /// the fresh clone, never mixed with it.
+    @Test func cloningReplacesLeftoverRetainedFiles() async throws {
+        try await withTempStore { store, _ in
+            let id = try await saveMeeting(in: store)
+            try plantRetainedAudio(for: id, in: store, bytes: "archive")
+            #expect(await store.preserveRetainedAudio(for: id))
+            try plantRetainedAudio(for: id, in: store, channels: [.microphone], bytes: "stale clone")
+
+            #expect(await store.cloneAudioForRetranscription(for: id))
+
+            let retained = await store.retainedAudioFiles(for: id)
+            #expect(retained.count == 2)
+            for url in retained.values {
+                #expect(try Data(contentsOf: url) == Data("archive".utf8))
+            }
+        }
+    }
+
+    /// The §3.5 crash-safety story end to end: a quit between the clone and
+    /// the pass concluding leaves retained-* + finalPass provenance — the
+    /// launch sweep removes exactly the clones, the archive and the previous
+    /// transcript stand, and nothing re-enters pending.
+    @Test func aCrashedRetranscribeSelfHealsAtTheNextLaunchScan() async throws {
+        try await withTempStore { store, _ in
+            let id = try await saveMeeting(in: store)
+            try plantRetainedAudio(for: id, in: store, bytes: "archive")
+            try await markFinalPass(id, in: store)
+            #expect(await store.preserveRetainedAudio(for: id))
+            #expect(await store.cloneAudioForRetranscription(for: id))
+
+            // The mid-flight shape is the orphan class — swept, not pending.
+            #expect(await store.retainedAudioDisposition(for: id) == .finalPassOrphan)
+            #expect(await store.pendingFinalizationMeetingIDs().isEmpty)
+
+            await store.sweepFinalPassAudioOrphans()
+
+            #expect(await store.retainedAudioFiles(for: id).isEmpty)
+            #expect(await store.preservedAudioFiles(for: id).count == 2)
+            let transcript = store.directory(for: id).appending(path: "transcript.json")
+            #expect(FileManager.default.fileExists(atPath: transcript.path))
+        }
+    }
+
+    // MARK: - Summary artifacts (§3.5 step 3)
+
+    @Test func removingSummaryArtifactsClearsFilesAndMetaBits() async throws {
+        try await withTempStore { store, _ in
+            let id = try await saveMeeting(in: store)
+            let summary = MeetingSummary(
+                shortSummary: "s", detailedSummary: "d",
+                decisions: [], actionItems: [], openQuestions: [], risks: []
+            )
+            try await store.attachSummary(summary, description: "caption", modelName: "model", to: id)
+            // A stale RAG sidecar from a build that wrote one.
+            let sidecar = store.directory(for: id).appending(path: "rag_index.json")
+            try Data("{}".utf8).write(to: sidecar)
+
+            try await store.removeSummaryArtifacts(for: id)
+
+            let directory = store.directory(for: id)
+            #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "summary.json").path))
+            #expect(!FileManager.default.fileExists(atPath: sidecar.path))
+            let meta = try #require(await store.listMetas().first { $0.id == id })
+            #expect(!meta.hasSummary)
+            #expect(meta.oneLineDescription == nil)
+            #expect(meta.summaryModelName == nil)
+            // The transcript is untouched — only derived artifacts go.
+            #expect(FileManager.default.fileExists(atPath: directory.appending(path: "transcript.json").path))
+        }
+    }
+
     // MARK: - Totals
 
     @Test func totalsCountNonTrashedRecordingsOnly() async throws {

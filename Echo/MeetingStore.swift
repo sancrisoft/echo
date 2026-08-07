@@ -538,6 +538,66 @@ actor MeetingStore {
         }
     }
 
+    /// Clones the meeting's preserved audio back to its retained names —
+    /// re-transcribe's arming step (§3.5). COPY, never rename: the preserved
+    /// copy is the archive, so it survives crashes, terminal failures and a
+    /// mid-flight retention-setting change. On APFS the copy is a clone (no
+    /// real disk cost). Crash-safety needs no new state: a quit between this
+    /// clone and the pass concluding leaves `retained-*` + `finalPass`
+    /// provenance — ADR-024's orphan class, swept at the next launch while
+    /// `audio-*` survives and the previous transcript stands. All-or-nothing
+    /// like `adoptRetainedAudio`: a partial channel set must never feed a
+    /// pass, or it would replace a fuller transcript with less.
+    func cloneAudioForRetranscription(for id: UUID) -> Bool {
+        let preserved = preservedAudioFiles(for: id)
+        guard !preserved.isEmpty else { return false }
+        var cloned: [URL] = []
+        do {
+            for (channel, source) in preserved {
+                let destination = directory(for: id).appending(
+                    path: Self.retainedAudioFileName(for: channel),
+                    directoryHint: .notDirectory
+                )
+                // A leftover retained file (a previous cycle's terminal
+                // failure, or a re-tap) is replaced by the fresh clone.
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.copyItem(at: source, to: destination)
+                cloned.append(destination)
+            }
+            return true
+        } catch {
+            for url in cloned {
+                try? FileManager.default.removeItem(at: url)
+            }
+            ErrorTrace.record(
+                "Cloning preserved audio for re-transcription failed",
+                error: error,
+                category: "MeetingStore",
+                metadata: ["meetingID": id.uuidString]
+            )
+            return false
+        }
+    }
+
+    /// Deletes the meeting's derived summary artifacts — `summary.json` and
+    /// any stale `rag_index.json` sidecar — and clears the meta bits that
+    /// describe them (named targets only, mirroring the store's delete
+    /// discipline). Re-transcribe calls this before arming its pass: the new
+    /// transcript invalidates both, and the cleared `hasSummary` is what
+    /// makes the post-pass backfill regenerate the summary. Throws if the
+    /// meeting folder / meta is missing.
+    func removeSummaryArtifacts(for id: UUID) throws {
+        let directory = directory(for: id)
+        let metaURL = directory.appending(path: Filename.meta)
+        var meta = try decode(MeetingMeta.self, from: metaURL)
+        try? FileManager.default.removeItem(at: directory.appending(path: Filename.summary))
+        try? FileManager.default.removeItem(at: directory.appending(path: "rag_index.json"))
+        meta.hasSummary = false
+        meta.oneLineDescription = nil
+        meta.summaryModelName = nil
+        try writeJSON(meta, to: metaURL)
+    }
+
     /// How many non-trashed meetings hold a preserved recording, and the
     /// recordings' total bytes — the Settings page's "Delete All Saved
     /// Recordings (3 — 214 MB)…" label and the storage breakdown's
