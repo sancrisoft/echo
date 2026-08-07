@@ -183,6 +183,44 @@ nonisolated struct EnergyEnvelope: Sendable {
         return (sum / Float(last - first)).squareRoot()
     }
 
+    /// Below this rms a frame holds nothing at all — not speech, not echo,
+    /// not room tone worth a word. Measured on the fixtures: true silence sits
+    /// at 0.0004–0.0008, the quietest transcribed bleed at 0.003, speech above
+    /// 0.02. An absolute floor is safe HERE, where it only places a boundary
+    /// between segments, in a way it never was for deciding what to transcribe
+    /// (BRN-005): misplacing a boundary costs nothing, dropping audio erases
+    /// words.
+    static let silenceFloor: Float = 0.002
+
+    /// Start time of every stretch of silence lasting at least `minimum`.
+    ///
+    /// These are the only instants in a channel guaranteed not to fall inside
+    /// a word, which makes them the safe places to end a segment — and unlike
+    /// the gaps between token timings, they come from the audio itself rather
+    /// than from the model's estimate of when it heard something.
+    ///
+    /// The START of each stretch is what is reported, not its middle: a model
+    /// that stretches a token's timing forward over the silence would put the
+    /// echo's first word before a midpoint, but never before the instant the
+    /// speaker actually fell quiet.
+    func silenceStarts(minimum: TimeInterval) -> [TimeInterval] {
+        let floor = Self.silenceFloor * Self.silenceFloor
+        var starts: [TimeInterval] = []
+        var runStart: Int?
+        // One index past the end closes a run that reaches the last frame.
+        for i in 0...meanSquares.count {
+            if i < meanSquares.count, meanSquares[i] < floor {
+                if runStart == nil { runStart = i }
+            } else if let start = runStart {
+                if Double(i - start) * Self.frameSeconds >= minimum {
+                    starts.append(Double(start) * Self.frameSeconds)
+                }
+                runStart = nil
+            }
+        }
+        return starts
+    }
+
     /// How many frames either side of a frame are averaged in before comparing
     /// the two channels. Raw 100 ms frames cross over constantly during
     /// ordinary speech — a syllable's decay dips under the other channel and
@@ -266,6 +304,19 @@ nonisolated enum ParakeetPass {
     /// (`TranscriptUtterance.derive` re-merges same-speaker runs) and lets
     /// each side be judged on its own evidence.
     static let segmentGapSeconds: TimeInterval = 0.6
+
+    /// A silent stretch in the channel's OWN audio at least this long also
+    /// ends a segment, whatever the token timings say.
+    ///
+    /// `segmentGapSeconds` trusts the model's estimate of when it heard each
+    /// token, and that estimate is what fails on the case this exists for: a
+    /// measured 0.7 s pause between the user finishing and an echo starting,
+    /// which the model papered over by stretching its token times across it —
+    /// no gap to split on, so real speech and bleed stayed welded into one
+    /// row. The audio always knew. Shorter than `segmentGapSeconds` because
+    /// this is positive evidence of silence rather than the mere absence of a
+    /// token, and because the token boundaries either side eat into it.
+    static let silenceSplitSeconds: TimeInterval = 0.3
 
     /// A running segment longer than this splits at the next word start —
     /// mirroring the 1–12 s granularity the rest of the app (dedup timing
@@ -369,9 +420,12 @@ nonisolated enum ParakeetPass {
             if shouldYield() { throw PassError.preempted }
 
             let samples = try readSamples(at: entry.url)
+            let envelope = EnergyEnvelope(samples: samples)
+            envelopes[entry.channel] = envelope
             let produced = try await transcribeChannel(
                 samples: samples,
                 channel: entry.channel,
+                envelope: envelope,
                 manager: manager,
                 shouldYield: shouldYield,
                 onChannelFraction: { fraction in
@@ -383,7 +437,6 @@ nonisolated enum ParakeetPass {
                 diagnostics: diagnostics
             )
             segments += produced
-            envelopes[entry.channel] = EnergyEnvelope(samples: samples)
             onProgress(progress.finishChannel(index))
         }
 
@@ -460,6 +513,7 @@ nonisolated enum ParakeetPass {
     private static func transcribeChannel(
         samples: [Float],
         channel: AudioChannel,
+        envelope: EnergyEnvelope,
         manager: AsrManager,
         shouldYield: @escaping @Sendable () -> Bool,
         onChannelFraction: @escaping @Sendable (Double) -> Void,
@@ -480,7 +534,8 @@ nonisolated enum ParakeetPass {
             from: result.tokenTimings ?? [],
             text: result.text,
             duration: result.duration,
-            channel: channel
+            channel: channel,
+            silenceStarts: envelope.silenceStarts(minimum: silenceSplitSeconds)
         )
         let line = String(
             format: "Parakeet %@: %.1fs audio, %d tokens → %d segments in %@",
@@ -579,16 +634,24 @@ nonisolated enum ParakeetPass {
     /// retained files begin at recording t=0, so they are absolute recording
     /// seconds with no offset math.
     ///
-    /// Splits at every inter-token silence over `segmentGapSeconds`, and at the
-    /// next word start once a running segment would pass `maxSegmentSeconds`.
-    /// Empty-text segments are dropped; nothing else is filtered — Whisper's
-    /// pathologies (noise transcriptions, boilerplate hallucinations, silence
-    /// inventions) don't apply, and ADR-003 dedup still runs afterwards.
+    /// Splits at every inter-token gap over `segmentGapSeconds`, at every
+    /// `silenceStarts` instant a token crosses, and at the next word start once
+    /// a running segment would pass `maxSegmentSeconds`. Empty-text segments
+    /// are dropped; nothing else is filtered — Whisper's pathologies (noise
+    /// transcriptions, boilerplate hallucinations, silence inventions) don't
+    /// apply, and ADR-003 dedup still runs afterwards.
+    ///
+    /// `silenceStarts` are the instants this channel's audio actually fell
+    /// quiet (`EnergyEnvelope.silenceStarts`), in ascending order. They are
+    /// what makes the cutter independent of the model's timing estimates,
+    /// which measurably paper over real pauses; passing none leaves the pure
+    /// token-timing behaviour, which is what the tables exercise.
     static func segments(
         from timings: [TokenTiming],
         text: String,
         duration: TimeInterval,
-        channel: AudioChannel
+        channel: AudioChannel,
+        silenceStarts: [TimeInterval] = []
     ) -> [TranscriptSegment] {
         let speaker: Speaker = channel == .microphone ? .me : .teammates
 
@@ -629,9 +692,20 @@ nonisolated enum ParakeetPass {
             ))
         }
 
+        var nextSilence = 0
         for timing in timings {
             if let previous = current.last, let first = current.first {
-                if timing.startTime - previous.endTime > segmentGapSeconds {
+                // Silences the emitted tokens already span can't split
+                // anything: a model that stretched a token across a pause
+                // leaves nowhere inside it to cut.
+                while nextSilence < silenceStarts.count,
+                      silenceStarts[nextSilence] <= previous.endTime {
+                    nextSilence += 1
+                }
+                let crossesSilence = nextSilence < silenceStarts.count
+                    && silenceStarts[nextSilence] <= timing.startTime
+
+                if crossesSilence || timing.startTime - previous.endTime > segmentGapSeconds {
                     flush()
                 } else if isWordStart(timing.token),
                           timing.endTime - first.startTime > maxSegmentSeconds {
