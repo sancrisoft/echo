@@ -230,6 +230,14 @@ struct EchoDedupEvidenceTests {
         start: 50.2, end: 54.4
     )
 
+    /// Levels for the candidate's own window: `own` is the mic there, `other`
+    /// the system channel over that same moment.
+    private func levels(
+        _ segment: TranscriptSegment, own: Float, other: Float
+    ) -> [UUID: EchoDedupPolicy.SpanLevels] {
+        [segment.id: EchoDedupPolicy.SpanLevels(own: own, other: other)]
+    }
+
     @Test func weakTextMatchWithoutEvidenceIsKept() {
         let verdict = policy.verdict(for: garbledEcho, against: [teamSegment])
 
@@ -237,9 +245,9 @@ struct EchoDedupEvidenceTests {
     }
 
     @Test func weakTextMatchAtBleedLevelIsSuppressed() {
-        let evidence: [UUID: Float] = [garbledEcho.id: 0.01, teamSegment.id: 0.04]
+        let evidence = levels(garbledEcho, own: 0.01, other: 0.04)
 
-        let verdict = policy.verdict(for: garbledEcho, against: [teamSegment], spanRms: evidence)
+        let verdict = policy.verdict(for: garbledEcho, against: [teamSegment], spanLevels: evidence)
 
         #expect(verdict?.tier == .assisted)
         #expect(verdict?.containment == 0.4)
@@ -249,9 +257,9 @@ struct EchoDedupEvidenceTests {
     /// Double-talk: the same weak text match at the user's own speaking level
     /// (ratio ≳ 1) is the user talking over the teammate, and is kept.
     @Test func weakTextMatchAtSpeakingLevelIsKept() {
-        let evidence: [UUID: Float] = [garbledEcho.id: 0.066, teamSegment.id: 0.060]
+        let evidence = levels(garbledEcho, own: 0.066, other: 0.060)
 
-        #expect(policy.verdict(for: garbledEcho, against: [teamSegment], spanRms: evidence) == nil)
+        #expect(policy.verdict(for: garbledEcho, against: [teamSegment], spanLevels: evidence) == nil)
     }
 
     /// THE safety property (bleed-fix §2.3, BRN-005): energy never suppresses
@@ -261,46 +269,50 @@ struct EchoDedupEvidenceTests {
     @Test(arguments: [Float(0.05), 0.001, 0.0])
     func quietSpeechWithItsOwnWordsIsNeverSuppressed(ratio: Float) {
         let ownWords = mic("let me check the dashboard first", start: 50.5, end: 54.5)
-        let evidence: [UUID: Float] = [ownWords.id: 0.030 * ratio, teamSegment.id: 0.030]
+        let evidence = levels(ownWords, own: 0.030 * ratio, other: 0.030)
 
-        #expect(policy.verdict(for: ownWords, against: [teamSegment], spanRms: evidence) == nil)
+        #expect(policy.verdict(for: ownWords, against: [teamSegment], spanLevels: evidence) == nil)
     }
 
     /// Evidence must be complete to count: a missing or degenerate denominator
     /// leaves the ratio unknown, and an unknown ratio is not a quiet one.
-    @Test func partialOrDegenerateEvidenceDoesNotEnableTierB() {
-        let candidateOnly: [UUID: Float] = [garbledEcho.id: 0.01]
-        let teamOnly: [UUID: Float] = [teamSegment.id: 0.04]
-        let silentTeam: [UUID: Float] = [garbledEcho.id: 0.01, teamSegment.id: 0.0]
+    @Test func missingOrDegenerateEvidenceDoesNotEnableTierB() {
+        let otherSegment = levels(teamSegment, own: 0.04, other: 0.01)
+        let silentOpposite = levels(garbledEcho, own: 0.01, other: 0.0)
 
-        #expect(policy.verdict(for: garbledEcho, against: [teamSegment], spanRms: candidateOnly) == nil)
-        #expect(policy.verdict(for: garbledEcho, against: [teamSegment], spanRms: teamOnly) == nil)
-        #expect(policy.verdict(for: garbledEcho, against: [teamSegment], spanRms: silentTeam) == nil)
+        // Evidence for a different segment is no evidence for this one.
+        #expect(policy.verdict(for: garbledEcho, against: [teamSegment], spanLevels: otherSegment) == nil)
+        // A silent opposite channel is the opposite of bleed, not a quiet ratio.
+        #expect(policy.verdict(for: garbledEcho, against: [teamSegment], spanLevels: silentOpposite) == nil)
     }
 
     /// Evidence never *rescues* a segment either: a strong text match is
     /// Tier A whatever the level. The exposure is documented in the policy.
     @Test func loudSegmentWithFullContainmentIsStillTierA() {
         let echo = mic("the invoice batch failed again overnight", start: 50.2, end: 54.4)
-        let evidence: [UUID: Float] = [echo.id: 0.070, teamSegment.id: 0.030]
+        let evidence = levels(echo, own: 0.070, other: 0.030)
 
-        #expect(policy.verdict(for: echo, against: [teamSegment], spanRms: evidence)?.tier == .text)
+        #expect(policy.verdict(for: echo, against: [teamSegment], spanLevels: evidence)?.tier == .text)
     }
 
-    /// The denominator is the LOUDEST linked Team span: an echo of a loud
-    /// teammate that also grazes a near-silent Team segment must not read as
-    /// loud-relative-to-the-quiet-one.
-    @Test func ratioUsesTheLoudestLinkedTeamSpan() {
+    /// The ratio is a property of the candidate's own window on both channels,
+    /// so which Team segments happen to link — and how loud they were on their
+    /// own, different spans — cannot move it. That independence is why the
+    /// measured 0.05–0.43 / ≳ 1 separation survives contact with real cutting:
+    /// scoring a candidate against another segment's window compares two
+    /// different moments, and stops discriminating the instant either channel's
+    /// loudness changes between them.
+    @Test func ratioIsUnaffectedByWhichTeamSegmentsLink() {
         let quietTeam = team("could you repeat that", start: 49.0, end: 50.1)
-        let evidence: [UUID: Float] = [
-            garbledEcho.id: 0.01, teamSegment.id: 0.04, quietTeam.id: 0.008,
-        ]
+        let evidence = levels(garbledEcho, own: 0.01, other: 0.04)
 
-        let verdict = policy.verdict(
-            for: garbledEcho, against: [quietTeam, teamSegment], spanRms: evidence
+        let alone = policy.verdict(for: garbledEcho, against: [teamSegment], spanLevels: evidence)
+        let withNeighbour = policy.verdict(
+            for: garbledEcho, against: [quietTeam, teamSegment], spanLevels: evidence
         )
 
-        #expect(verdict?.rmsRatio == 0.25)
+        #expect(alone?.rmsRatio == 0.25)
+        #expect(withNeighbour?.rmsRatio == 0.25)
     }
 }
 

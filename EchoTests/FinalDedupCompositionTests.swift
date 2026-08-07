@@ -150,21 +150,23 @@ struct FinalDedupCompositionTests {
 
     /// Evidence is keyed by segment id and changes Tier B only: the same batch
     /// keeps the garbled echo without it and drops it with it.
-    @Test("supplying span rms enables Tier B and nothing else")
-    func spanRmsEnablesTierBOnly() {
+    @Test("supplying span levels enables Tier B and nothing else")
+    func spanLevelsEnableTierBOnly() {
         let teamSegment = team("the invoice batch failed again overnight", start: 50.0, end: 54.0)
         let garbledEcho = mic("invoice batch stalled early today", start: 50.2, end: 54.4)
         let ownWords = mic("let me check the dashboard first", start: 50.5, end: 54.5)
         let batch = [teamSegment, garbledEcho, ownWords]
         // Bleed level for both mic rows — only the one that duplicates the
-        // teammates' words is eligible.
-        let evidence: [UUID: Float] = [
-            teamSegment.id: 0.04, garbledEcho.id: 0.01, ownWords.id: 0.01,
+        // teammates' words is eligible. The row with its own words is the
+        // BRN-005 guard: quiet is never enough.
+        let evidence: [UUID: EchoDedupPolicy.SpanLevels] = [
+            garbledEcho.id: .init(own: 0.01, other: 0.04),
+            ownWords.id: .init(own: 0.01, other: 0.04),
         ]
 
         #expect(policy.dedupe(final: batch).map(\.id) == batch.map(\.id))
         #expect(
-            policy.dedupe(final: batch, spanRms: evidence).map(\.id)
+            policy.dedupe(final: batch, spanLevels: evidence).map(\.id)
                 == [teamSegment.id, ownWords.id]
         )
     }
@@ -179,9 +181,9 @@ struct FinalDedupCompositionTests {
         let laterTeam = team("the invoice batch failed again overnight", start: 59.8, end: 63.6)
         // The loud echo is Tier A regardless of its level (2.0), the garbled
         // quiet one needs the 0.25 ratio to go.
-        let evidence: [UUID: Float] = [
-            teamSegment.id: 0.04, bareEcho.id: 0.08,
-            laterTeam.id: 0.04, garbledEcho.id: 0.01,
+        let evidence: [UUID: EchoDedupPolicy.SpanLevels] = [
+            bareEcho.id: .init(own: 0.08, other: 0.04),
+            garbledEcho.id: .init(own: 0.01, other: 0.04),
         ]
 
         struct Report {
@@ -191,7 +193,7 @@ struct FinalDedupCompositionTests {
         var reported: [Report] = []
         let kept = policy.dedupe(
             final: [teamSegment, bareEcho, garbledEcho, laterTeam],
-            spanRms: evidence,
+            spanLevels: evidence,
             onSuppression: { reported.append(Report(segment: $0, verdict: $1)) }
         )
 

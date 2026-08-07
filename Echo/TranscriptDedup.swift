@@ -51,9 +51,9 @@ struct EchoDedupPolicy {
     /// level evidence is allowed to resolve, not a bypass of it.
     var assistedContainment: Double = 0.35
 
-    /// Tier B's level test: the candidate's span rms over the loudest linked
-    /// Team span's rms. Bleed measured 0.05–0.43 on real audio; the user's own
-    /// voice on the same mic sits at ≳ 1, far outside this.
+    /// Tier B's level test: over the candidate's own window, the mic channel's
+    /// rms divided by the system channel's. Bleed measured 0.05–0.43 on real
+    /// audio; the user's own voice sits at ≳ 1, far outside this.
     var assistedMaxRmsRatio: Float = 0.5
 
     /// Candidates with fewer normalized tokens than this are never suppressed:
@@ -85,9 +85,27 @@ struct EchoDedupPolicy {
         /// Fraction of the candidate's tokens found across ALL linked Team
         /// segments pooled.
         let containment: Double
-        /// Candidate span rms ÷ loudest linked Team span rms. Nil when the
-        /// caller supplied no evidence for these segments.
+        /// `own ÷ other` over the candidate's own window. Nil when the caller
+        /// supplied no evidence for this segment.
         let rmsRatio: Float?
+    }
+
+    /// One segment's level on BOTH channels over its own time span — the
+    /// measured bleed discriminator (mic vs system on the same window). It has
+    /// to be the same window on both channels: comparing a segment's level
+    /// against some *other* segment's span compares two different moments and
+    /// stops discriminating as soon as either channel's loudness moves, which
+    /// is constantly.
+    struct SpanLevels: Sendable, Equatable {
+        /// The channel the segment came from, over the segment's span.
+        let own: Float
+        /// The opposite channel, over that same span.
+        let other: Float
+
+        nonisolated init(own: Float, other: Float) {
+            self.own = own
+            self.other = other
+        }
     }
 
     // MARK: - Decision
@@ -98,7 +116,7 @@ struct EchoDedupPolicy {
     func verdict(
         for candidate: TranscriptSegment,
         against team: [TranscriptSegment],
-        spanRms: [UUID: Float] = [:]
+        spanLevels: [UUID: SpanLevels] = [:]
     ) -> SuppressionVerdict? {
         // Asymmetry (ADR-003): bleed only ever flows loudspeakers → mic, so
         // only mic-channel candidates can be echoes. Team segments always pass.
@@ -125,7 +143,7 @@ struct EchoDedupPolicy {
         }
         guard let best else { return nil }
 
-        let ratio = rmsRatio(for: candidate, linked: linked, spanRms: spanRms)
+        let ratio = levelRatio(for: candidate, spanLevels: spanLevels)
 
         if containment >= textOnlyContainment {
             return SuppressionVerdict(
@@ -159,21 +177,21 @@ struct EchoDedupPolicy {
     /// to be in the "recent" window at the mic segment's arrival is present
     /// and matchable here.
     ///
-    /// `spanRms` is optional cross-channel evidence keyed by segment id — the
-    /// rms of each segment's own span on its own channel. Supplying it enables
+    /// `spanLevels` is optional cross-channel evidence keyed by segment id —
+    /// both channels' rms over that segment's own window. Supplying it enables
     /// Tier B and nothing else; omitting it leaves a pure, table-testable
     /// text policy. `onSuppression` receives every verdict, in input order.
     ///
     /// Order-preserving; Team segments always pass (the policy's asymmetry).
     func dedupe(
         final segments: [TranscriptSegment],
-        spanRms: [UUID: Float] = [:],
+        spanLevels: [UUID: SpanLevels] = [:],
         onSuppression: ((TranscriptSegment, SuppressionVerdict) -> Void)? = nil
     ) -> [TranscriptSegment] {
         let team = segments.filter { $0.channel == .system }
         guard !team.isEmpty else { return segments }
         return segments.filter { candidate in
-            guard let verdict = verdict(for: candidate, against: team, spanRms: spanRms) else {
+            guard let verdict = verdict(for: candidate, against: team, spanLevels: spanLevels) else {
                 return true
             }
             onSuppression?(candidate, verdict)
@@ -229,18 +247,16 @@ struct EchoDedupPolicy {
 
     // MARK: - Evidence
 
-    /// The candidate's level relative to the loudest Team span it echoes.
-    /// Nil whenever the evidence is incomplete or degenerate — an unknown
-    /// ratio must never read as a quiet one.
-    private func rmsRatio(
+    /// How loud the candidate's own channel is against the other one over the
+    /// very same moment. Nil whenever the evidence is missing or the
+    /// denominator is degenerate — an unknown ratio must never read as a quiet
+    /// one, and a silent opposite channel is the *opposite* of bleed anyway.
+    private func levelRatio(
         for candidate: TranscriptSegment,
-        linked: [TranscriptSegment],
-        spanRms: [UUID: Float]
+        spanLevels: [UUID: SpanLevels]
     ) -> Float? {
-        guard let candidateRms = spanRms[candidate.id] else { return nil }
-        let loudestTeam = linked.compactMap { spanRms[$0.id] }.max()
-        guard let loudestTeam, loudestTeam > 0 else { return nil }
-        return candidateRms / loudestTeam
+        guard let levels = spanLevels[candidate.id], levels.other > 0 else { return nil }
+        return levels.own / levels.other
     }
 
     // MARK: - Normalization

@@ -2,19 +2,83 @@
 //  ParakeetSpanRmsTests.swift
 //  EchoTests
 //
-//  The pass's dedup evidence (ADR-003 v2 Tier B): each produced segment's rms
-//  over its own span of its own channel's samples. Pure arithmetic over
-//  synthetic buffers — the load-bearing rows are the boundary ones, because a
-//  span that runs off the end of the buffer must contribute nothing rather
-//  than a wrong number or a crash.
+//  The pass's dedup evidence (ADR-003 v2 Tier B): both channels' rms over each
+//  segment's OWN window, carried by a frame-quantized energy envelope so the
+//  comparison survives the pass decoding one channel at a time.
+//
+//  Pure arithmetic over synthetic buffers. The load-bearing rows are the
+//  boundary ones, because a span that cannot be measured on both channels must
+//  contribute no evidence rather than a wrong number — the policy reads a
+//  missing entry as "keep" and a zero as "maximally quiet".
 //
 
 import Foundation
 import Testing
 @testable import Echo
 
-@Suite("ParakeetPass span rms")
-struct ParakeetSpanRmsTests {
+@Suite("EnergyEnvelope")
+struct EnergyEnvelopeTests {
+
+    private let rate = AudioConstants.sampleRate
+
+    /// `level` for the first second, silence for the second.
+    private func twoSecondBuffer(level: Float) -> [Float] {
+        Array(repeating: level, count: Int(rate)) + Array(repeating: 0, count: Int(rate))
+    }
+
+    @Test("a window reads the level of its own span, not the channel's")
+    func windowIsLocalNotGlobal() {
+        let envelope = EnergyEnvelope(samples: twoSecondBuffer(level: 0.5))
+
+        #expect(envelope.rms(from: 0.0, to: 1.0) == 0.5)
+        #expect(envelope.rms(from: 1.0, to: 2.0) == 0)
+    }
+
+    @Test("a window spanning loud and silent audio averages their energy")
+    func windowAveragesEnergy() {
+        let envelope = EnergyEnvelope(samples: twoSecondBuffer(level: 0.5))
+
+        // One second at 0.5 and one silent: sqrt(0.25 / 2).
+        let expected = (0.25 / 2.0).squareRoot()
+        #expect(abs(Double(envelope.rms(from: 0.0, to: 2.0) ?? 0) - expected) < 0.001)
+    }
+
+    @Test("windows past either end are clamped, not read out of bounds")
+    func windowsAreClamped() {
+        let envelope = EnergyEnvelope(samples: twoSecondBuffer(level: 0.5))
+
+        #expect(envelope.rms(from: -1.0, to: 1.0) == 0.5)
+        #expect(envelope.rms(from: 0.0, to: 60.0) != nil)
+    }
+
+    @Test("a window covering no frame has no answer at all")
+    func unmeasurableWindowsAreNil() {
+        let envelope = EnergyEnvelope(samples: twoSecondBuffer(level: 0.5))
+
+        #expect(envelope.rms(from: 1.0, to: 1.0) == nil)      // empty
+        #expect(envelope.rms(from: 1.5, to: 0.5) == nil)      // inverted
+        #expect(envelope.rms(from: 30.0, to: 31.0) == nil)    // past the end
+        #expect(EnergyEnvelope(samples: []).rms(from: 0.0, to: 1.0) == nil)
+    }
+
+    /// The envelope replaces holding both channels' samples; it must still
+    /// report a level a policy threshold can be applied to.
+    @Test("the envelope reproduces a known rms within frame quantization")
+    func envelopeMatchesDirectRMS() {
+        var samples = [Float](repeating: 0, count: Int(rate * 2))
+        for i in samples.indices {
+            samples[i] = sin(Float(i) * 0.05) * 0.2
+        }
+        let direct = AudioStats.rms(samples, from: 0, count: samples.count)
+
+        let envelope = EnergyEnvelope(samples: samples).rms(from: 0.0, to: 2.0) ?? 0
+
+        #expect(abs(envelope - direct) < 0.001)
+    }
+}
+
+@Suite("ParakeetPass span levels")
+struct ParakeetSpanLevelsTests {
 
     private let rate = AudioConstants.sampleRate
 
@@ -28,76 +92,53 @@ struct ParakeetSpanRmsTests {
         )
     }
 
-    /// A buffer that is `level` for the first second and silent for the next.
-    private func twoSecondBuffer(level: Float) -> [Float] {
-        Array(repeating: level, count: Int(rate)) + Array(repeating: 0, count: Int(rate))
+    private func envelope(level: Float, seconds: Double = 2.0) -> EnergyEnvelope {
+        EnergyEnvelope(samples: Array(repeating: level, count: Int(rate * seconds)))
     }
 
-    @Test("a segment reads the rms of its own span, not the channel's")
-    func spanIsLocalNotGlobal() {
-        let samples = twoSecondBuffer(level: 0.5)
-        let loud = segment(.microphone, start: 0.0, end: 1.0)
-        let quiet = segment(.microphone, start: 1.0, end: 2.0)
+    /// `own` is the segment's own channel and `other` the opposite one — over
+    /// the same window. Getting these two the wrong way round would invert the
+    /// discriminator, so both channels' segments get an explicit row.
+    @Test("each segment carries its own channel's level and the opposite one's")
+    func ownAndOtherAreOrientedByChannel() {
+        let micSegment = segment(.microphone, start: 0.0, end: 1.0)
+        let systemSegment = segment(.system, start: 0.0, end: 1.0)
+        let envelopes: [AudioChannel: EnergyEnvelope] = [
+            .microphone: envelope(level: 0.1),
+            .system: envelope(level: 0.4),
+        ]
 
-        let levels = ParakeetPass.spanRms(of: [loud, quiet], in: samples)
+        let levels = ParakeetPass.spanLevels(
+            of: [micSegment, systemSegment], envelopes: envelopes
+        )
 
-        #expect(levels[loud.id] == 0.5)
-        #expect(levels[quiet.id] == 0)
+        #expect(abs((levels[micSegment.id]?.own ?? 0) - 0.1) < 0.001)
+        #expect(abs((levels[micSegment.id]?.other ?? 0) - 0.4) < 0.001)
+        #expect(abs((levels[systemSegment.id]?.own ?? 0) - 0.4) < 0.001)
+        #expect(abs((levels[systemSegment.id]?.other ?? 0) - 0.1) < 0.001)
     }
 
-    @Test("levels are keyed by segment id so both channels merge into one map")
-    func keyedBySegmentID() {
-        let mic = segment(.microphone, start: 0.0, end: 1.0)
-        let system = segment(.system, start: 0.0, end: 1.0)
+    /// A one-channel meeting has nothing to compare against, so it yields no
+    /// evidence — and Tier B simply never fires, which is the right answer:
+    /// with no system audio there is no bleed.
+    @Test("a segment with only one channel measurable carries no evidence")
+    func halfMeasuredSpansAreOmitted() {
+        let micSegment = segment(.microphone, start: 0.0, end: 1.0)
+        let envelopes: [AudioChannel: EnergyEnvelope] = [.microphone: envelope(level: 0.1)]
 
-        var levels = ParakeetPass.spanRms(of: [mic], in: twoSecondBuffer(level: 0.25))
-        levels.merge(ParakeetPass.spanRms(of: [system], in: twoSecondBuffer(level: 0.5))) { a, _ in a }
-
-        #expect(levels[mic.id] == 0.25)
-        #expect(levels[system.id] == 0.5)
+        #expect(ParakeetPass.spanLevels(of: [micSegment], envelopes: envelopes).isEmpty)
     }
 
-    /// The pass hands the map to a policy that treats a missing entry as
-    /// "no evidence" and keeps the segment — so an unmeasurable span must be
-    /// ABSENT, never zero, which would read as maximally quiet.
-    @Test("spans that cannot be measured are absent, not zero")
-    func unmeasurableSpansAreOmitted() {
-        let samples = twoSecondBuffer(level: 0.5)
-        let empty = segment(.microphone, start: 1.0, end: 1.0)
-        let inverted = segment(.microphone, start: 1.5, end: 0.5)
-        let pastTheEnd = segment(.microphone, start: 3.0, end: 4.0)
+    /// Channels can differ in length (capture starts and stops are not
+    /// simultaneous): a span only the longer one covers has no ratio.
+    @Test("a span past the shorter channel's end carries no evidence")
+    func spansPastTheShorterChannelAreOmitted() {
+        let late = segment(.microphone, start: 3.0, end: 4.0)
+        let envelopes: [AudioChannel: EnergyEnvelope] = [
+            .microphone: envelope(level: 0.1, seconds: 10.0),
+            .system: envelope(level: 0.4, seconds: 2.0),
+        ]
 
-        let levels = ParakeetPass.spanRms(of: [empty, inverted, pastTheEnd], in: samples)
-
-        #expect(levels.isEmpty)
-    }
-
-    @Test("a span running past the end of the buffer is clamped, not read out of bounds")
-    func trailingSpanIsClamped() {
-        let samples = twoSecondBuffer(level: 0.5)
-        // 0.5 s of signal, then 1.5 s that only partly exists.
-        let overhang = segment(.microphone, start: 0.5, end: 2.5)
-
-        let levels = ParakeetPass.spanRms(of: [overhang], in: samples)
-
-        // Half a second at 0.5 and one silent second, over the 1.5 s that
-        // exists: sqrt((0.5 * 0.25) / 1.5).
-        let expected = (0.5 * 0.25 / 1.5).squareRoot()
-        #expect(abs(Double(levels[overhang.id] ?? 0) - expected) < 0.001)
-    }
-
-    @Test("a negative start is clamped to the beginning of the buffer")
-    func leadingSpanIsClamped() {
-        let samples = twoSecondBuffer(level: 0.5)
-        let overhang = segment(.microphone, start: -1.0, end: 1.0)
-
-        #expect(ParakeetPass.spanRms(of: [overhang], in: samples)[overhang.id] == 0.5)
-    }
-
-    @Test("an empty buffer yields no evidence at all")
-    func emptyBufferYieldsNothing() {
-        let any = segment(.microphone, start: 0.0, end: 1.0)
-
-        #expect(ParakeetPass.spanRms(of: [any], in: []).isEmpty)
+        #expect(ParakeetPass.spanLevels(of: [late], envelopes: envelopes).isEmpty)
     }
 }

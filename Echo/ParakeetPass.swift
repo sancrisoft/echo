@@ -137,6 +137,53 @@ private final class SharedPassProgress: @unchecked Sendable {
     }
 }
 
+// MARK: - Energy
+
+/// One channel's loudness over time, frame-quantized: the whole sample buffer
+/// reduced to a mean square per 100 ms.
+///
+/// It exists so the two channels' levels can be compared on the SAME window —
+/// the measured bleed discriminator — even though the pass decodes one channel
+/// at a time and lets each one's samples go before reading the next. Keeping
+/// both buffers instead would double the pass's peak memory (~46 MB per hour,
+/// per channel); an envelope costs ~144 KB an hour and answers the only
+/// question the dedup asks of the audio.
+nonisolated struct EnergyEnvelope: Sendable {
+
+    /// Resolution. Well under the shortest segment the pass emits, so a span's
+    /// level is never dominated by frame rounding.
+    static let frameSeconds: TimeInterval = 0.1
+
+    private let meanSquares: [Float]
+
+    init(samples: [Float]) {
+        let frame = max(1, Int(AudioConstants.sampleRate * Self.frameSeconds))
+        var squares: [Float] = []
+        squares.reserveCapacity(samples.count / frame + 1)
+        var start = 0
+        while start < samples.count {
+            let count = min(frame, samples.count - start)
+            var sum: Float = 0
+            for i in start..<(start + count) { sum += samples[i] * samples[i] }
+            squares.append(sum / Float(count))
+            start += count
+        }
+        meanSquares = squares
+    }
+
+    /// RMS over `[from, to)` seconds, or nil when that window covers no frame
+    /// of this channel — an unmeasurable span must read as absent evidence,
+    /// never as silence.
+    func rms(from: TimeInterval, to: TimeInterval) -> Float? {
+        let first = max(0, Int((from / Self.frameSeconds).rounded(.down)))
+        let last = min(meanSquares.count, Int((to / Self.frameSeconds).rounded(.up)))
+        guard first < last else { return nil }
+        var sum: Float = 0
+        for i in first..<last { sum += meanSquares[i] }
+        return (sum / Float(last - first)).squareRoot()
+    }
+}
+
 // MARK: - The pass
 
 nonisolated enum ParakeetPass {
@@ -258,11 +305,12 @@ nonisolated enum ParakeetPass {
         onProgress(progress.fraction)
 
         var segments: [TranscriptSegment] = []
-        // ADR-003 v2's optional evidence: each segment's level on its own
-        // channel, gathered while that channel's samples are still in hand and
-        // discarded with them. Never persisted — the on-disk schema is
-        // untouched.
-        var spanLevels: [UUID: Float] = [:]
+        // ADR-003 v2's optional evidence. Each channel's envelope is taken
+        // while its samples are in hand and outlives them, because the ratio
+        // that separates bleed from speech needs BOTH channels over the same
+        // window and the channels are decoded one at a time. Never persisted —
+        // the on-disk schema is untouched.
+        var envelopes: [AudioChannel: EnergyEnvelope] = [:]
         for (index, entry) in channels.enumerated() {
             if shouldYield() { throw PassError.preempted }
 
@@ -281,7 +329,7 @@ nonisolated enum ParakeetPass {
                 diagnostics: diagnostics
             )
             segments += produced
-            spanLevels.merge(spanRms(of: produced, in: samples)) { current, _ in current }
+            envelopes[entry.channel] = EnergyEnvelope(samples: samples)
             onProgress(progress.finishChannel(index))
         }
 
@@ -290,7 +338,7 @@ nonisolated enum ParakeetPass {
         // so cross-channel echoes are caught here.
         let kept = EchoDedupPolicy().dedupe(
             final: ordered,
-            spanRms: spanLevels,
+            spanLevels: spanLevels(of: ordered, envelopes: envelopes),
             onSuppression: diagnostics.map { sink in
                 { candidate, verdict in sink(Self.suppressionReport(candidate, verdict)) }
             }
@@ -302,17 +350,25 @@ nonisolated enum ParakeetPass {
 
     // MARK: Dedup evidence
 
-    /// Each segment's rms over its own span of its own channel's samples.
-    /// Segment times are file-relative and the retained files begin at
-    /// recording t=0, so the span maps straight onto the sample buffer; a span
-    /// that falls outside it contributes nothing rather than a wrong number.
-    static func spanRms(of segments: [TranscriptSegment], in samples: [Float]) -> [UUID: Float] {
-        var levels: [UUID: Float] = [:]
+    /// Both channels' rms over each segment's own window. Segment times are
+    /// file-relative and the retained files begin at recording t=0, so a
+    /// segment's span indexes both envelopes directly.
+    ///
+    /// A segment only carries evidence when BOTH channels can answer for its
+    /// window — a half-measured span has no ratio, and the policy reads a
+    /// missing entry as "no evidence, keep".
+    static func spanLevels(
+        of segments: [TranscriptSegment],
+        envelopes: [AudioChannel: EnergyEnvelope]
+    ) -> [UUID: EchoDedupPolicy.SpanLevels] {
+        var levels: [UUID: EchoDedupPolicy.SpanLevels] = [:]
         for segment in segments {
-            let start = max(0, Int((segment.start * AudioConstants.sampleRate).rounded(.down)))
-            let end = min(samples.count, Int((segment.end * AudioConstants.sampleRate).rounded(.up)))
-            guard start < end else { continue }
-            levels[segment.id] = AudioStats.rms(samples, from: start, count: end - start)
+            let opposite: AudioChannel = segment.channel == .microphone ? .system : .microphone
+            guard
+                let own = envelopes[segment.channel]?.rms(from: segment.start, to: segment.end),
+                let other = envelopes[opposite]?.rms(from: segment.start, to: segment.end)
+            else { continue }
+            levels[segment.id] = EchoDedupPolicy.SpanLevels(own: own, other: other)
         }
         return levels
     }
