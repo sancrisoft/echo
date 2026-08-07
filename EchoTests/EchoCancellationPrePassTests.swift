@@ -419,6 +419,77 @@ struct EchoCancellationPrePassTests {
             input: [0, 0, 0], output: [0, 0, 0], windowStarts: [0]
         ) == nil)
     }
+
+    // MARK: - Near-end protection
+
+    /// The field regression this guard exists for. On a real Discord meeting
+    /// the filter took half the user's words out of every span the teammate
+    /// was also speaking — AEC3 protects the far end, and suppresses whatever
+    /// the near end was saying through double-talk.
+    @Test func keepsTheRecordedMicWhereTheUsersOwnVoiceIsInIt() throws {
+        let pair = Self.echoingPair()
+        var mic = pair.mic
+        // The user talking over the bleed for 5 s, at speech level against a
+        // reference at 0.2 — a ratio no bleed path produces.
+        let own = Signal.modulatedNoise(seconds: 5, seed: 2_027, amplitude: 0.6)
+        let offset = Signal.samples(seconds: 30)
+        for i in 0 ..< own.count { mic[offset + i] += own[i] }
+
+        let outcome = try EchoCancellationPrePass.run(
+            mic: mic, system: pair.system, stage: HalvingAECStage()
+        )
+
+        #expect(outcome.applied)
+        // Roughly the 5 s in 60 that hold the user's voice, and nothing like
+        // the whole meeting — a guard that protects everything cancels nothing.
+        #expect(outcome.nearEndProtectedFraction > 0.02)
+        #expect(outcome.nearEndProtectedFraction < 0.30)
+
+        // Inside the stretch the recorded mic survives.
+        let inside = offset ..< offset + own.count
+        let kept = inside.filter { abs(outcome.mic[$0] - mic[$0]) < 1e-9 }.count
+        #expect(Double(kept) / Double(own.count) > 0.5)
+
+        // Outside it the filter still reaches every sample.
+        let outside = 0 ..< Signal.samples(seconds: 20)
+        #expect(outside.allSatisfy { abs(outcome.mic[$0] - mic[$0] * 0.5) < 1e-6 })
+    }
+
+    @Test func protectsNothingWhenTheMicCarriesOnlyBleed() throws {
+        let pair = Self.echoingPair()
+
+        let outcome = try EchoCancellationPrePass.run(
+            mic: pair.mic, system: pair.system, stage: HalvingAECStage()
+        )
+
+        #expect(outcome.nearEndProtectedFraction == 0)
+        #expect(outcome.summary.contains("near-end-kept=0%"))
+    }
+
+    /// An empty frame has no near end to protect, and treating it as one
+    /// would hold the filter off the bleed on either side of it.
+    @Test func silenceIsNotNearEnd() {
+        let quiet = Signal.silence(seconds: 2)
+
+        let result = EchoCancellationPrePass.protectingNearEnd(
+            filtered: quiet, mic: quiet, system: quiet
+        )
+
+        #expect(result.protectedFraction == 0)
+    }
+
+    /// No reference playing means no bleed is possible, so there is nothing
+    /// for the filter to be right about and the mic is kept as recorded.
+    @Test func keepsTheRecordedMicWhereTheReferenceIsNotPlaying() {
+        let mic = Signal.modulatedNoise(seconds: 2, seed: 2_029)
+        let filtered = mic.map { $0 * 0.5 }
+
+        let result = EchoCancellationPrePass.protectingNearEnd(
+            filtered: filtered, mic: mic, system: Signal.silence(seconds: 2)
+        )
+
+        #expect(result.protectedFraction > 0.9)
+    }
 }
 
 /// Call counter for the preemption row — a class so the escaping closure and

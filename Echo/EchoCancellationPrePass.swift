@@ -58,6 +58,30 @@ nonisolated enum EchoCancellationPrePass {
     /// meeting to be filtered (ADR-014).
     static let yieldCheckChunks = 100
 
+    /// Above this mic-to-system level ratio the frame holds the user's own
+    /// voice, and the recorded mic is kept for it instead of the filtered one.
+    ///
+    /// The same discriminator, and the same measured number, the probe uses to
+    /// pick its bleed windows and the dedup uses for Tier B: bleed arrives
+    /// through a speaker and a room at 0.05–0.43 of the reference, the user's
+    /// own voice at 0.52 and up. Nothing between the two was measured, which
+    /// is why one constant serves all three.
+    ///
+    /// It exists because ERLE cannot tell subtraction from suppression. AEC3
+    /// protects the far end, not the near one: through double-talk it gates
+    /// whatever the mic is carrying, and on a real Discord meeting that cost
+    /// half the user's words in every span the teammate was also speaking.
+    /// Bounding the filter to bleed-shaped audio trades the double-talk
+    /// residue — which dedup and the cutter still see — for never deleting
+    /// speech only this stage can see.
+    static let nearEndRatioFloor: Float = 0.5
+
+    /// Levels are compared over this much either side of a frame. Raw 100 ms
+    /// frames cross constantly inside ordinary speech — a syllable's decay
+    /// dips under the other channel and back — so the same ±1 frame smoothing
+    /// `EnergyEnvelope.longestDominantRun` uses applies here.
+    static let nearEndSmoothingSeconds: TimeInterval = EnergyEnvelope.frameSeconds
+
     struct Outcome: Sendable {
         /// Cleaned, or the input untouched — always the input's length.
         var mic: [Float]
@@ -68,13 +92,17 @@ nonisolated enum EchoCancellationPrePass {
         /// Energy removed over the probe's bleed windows, in dB. Nil when
         /// nothing was applied.
         var erleDB: Double?
+        /// Share of the meeting handed back as recorded because the user's own
+        /// voice was in it. 1.0 would mean the filter reached nothing.
+        var nearEndProtectedFraction: Double = 0
 
         /// Numbers only — a log line about a meeting may not carry its words.
         var summary: String {
             guard applied else { return "aec: skipped (no echo path measured)" }
             return String(
-                format: "aec: applied delay=%.0fms coherence=%.2f erle=%.2fdB",
-                (delaySeconds ?? 0) * 1000, coherence, erleDB ?? 0
+                format: "aec: applied delay=%.0fms coherence=%.2f erle=%.2fdB near-end-kept=%.0f%%",
+                (delaySeconds ?? 0) * 1000, coherence, erleDB ?? 0,
+                nearEndProtectedFraction * 100
             )
         }
     }
@@ -131,14 +159,80 @@ nonisolated enum EchoCancellationPrePass {
             return identity
         }
 
-        let output = Array(cleaned.prefix(mic.count))
+        let filtered = Array(cleaned.prefix(mic.count))
+        let protectedMic = protectingNearEnd(filtered: filtered, mic: mic, system: system)
+        let output = protectedMic.samples
         return Outcome(
             mic: output,
             applied: true,
             delaySeconds: verdict.delaySeconds,
             coherence: verdict.coherence,
-            erleDB: erleDB(input: mic, output: output, windowStarts: verdict.bleedWindowStarts)
+            // Measured on what the pass will actually decode, so the number
+            // reports the subtraction that survived the near-end guard rather
+            // than the one the filter proposed.
+            erleDB: erleDB(input: mic, output: output, windowStarts: verdict.bleedWindowStarts),
+            nearEndProtectedFraction: protectedMic.protectedFraction
         )
+    }
+
+    // MARK: - Near-end protection
+
+    /// The filtered mic where the audio is bleed-shaped, the recorded mic
+    /// where the user's own voice is in it.
+    ///
+    /// The decision is per 100 ms frame and the two are crossfaded across a
+    /// frame rather than spliced, because a step between two different
+    /// versions of the same instant is a click, and a click is a token.
+    static func protectingNearEnd(
+        filtered: [Float],
+        mic: [Float],
+        system: [Float]
+    ) -> (samples: [Float], protectedFraction: Double) {
+        let frameSeconds = EnergyEnvelope.frameSeconds
+        let samplesPerFrame = frameSeconds * AudioConstants.sampleRate
+        let frames = max(1, Int((Double(mic.count) / samplesPerFrame).rounded(.up)))
+        let micEnvelope = EnergyEnvelope(samples: mic)
+        let systemEnvelope = EnergyEnvelope(samples: system)
+
+        var keepRecorded = [Float](repeating: 0, count: frames)
+        var protectedFrames = 0
+        for index in 0 ..< frames {
+            let start = Double(index) * frameSeconds
+            let from = max(0, start - nearEndSmoothingSeconds)
+            let to = start + frameSeconds + nearEndSmoothingSeconds
+            let near = micEnvelope.rms(from: from, to: to) ?? 0
+            let far = systemEnvelope.rms(from: from, to: to) ?? 0
+            // Below the floor there is no near end to protect — an empty
+            // frame must not hold the filter off the bleed around it. Above
+            // it, no reference playing means no bleed is possible at all.
+            let isNearEnd = near >= EnergyEnvelope.silenceFloor
+                && (far <= 0 || near > nearEndRatioFloor * far)
+            keepRecorded[index] = isNearEnd ? 1 : 0
+            if isNearEnd { protectedFrames += 1 }
+        }
+
+        let fraction = Double(protectedFrames) / Double(frames)
+        guard protectedFrames > 0 else { return (filtered, 0) }
+
+        var output = filtered
+        for i in 0 ..< min(output.count, mic.count) {
+            // Frame decisions sit at frame centres; between two centres the
+            // weight ramps, which is the crossfade.
+            let position = Double(i) / samplesPerFrame - 0.5
+            let lower = Int(position.rounded(.down))
+            let a = keepRecorded[min(max(lower, 0), frames - 1)]
+            let b = keepRecorded[min(max(lower + 1, 0), frames - 1)]
+            // The flat stretches either side of a ramp stay bit-exact: this
+            // stage must be able to hand back exactly what it was given.
+            if a == b {
+                if a == 1 { output[i] = mic[i] }
+                continue
+            }
+            let weight = Float(position - Double(lower))
+            let gain = a + (b - a) * weight
+            output[i] = gain * mic[i] + (1 - gain) * filtered[i]
+        }
+        return (output, fraction)
     }
 
     // MARK: - Feeding
