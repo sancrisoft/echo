@@ -86,6 +86,34 @@ nonisolated final class MicCaptureGapTracker: @unchecked Sendable {
     }
 }
 
+/// The summary backfill's pure eligibility rule (§3.6): an explicit user
+/// request always front-runs — even while automatic summaries are OFF (the
+/// manual "Generate summary" button must keep working) — and the
+/// newest-first scan over summary-less meetings runs only while they're on.
+/// `ineligibleIDs` is the transcript-about-to-change set (pending
+/// finalizations plus the coordinator's queued/running passes); a requested
+/// meeting inside it stays deferred exactly like a scanned one.
+nonisolated enum SummaryBackfillPolicy {
+    static func nextMeeting(
+        metas: [MeetingMeta],
+        requestedID: UUID?,
+        autoGenerateSummaries: Bool,
+        failedIDs: Set<UUID>,
+        ineligibleIDs: Set<UUID>
+    ) -> MeetingMeta? {
+        if let requestedID,
+           let requested = metas.first(where: {
+               $0.id == requestedID && !$0.hasSummary && !ineligibleIDs.contains($0.id)
+           }) {
+            return requested
+        }
+        guard autoGenerateSummaries else { return nil }
+        return metas.first {
+            !$0.hasSummary && !failedIDs.contains($0.id) && !ineligibleIDs.contains($0.id)
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class RecordingController {
@@ -171,6 +199,12 @@ final class RecordingController {
     /// default preserves nothing (today's behavior; tests that want retention
     /// inject their own).
     @ObservationIgnored var shouldKeepRecordingsAfterTranscription: @MainActor () -> Bool = { false }
+
+    /// Reads the auto-summary preference (§3.6) — same injection pattern as
+    /// the retention flag, wired in `EchoApp.init`. Gates the post-stop
+    /// generation and the backfill's scan; NEVER a user-requested summary,
+    /// `retrySummary`, or model downloads. Defaults to today's behavior.
+    @ObservationIgnored var shouldAutoGenerateSummaries: @MainActor () -> Bool = { true }
 
     /// One-shot per app run: the record gesture primes both capture-permission
     /// prompts exactly once, ahead of the readiness check (ADR-009).
@@ -617,15 +651,18 @@ final class RecordingController {
 
             // A user-requested meeting front-runs the newest-first scan;
             // consumed exactly once so the loop then resumes normal order.
-            let requested = requestedSummaryID.flatMap { id in
-                library.metas.first { $0.id == id && !$0.hasSummary && !pending.contains(id) }
-            }
+            // §3.6 gate 2 lives inside the policy: with automatic summaries
+            // off the scan is skipped but the requested ID is still honored —
+            // the manual button must keep working.
+            let requested = requestedSummaryID
             requestedSummaryID = nil
-            guard let meta = requested
-                ?? library.metas.first(where: {
-                    !$0.hasSummary && !backfillFailedIDs.contains($0.id) && !pending.contains($0.id)
-                })
-            else { return }
+            guard let meta = SummaryBackfillPolicy.nextMeeting(
+                metas: library.metas,
+                requestedID: requested,
+                autoGenerateSummaries: shouldAutoGenerateSummaries(),
+                failedIDs: backfillFailedIDs,
+                ineligibleIDs: pending
+            ) else { return }
 
             guard let record = await library.loadRecord(meta.id), !record.segments.isEmpty else {
                 backfillFailedIDs.insert(meta.id)
@@ -819,11 +856,17 @@ final class RecordingController {
                 if generation == self.sessionGeneration {
                     self.state.replaceSegments(final)
                 }
-                await self.generateSummary(
-                    from: final,
-                    sessionGeneration: generation,
-                    meetingID: meetingID
-                )
+                // §3.6 gate 1: with automatic summaries off the just-stopped
+                // meeting simply has no summary — the AI Summary tab's
+                // existing empty state offers Generate. Downloads are not
+                // gated (they also serve later manual requests).
+                if self.shouldAutoGenerateSummaries() {
+                    await self.generateSummary(
+                        from: final,
+                        sessionGeneration: generation,
+                        meetingID: meetingID
+                    )
+                }
             case .failed, .deferred:
                 // Terminal failure: no transcript, so nothing to summarize.
                 // Deferred: a new recording preempted the pass, the meeting
