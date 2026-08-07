@@ -68,6 +68,9 @@ enum MeetingSortOrder: String, CaseIterable, Identifiable {
 
 struct DashboardView: View {
     @Environment(RecordingController.self) private var controller
+    #if DEBUG
+    @Environment(\.openSettings) private var openSettings
+    #endif
 
     /// The detail currently covering the list, if any. Lives on the shell so
     /// the window title bar can swap between the breadcrumb and the opened
@@ -127,6 +130,24 @@ struct DashboardView: View {
         // this window to PNG every 2 s so UI work can be inspected from the
         // CLI without screen-recording permission. Inert in normal runs.
         .task {
+            // ECHO_OPEN_SETTINGS=1 (+ ECHO_SETTINGS_PROBE=path): open the
+            // native settings window from the CLI, dump every window's
+            // identifier/title plus the activation policy, and quit — how the
+            // Settings-scene window identifier `ActivationPolicy.sync`
+            // matches was verified on this OS.
+            if ProcessInfo.processInfo.environment["ECHO_OPEN_SETTINGS"] == "1" {
+                try? await Task.sleep(for: .seconds(1))
+                openSettings()
+                try? await Task.sleep(for: .seconds(2))
+                if let probePath = ProcessInfo.processInfo.environment["ECHO_SETTINGS_PROBE"] {
+                    let lines = NSApp.windows.map {
+                        "id=\($0.identifier?.rawValue ?? "nil") title=\($0.title) visible=\($0.isVisible) class=\(type(of: $0))"
+                    } + ["policy=\(NSApp.activationPolicy().rawValue)"]
+                    try? lines.joined(separator: "\n")
+                        .write(toFile: probePath, atomically: true, encoding: .utf8)
+                    NSApp.terminate(nil)
+                }
+            }
             guard let path = ProcessInfo.processInfo.environment["ECHO_SNAPSHOT_PATH"] else { return }
             // ECHO_APPEARANCE=dark|light forces the app-wide appearance so
             // dark-mode rendering can be verified regardless of the system
@@ -344,7 +365,7 @@ struct DashboardView: View {
                 MeetingGlyph(size: 20)
                 Text("Echo").font(.headline)
                 Text("/").foregroundStyle(.tertiary)
-                Text(controller.library.section == .trash ? "Trash" : "Meetings")
+                Text(sectionTitle)
                     .font(.headline)
                     .foregroundStyle(.secondary)
             }
@@ -355,6 +376,14 @@ struct DashboardView: View {
             if controller.state.isRecording {
                 RecPill { opened = OpenedDetail(target: .live) }
             }
+        }
+    }
+
+    private var sectionTitle: String {
+        switch controller.library.section {
+        case .all: return "Meetings"
+        case .trash: return "Trash"
+        case .settings: return "Settings"
         }
     }
 
@@ -526,6 +555,16 @@ private struct LibrarySidebar: View {
                 opened = nil
             }
 
+            SidebarRow(
+                title: "Settings",
+                systemImage: "gear",
+                count: nil,
+                isSelected: library.section == .settings
+            ) {
+                library.section = .settings
+                opened = nil
+            }
+
             Spacer()
 
             Divider()
@@ -562,12 +601,13 @@ private struct LibrarySidebar: View {
     }
 }
 
-/// One selectable sidebar row: icon + title + trailing count, with the
-/// selected state drawn as a tinted rounded rectangle (as in the mockup).
+/// One selectable sidebar row: icon + title + trailing count (`nil` hides
+/// the badge — the Settings row has nothing to count), with the selected
+/// state drawn as a tinted rounded rectangle (as in the mockup).
 private struct SidebarRow: View {
     let title: String
     let systemImage: String
-    let count: Int
+    let count: Int?
     let isSelected: Bool
     let action: () -> Void
 
@@ -582,9 +622,11 @@ private struct SidebarRow: View {
                     .font(.body.weight(isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? Color.echoIndigo : .primary)
                 Spacer()
-                Text("\(count)")
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(isSelected ? Color.echoIndigo : .secondary)
+                if let count {
+                    Text("\(count)")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(isSelected ? Color.echoIndigo : .secondary)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
@@ -614,6 +656,8 @@ private struct MeetingLibraryDetail: View {
                 AllMeetingsView(opened: $opened)
             case .trash:
                 TrashView(opened: $opened)
+            case .settings:
+                SettingsPageView()
             }
         }
         // Opening a meeting shows the detail as a full-cover overlay (its back
@@ -924,6 +968,29 @@ private struct TrashView: View {
 
     private var deletePresented: Binding<Bool> {
         Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })
+    }
+}
+
+// MARK: - Settings (embedded host)
+
+/// The dashboard's Settings page: the same `SettingsView` the native scene
+/// hosts, under a header matching the Meetings/Trash panes.
+private struct SettingsPageView: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Settings")
+                    .font(.title2.bold())
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+
+            SettingsView()
+                .frame(maxWidth: 720)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
     }
 }
 

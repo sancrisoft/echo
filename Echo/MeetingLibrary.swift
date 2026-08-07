@@ -19,10 +19,13 @@ enum MeetingSelection: Hashable, Sendable {
     case meeting(UUID)
 }
 
-/// The library's two top-level views, bound to the sidebar.
+/// The library's top-level views, bound to the sidebar. `.settings` renders
+/// the embedded settings page in the detail pane — the second host of the
+/// same `SettingsView` the native Settings scene shows.
 enum LibrarySection: Hashable, Sendable {
     case all
     case trash
+    case settings
 }
 
 @Observable

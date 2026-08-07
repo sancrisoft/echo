@@ -113,5 +113,17 @@ struct EchoApp: App {
         .restorationBehavior(.disabled)
         .defaultSize(width: 1100, height: 720)
         .windowResizability(.contentMinSize)
+
+        // The native settings window (Cmd+, and the menu-bar gear). The same
+        // SettingsView the dashboard sidebar embeds — one view, two hosts.
+        // `EchoAppDelegate.sync()` keeps the app `.regular` while it is open,
+        // exactly as it does for the dashboard.
+        Settings {
+            SettingsView()
+                .environment(controller)
+                .environment(settings)
+                .environment(callDetection)
+                .frame(minWidth: 520, minHeight: 400)
+        }
     }
 }

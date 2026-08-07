@@ -44,22 +44,38 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
     }
 
-    /// Promotes to `.regular` while the dashboard is on screen, demotes back to
-    /// `.accessory` when it isn't. Cheap and idempotent — safe to over-call.
+    /// Promotes to `.regular` while the dashboard OR the native settings
+    /// window is on screen, demotes back to `.accessory` when neither is.
+    /// Cheap and idempotent — safe to over-call. Without the settings half,
+    /// an open Settings window would be unreachable from Cmd-Tab.
     static func sync() {
-        let dashboardIsOpen = NSApp.windows.contains {
-            $0.isVisible && $0.identifier?.rawValue == EchoWindow.dashboard
+        let promoting = NSApp.windows.filter {
+            $0.isVisible && ($0.identifier?.rawValue == EchoWindow.dashboard || isSettingsWindow($0))
         }
-        let desired: NSApplication.ActivationPolicy = dashboardIsOpen ? .regular : .accessory
+        let desired: NSApplication.ActivationPolicy = promoting.isEmpty ? .accessory : .regular
         guard NSApp.activationPolicy() != desired else { return }
         NSApp.setActivationPolicy(desired)
         if desired == .regular {
             // Promoting an accessory app can leave it behind whatever was
-            // frontmost, so re-assert the dashboard the user just opened.
+            // frontmost, so re-assert the window the user just opened —
+            // the dashboard when it is what's open, else the settings window
+            // that triggered the promotion.
             NSApp.activate(ignoringOtherApps: true)
-            NSApp.windows
-                .first { $0.identifier?.rawValue == EchoWindow.dashboard }?
+            (promoting.first { $0.identifier?.rawValue == EchoWindow.dashboard } ?? promoting.first)?
                 .makeKeyAndOrderFront(nil)
         }
+    }
+
+    /// The SwiftUI `Settings` scene's window. Its identifier is the runtime's,
+    /// not ours to set — "com_apple_SwiftUI_Settings_window" on this OS
+    /// (verified via the ECHO_SETTINGS_PROBE dump). Matched loosely, with the
+    /// window title ("Echo Settings", also runtime-owned) as the fallback for
+    /// an identifier rename in a future OS; the dashboard's identifier is
+    /// "dashboard", so neither test can capture it.
+    private static func isSettingsWindow(_ window: NSWindow) -> Bool {
+        if window.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true {
+            return true
+        }
+        return !(window is NSPanel) && window.title.localizedCaseInsensitiveContains("settings")
     }
 }
