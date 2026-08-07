@@ -745,6 +745,14 @@ nonisolated enum ParakeetPass {
         }
 
         var nextSilence = 0
+        // The audio decides THAT a row ends; the tokenization decides WHERE.
+        // A silence lands between two words, but the token that happens to
+        // straddle it is often mid-word — the model emits sub-word pieces, so
+        // cutting at the straddling token shears "break" into "bre" + "ak"
+        // and "Nubank" into "Nuban" + "k". Latching the decision and spending
+        // it at the next legal boundary keeps every cut the audio asked for
+        // and puts none of them inside a word.
+        var pendingCut = false
         for timing in timings {
             if let previous = current.last, let first = current.first {
                 // Silences the emitted tokens already span can't split
@@ -758,7 +766,11 @@ nonisolated enum ParakeetPass {
                     && silenceStarts[nextSilence] <= timing.startTime
 
                 if crossesSilence || timing.startTime - previous.endTime > segmentGapSeconds {
+                    pendingCut = true
+                }
+                if pendingCut, canStartSegment(timing.token) {
                     flush()
+                    pendingCut = false
                 } else if isWordStart(timing.token),
                           timing.endTime - first.startTime > maxSegmentSeconds {
                     flush()
@@ -782,6 +794,19 @@ nonisolated enum ParakeetPass {
 
     private static func isWordStart(_ token: String) -> Bool {
         token.hasPrefix(wordBoundary) || token.hasPrefix(" ")
+    }
+
+    /// Whether a row may begin at this token.
+    ///
+    /// A word start always may. So may a token carrying no letter and no
+    /// digit: the detokenizer welds it to whatever precedes it, so opening a
+    /// row there cannot strand a word fragment, and a row that turns out to
+    /// be only punctuation is dropped by `flush`. That second case is what
+    /// keeps the lone "." the model draws out of a long silence from being
+    /// welded onto the last real word — which would hand the dedup a row
+    /// whose span covers the whole pause.
+    static func canStartSegment(_ token: String) -> Bool {
+        isWordStart(token) || !token.contains { $0.isLetter || $0.isNumber }
     }
 
     // MARK: Audio reading

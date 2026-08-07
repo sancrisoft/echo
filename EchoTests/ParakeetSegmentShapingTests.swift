@@ -162,6 +162,67 @@ struct ParakeetSegmentShapingTests {
 
         #expect(cut(timings, silenceStarts: [0.0, 1.0, 9.0]).map(\.text) == ["a b"])
     }
+
+    // MARK: - Cuts land on word boundaries
+
+    /// A sub-word piece: what the model actually emits inside a word, and
+    /// what a boundary must never be placed in front of.
+    private func piece(_ text: String, _ start: Double, _ end: Double) -> TokenTiming {
+        TokenTiming(token: text, tokenId: 0, startTime: start, endTime: end, confidence: 1)
+    }
+
+    /// The field regression this exists for. The model emits "break" as
+    /// "▁bre" + "ak", so a boundary taken at the straddling token shears the
+    /// word in half — a real transcript came back reading "on the bre" / "ak".
+    /// The audio still decides THAT the row ends; the tokenization decides
+    /// WHERE, and the cut waits for the next word.
+    @Test("a silence inside a word cuts at the next word start")
+    func silenceNeverSplitsAWord() {
+        let timings = [
+            token("the", 0.0, 0.4),
+            token("bre", 0.5, 1.3), piece("ak", 1.5, 1.8),
+            token("now", 1.9, 2.3),
+        ]
+
+        #expect(cut(timings, silenceStarts: [1.4]).map(\.text) == ["the break", "now"])
+    }
+
+    /// Same for the timing-gap rule: the model reporting a two-second hole in
+    /// the middle of a word is a timing artefact, not a pause to cut at.
+    @Test("a long token gap inside a word does not split it either")
+    func longGapInsideAWordDoesNotSplit() {
+        let timings = [token("wor", 0.0, 0.4), piece("d", 2.0, 2.4)]
+
+        #expect(cut(timings).map(\.text) == ["word"])
+    }
+
+    /// The cut is deferred, not dropped — a boundary the audio asked for
+    /// still lands, at the first place it legally can.
+    @Test("a deferred cut still fires at the next word")
+    func deferredCutIsNotLost() {
+        let timings = [
+            token("a", 0.0, 0.4),
+            token("b", 0.5, 0.9), piece("c", 1.0, 1.4),
+            token("d", 1.5, 1.9), token("e", 2.0, 2.4),
+        ]
+
+        #expect(cut(timings, silenceStarts: [0.95]).map(\.text) == ["a bc", "d e"])
+    }
+
+    /// Punctuation may open a row: the detokenizer welds it to whatever came
+    /// before, so a boundary in front of it strands no word fragment. This is
+    /// what keeps the lone "." of a long pause off the end of the last real
+    /// word, where it would stretch that row's span across the whole silence.
+    @Test("a pause before punctuation still ends the row")
+    func punctuationMayStartASegment() {
+        let timings = [
+            token("hola", 0.0, 0.4),
+            piece(".", 2.0, 2.2),
+            token("adios", 2.3, 2.7),
+        ]
+
+        #expect(cut(timings, silenceStarts: []).map(\.text) == ["hola", ". adios"])
+    }
 }
 
 @Suite("EnergyEnvelope silence")
