@@ -233,9 +233,14 @@ struct EchoDedupEvidenceTests {
     /// Levels for the candidate's own window: `own` is the mic there, `other`
     /// the system channel over that same moment.
     private func levels(
-        _ segment: TranscriptSegment, own: Float, other: Float
+        _ segment: TranscriptSegment,
+        own: Float,
+        other: Float,
+        ownVoiceSeconds: TimeInterval = 0
     ) -> [UUID: EchoDedupPolicy.SpanLevels] {
-        [segment.id: EchoDedupPolicy.SpanLevels(own: own, other: other)]
+        [segment.id: EchoDedupPolicy.SpanLevels(
+            own: own, other: other, ownVoiceSeconds: ownVoiceSeconds
+        )]
     }
 
     @Test func weakTextMatchWithoutEvidenceIsKept() {
@@ -293,6 +298,43 @@ struct EchoDedupEvidenceTests {
         let evidence = levels(echo, own: 0.070, other: 0.030)
 
         #expect(policy.verdict(for: echo, against: [teamSegment], spanLevels: evidence)?.tier == .text)
+    }
+
+    // MARK: - Own-voice guard
+
+    /// A mixed segment: the teammates' audio runs underneath, so the levels
+    /// average out to bleed and the text is largely theirs — but the user
+    /// demonstrably spoke for 3.7 s inside it, and those words exist nowhere
+    /// else. Whole-segment suppression would take them with the echo.
+    @Test func aSustainedRunOfTheUsersOwnVoiceKeepsAWholeMixedSegment() {
+        let mixed = mic("invoice batch stalled early today", start: 50.2, end: 62.2)
+        let evidence = levels(mixed, own: 0.017, other: 0.041, ownVoiceSeconds: 3.7)
+
+        #expect(policy.verdict(for: mixed, against: [teamSegment], spanLevels: evidence) == nil)
+    }
+
+    /// The guard outranks Tier A too: a strong text match is still only
+    /// evidence about words, and this is evidence about who was talking.
+    @Test func theGuardKeepsSegmentsTheTextAloneWouldHaveTaken() {
+        let mixed = mic("the invoice batch failed again overnight", start: 50.2, end: 62.2)
+        let evidence = levels(mixed, own: 0.017, other: 0.041, ownVoiceSeconds: 1.1)
+
+        #expect(policy.verdict(for: mixed, against: [teamSegment], spanLevels: evidence) == nil)
+    }
+
+    /// Below the threshold it is the echo's own modulation crossing over, not
+    /// speech, and the row is still bleed. 0.8 s was a real measured margin.
+    @Test(arguments: [0.0, 0.4, 0.8])
+    func briefCrossoversDoNotRescueBleed(ownVoiceSeconds: TimeInterval) {
+        let echo = mic("invoice batch stalled early today", start: 50.2, end: 54.4)
+        let evidence = levels(
+            echo, own: 0.01, other: 0.04, ownVoiceSeconds: ownVoiceSeconds
+        )
+
+        let verdict = policy.verdict(for: echo, against: [teamSegment], spanLevels: evidence)
+
+        #expect(verdict?.tier == .assisted)
+        #expect(verdict?.ownVoiceSeconds == ownVoiceSeconds)
     }
 
     /// The ratio is a property of the candidate's own window on both channels,

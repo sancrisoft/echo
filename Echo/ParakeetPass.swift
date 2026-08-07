@@ -182,6 +182,50 @@ nonisolated struct EnergyEnvelope: Sendable {
         for i in first..<last { sum += meanSquares[i] }
         return (sum / Float(last - first)).squareRoot()
     }
+
+    /// How many frames either side of a frame are averaged in before comparing
+    /// the two channels. Raw 100 ms frames cross over constantly during
+    /// ordinary speech — a syllable's decay dips under the other channel and
+    /// back — so a run measured on them is chopped into meaningless slivers.
+    /// Smoothing over 300 ms makes "dominant" mean sustained, not momentary.
+    private static let dominanceSmoothing = 1
+
+    /// The longest uninterrupted stretch of `[from, to)` where this channel
+    /// carries more energy than `other`.
+    ///
+    /// This is the one thing an echo can never fake. A bleed segment is the
+    /// other channel arriving quieter through a speaker and a room, so it is
+    /// under that channel for its whole length; a second of the reverse means
+    /// the near speaker actually said something here. Frames only one channel
+    /// has are not dominance — they are the absence of a comparison.
+    func longestDominantRun(
+        over other: EnergyEnvelope,
+        from: TimeInterval,
+        to: TimeInterval
+    ) -> TimeInterval {
+        let first = max(0, Int((from / Self.frameSeconds).rounded(.down)))
+        let last = min(
+            min(meanSquares.count, other.meanSquares.count),
+            Int((to / Self.frameSeconds).rounded(.up))
+        )
+        guard first < last else { return 0 }
+
+        var longest = 0
+        var current = 0
+        for i in first..<last {
+            let window = max(first, i - Self.dominanceSmoothing)
+                ..< min(last, i + Self.dominanceSmoothing + 1)
+            var mine: Float = 0
+            var theirs: Float = 0
+            for j in window {
+                mine += meanSquares[j]
+                theirs += other.meanSquares[j]
+            }
+            current = mine > theirs ? current + 1 : 0
+            longest = max(longest, current)
+        }
+        return Double(longest) * Self.frameSeconds
+    }
 }
 
 // MARK: - The pass
@@ -365,10 +409,18 @@ nonisolated enum ParakeetPass {
         for segment in segments {
             let opposite: AudioChannel = segment.channel == .microphone ? .system : .microphone
             guard
-                let own = envelopes[segment.channel]?.rms(from: segment.start, to: segment.end),
-                let other = envelopes[opposite]?.rms(from: segment.start, to: segment.end)
+                let ownEnvelope = envelopes[segment.channel],
+                let otherEnvelope = envelopes[opposite],
+                let own = ownEnvelope.rms(from: segment.start, to: segment.end),
+                let other = otherEnvelope.rms(from: segment.start, to: segment.end)
             else { continue }
-            levels[segment.id] = EchoDedupPolicy.SpanLevels(own: own, other: other)
+            levels[segment.id] = EchoDedupPolicy.SpanLevels(
+                own: own,
+                other: other,
+                ownVoiceSeconds: ownEnvelope.longestDominantRun(
+                    over: otherEnvelope, from: segment.start, to: segment.end
+                )
+            )
         }
         return levels
     }
@@ -381,12 +433,13 @@ nonisolated enum ParakeetPass {
         _ verdict: EchoDedupPolicy.SuppressionVerdict
     ) -> String {
         String(
-            format: "suppressed %@ %.2f–%.2fs tier=%@ containment=%.2f ratio=%@ team=%.2f–%.2fs text=%@",
+            format: "suppressed %@ %.2f–%.2fs tier=%@ containment=%.2f ratio=%@ ownvoice=%.1fs team=%.2f–%.2fs text=%@",
             candidate.channel.rawValue,
             candidate.start, candidate.end,
             verdict.tier.rawValue,
             verdict.containment,
             verdict.rmsRatio.map { String(format: "%.2f", $0) } ?? "n/a",
+            verdict.ownVoiceSeconds,
             verdict.match.start, verdict.match.end,
             candidate.text
         )

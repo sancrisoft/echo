@@ -60,6 +60,20 @@ struct EchoDedupPolicy {
     /// short acks ("yes", "ok") are indistinguishable from echo by text alone.
     var minimumTokenCount: Int = 3
 
+    /// An uninterrupted stretch this long of the candidate's own channel
+    /// out-carrying the other one means the user genuinely spoke inside this
+    /// segment, and the segment is kept whole — whatever its text says.
+    ///
+    /// Segments are the unit of suppression but not the unit of speech: the
+    /// pass cuts at silences, and when a teammate's audio runs continuously
+    /// underneath a reply there is no silence to cut at, so one segment ends
+    /// up holding both. Measured on the fixtures, 10 of 19 suppressed rows
+    /// carried 1.1–6.6 s of the user's own voice alongside the echo. Deleting
+    /// those loses words that exist nowhere else; leaving the echo in loses
+    /// nothing. A full second of sustained dominance is far more than the
+    /// crossover flicker of an echo's own modulation.
+    var ownVoiceRescueSeconds: TimeInterval = 1.0
+
     /// Two tokens with this many leading characters in common count as the
     /// same word. The channels are transcribed independently, so endings drift
     /// ("escanear" / "escanea") while stems do not.
@@ -88,6 +102,10 @@ struct EchoDedupPolicy {
         /// `own ÷ other` over the candidate's own window. Nil when the caller
         /// supplied no evidence for this segment.
         let rmsRatio: Float?
+        /// How close this row came to the own-voice guard that would have kept
+        /// it — zero without evidence. Reported so a replay shows the margin,
+        /// not just the outcome.
+        let ownVoiceSeconds: TimeInterval
     }
 
     /// One segment's level on BOTH channels over its own time span — the
@@ -101,10 +119,15 @@ struct EchoDedupPolicy {
         let own: Float
         /// The opposite channel, over that same span.
         let other: Float
+        /// Longest uninterrupted stretch, in seconds, where `own` out-carries
+        /// `other` inside the span — an echo of the other channel cannot
+        /// produce one, so it is positive proof the speaker was here.
+        let ownVoiceSeconds: TimeInterval
 
-        nonisolated init(own: Float, other: Float) {
+        nonisolated init(own: Float, other: Float, ownVoiceSeconds: TimeInterval = 0) {
             self.own = own
             self.other = other
+            self.ownVoiceSeconds = ownVoiceSeconds
         }
     }
 
@@ -128,6 +151,12 @@ struct EchoDedupPolicy {
         let linked = team.filter { $0.channel == .system && overlaps(candidate, $0) }
         guard !linked.isEmpty else { return nil }
 
+        // Own-voice guard, ahead of every tier including the text-only one.
+        // Text says what a segment overlaps with; this says the user was
+        // actually talking inside it, and that outranks any similarity score.
+        let levels = spanLevels[candidate.id]
+        if let levels, levels.ownVoiceSeconds >= ownVoiceRescueSeconds { return nil }
+
         // Pooled: the echo of one utterance routinely lands across two Team
         // segments (independent cutters), and scoring against either alone
         // would read as half a match.
@@ -143,20 +172,23 @@ struct EchoDedupPolicy {
         }
         guard let best else { return nil }
 
-        let ratio = levelRatio(for: candidate, spanLevels: spanLevels)
+        let ratio = levels.flatMap { $0.other > 0 ? $0.own / $0.other : nil }
 
-        if containment >= textOnlyContainment {
-            return SuppressionVerdict(
-                match: best, tier: .text, containment: containment, rmsRatio: ratio
+        func verdict(_ tier: Tier) -> SuppressionVerdict {
+            SuppressionVerdict(
+                match: best,
+                tier: tier,
+                containment: containment,
+                rmsRatio: ratio,
+                ownVoiceSeconds: levels?.ownVoiceSeconds ?? 0
             )
         }
-        // Tier B — and ONLY here does energy enter. Absent evidence keeps the
-        // segment: the weak text match was never enough on its own.
-        if let ratio, ratio <= assistedMaxRmsRatio {
-            return SuppressionVerdict(
-                match: best, tier: .assisted, containment: containment, rmsRatio: ratio
-            )
-        }
+
+        if containment >= textOnlyContainment { return verdict(.text) }
+        // Tier B — and ONLY here does level enter as grounds to delete. Absent
+        // evidence keeps the segment: the weak text match was never enough on
+        // its own.
+        if let ratio, ratio <= assistedMaxRmsRatio { return verdict(.assisted) }
         return nil
     }
 
@@ -246,18 +278,6 @@ struct EchoDedupPolicy {
     }
 
     // MARK: - Evidence
-
-    /// How loud the candidate's own channel is against the other one over the
-    /// very same moment. Nil whenever the evidence is missing or the
-    /// denominator is degenerate — an unknown ratio must never read as a quiet
-    /// one, and a silent opposite channel is the *opposite* of bleed anyway.
-    private func levelRatio(
-        for candidate: TranscriptSegment,
-        spanLevels: [UUID: SpanLevels]
-    ) -> Float? {
-        guard let levels = spanLevels[candidate.id], levels.other > 0 else { return nil }
-        return levels.own / levels.other
-    }
 
     // MARK: - Normalization
 

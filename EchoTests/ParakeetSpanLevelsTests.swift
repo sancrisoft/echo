@@ -61,6 +61,57 @@ struct EnergyEnvelopeTests {
         #expect(EnergyEnvelope(samples: []).rms(from: 0.0, to: 1.0) == nil)
     }
 
+    // MARK: - Dominance
+
+    /// Bleed is the other channel arriving quieter, so it never out-carries
+    /// it; a sustained run of the reverse is the near speaker talking.
+    @Test("a channel that is louder throughout dominates for the whole window")
+    func fullDominance() {
+        let loud = EnergyEnvelope(samples: Array(repeating: 0.4, count: Int(rate * 2)))
+        let quiet = EnergyEnvelope(samples: Array(repeating: 0.1, count: Int(rate * 2)))
+
+        #expect(abs(loud.longestDominantRun(over: quiet, from: 0.0, to: 2.0) - 2.0) < 0.15)
+        #expect(quiet.longestDominantRun(over: loud, from: 0.0, to: 2.0) == 0)
+    }
+
+    /// Only the longest UNINTERRUPTED stretch counts: two half-second bursts
+    /// are the echo's modulation crossing over, one sustained second is not.
+    @Test("the run is the longest unbroken stretch, not the total")
+    func longestRunNotTotal() {
+        // 0.5 s loud, 0.5 s quiet, 1.5 s loud, against a constant channel.
+        var samples = [Float](repeating: 0.4, count: Int(rate / 2))
+        samples += [Float](repeating: 0.05, count: Int(rate / 2))
+        samples += [Float](repeating: 0.4, count: Int(rate * 3 / 2))
+        let speaker = EnergyEnvelope(samples: samples)
+        let steady = EnergyEnvelope(samples: Array(repeating: 0.1, count: Int(rate * 5 / 2)))
+
+        let run = speaker.longestDominantRun(over: steady, from: 0.0, to: 2.5)
+
+        #expect(run > 1.2 && run < 1.7)
+    }
+
+    @Test("dominance is measured only inside the requested window")
+    func dominanceIsWindowed() {
+        var samples = [Float](repeating: 0.05, count: Int(rate))
+        samples += [Float](repeating: 0.4, count: Int(rate))
+        let speaker = EnergyEnvelope(samples: samples)
+        let steady = EnergyEnvelope(samples: Array(repeating: 0.1, count: Int(rate * 2)))
+
+        #expect(speaker.longestDominantRun(over: steady, from: 0.0, to: 1.0) == 0)
+        #expect(speaker.longestDominantRun(over: steady, from: 1.0, to: 2.0) > 0.8)
+    }
+
+    /// Frames only one channel has are not dominance — they are the absence of
+    /// a comparison, and must not read as the user speaking.
+    @Test("frames the other channel does not cover never count as dominance")
+    func unmatchedFramesAreNotDominance() {
+        let long = EnergyEnvelope(samples: Array(repeating: 0.4, count: Int(rate * 10)))
+        let short = EnergyEnvelope(samples: Array(repeating: 0.1, count: Int(rate)))
+
+        #expect(long.longestDominantRun(over: short, from: 3.0, to: 9.0) == 0)
+        #expect(abs(long.longestDominantRun(over: short, from: 0.0, to: 9.0) - 1.0) < 0.15)
+    }
+
     /// The envelope replaces holding both channels' samples; it must still
     /// report a level a policy threshold can be applied to.
     @Test("the envelope reproduces a known rms within frame quantization")
@@ -116,6 +167,10 @@ struct ParakeetSpanLevelsTests {
         #expect(abs((levels[micSegment.id]?.other ?? 0) - 0.4) < 0.001)
         #expect(abs((levels[systemSegment.id]?.own ?? 0) - 0.4) < 0.001)
         #expect(abs((levels[systemSegment.id]?.other ?? 0) - 0.1) < 0.001)
+        // Own-voice is oriented the same way: the quiet mic never dominates,
+        // the loud system channel does so throughout its own segment.
+        #expect(levels[micSegment.id]?.ownVoiceSeconds == 0)
+        #expect((levels[systemSegment.id]?.ownVoiceSeconds ?? 0) > 0.8)
     }
 
     /// A one-channel meeting has nothing to compare against, so it yields no
