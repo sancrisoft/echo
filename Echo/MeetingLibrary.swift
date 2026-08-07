@@ -28,6 +28,22 @@ enum LibrarySection: Hashable, Sendable {
     case settings
 }
 
+/// The Settings page's storage breakdown (§3.9). Meetings and recordings are
+/// disjoint (recordings' bytes are subtracted from their folders), so the
+/// four rows roughly sum to the data folder's real footprint.
+nonisolated struct StorageBreakdown: Equatable, Sendable {
+    /// Non-trashed meeting folders, minus their preserved `audio-*` bytes.
+    var meetingsBytes: Int64 = 0
+    /// Preserved `audio-*` bytes across non-trashed folders.
+    var recordingsBytes: Int64 = 0
+    /// Non-trashed meetings holding a preserved recording.
+    var recordingsCount: Int = 0
+    /// Trashed meeting folders, whole.
+    var trashBytes: Int64 = 0
+    /// The models directory under the data root (display-only in v1).
+    var modelsBytes: Int64 = 0
+}
+
 @Observable
 @MainActor
 final class MeetingLibrary {
@@ -490,6 +506,75 @@ final class MeetingLibrary {
                 }
             }
         }
+    }
+
+    // MARK: - Storage breakdown (§3.9)
+
+    /// The Settings page's storage rows. `nil` until the first measurement;
+    /// recomputed on Settings-section appearance and after deletion actions
+    /// (`refreshStorageBreakdown`).
+    private(set) var storageBreakdown: StorageBreakdown?
+
+    /// Measures the breakdown off the main actor (the `measureStorage`
+    /// pattern: detached, utility priority) and publishes it.
+    func refreshStorageBreakdown() {
+        Task.detached(priority: .utility) { [
+            root = store.rootDirectory,
+            live = metas.map(\.id),
+            trashed = trashedMetas.map(\.id)
+        ] in
+            let breakdown = MeetingLibrary.measureBreakdown(
+                meetingsRoot: root,
+                nonTrashedIDs: live,
+                trashedIDs: trashed,
+                modelsDirectory: EchoPaths.modelsDirectory
+            )
+            await MainActor.run { [weak self] in self?.storageBreakdown = breakdown }
+        }
+    }
+
+    /// The pure aggregation, parameterized for tests (synthetic temp trees):
+    /// meeting folders split into "meeting data" vs "saved recording" by the
+    /// preserved names, trash counted whole, models counted whole.
+    nonisolated static func measureBreakdown(
+        meetingsRoot: URL,
+        nonTrashedIDs: [UUID],
+        trashedIDs: [UUID],
+        modelsDirectory: URL
+    ) -> StorageBreakdown {
+        var breakdown = StorageBreakdown()
+        let sizeKeys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey]
+        for id in nonTrashedIDs {
+            let folder = meetingsRoot.appending(path: id.uuidString, directoryHint: .isDirectory)
+            let whole = directorySize(at: folder)
+            var audio: Int64 = 0
+            for channel in [AudioChannel.microphone, .system] {
+                let url = folder.appending(
+                    path: MeetingStore.preservedAudioFileName(for: channel),
+                    directoryHint: .notDirectory
+                )
+                let values = try? url.resourceValues(forKeys: sizeKeys)
+                audio += Int64(values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0)
+            }
+            if audio > 0 { breakdown.recordingsCount += 1 }
+            breakdown.recordingsBytes += audio
+            breakdown.meetingsBytes += max(0, whole - audio)
+        }
+        for id in trashedIDs {
+            breakdown.trashBytes += directorySize(
+                at: meetingsRoot.appending(path: id.uuidString, directoryHint: .isDirectory)
+            )
+        }
+        breakdown.modelsBytes = directorySize(at: modelsDirectory)
+        return breakdown
+    }
+
+    /// Deletes every saved recording (the Settings page's global action) and
+    /// refreshes the footer + breakdown so the numbers move with the bytes.
+    func deleteAllPreservedAudio() async {
+        await store.deleteAllPreservedAudio()
+        await refresh()
+        refreshStorageBreakdown()
     }
 
     /// Measures the meeting data's on-disk footprint off the main actor and

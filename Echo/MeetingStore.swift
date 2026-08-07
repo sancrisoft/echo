@@ -598,6 +598,15 @@ actor MeetingStore {
         try writeJSON(meta, to: metaURL)
     }
 
+    /// Deletes every non-trashed meeting's preserved recording — the
+    /// Settings page's "Delete All Saved Recordings…" action. Per-meeting
+    /// named targets (`deletePreservedAudio`), never a directory sweep.
+    func deleteAllPreservedAudio() {
+        for meta in listMetas() where !meta.isTrashed {
+            deletePreservedAudio(for: meta.id)
+        }
+    }
+
     /// How many non-trashed meetings hold a preserved recording, and the
     /// recordings' total bytes — the Settings page's "Delete All Saved
     /// Recordings (3 — 214 MB)…" label and the storage breakdown's
