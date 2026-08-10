@@ -18,24 +18,33 @@ import Foundation
 /// contract: the ADR-024 launch scan reads `source` back to disambiguate
 /// pending meetings from terminal drafts, so they must never change.
 nonisolated struct TranscriptProvenance: Codable, Hashable, Sendable {
-    /// Whether the persisted transcript is final-pass output or the live floor.
+    /// What state the meeting's transcript converged to.
     nonisolated enum Source: String, Codable, Hashable, Sendable {
+        /// The pass succeeded — `transcript.json` holds its output.
         case finalPass
+        /// The pass exhausted its retries: the meeting has NO transcript, its
+        /// audio is kept, and only a manual Retry opens a new cycle.
+        case terminalFailure
+        /// Legacy, pre-Parakeet: the live transcript stood as a draft after a
+        /// terminal pass failure. Still a legal on-disk value — those meetings
+        /// have real text and keep their draft face — but nothing writes it
+        /// any more (there is no live transcript to floor on).
         case liveFloor
     }
 
     var source: Source
     /// The real speech-checkpoint name that produced the transcript (SP-005
-    /// naming-honesty register), e.g. "large-v3_947MB" (final pass, full tier)
-    /// or "large-v3-v20240930_626MB" (the live turbo).
+    /// naming-honesty register), e.g. "parakeet-tdt-0.6b-v3" today, or the
+    /// Whisper variant ids on pre-migration meetings.
     var modelName: String
-    /// The machine's RAM tier when the transcript landed — a `FinalPassTier`
-    /// raw value ("fullLargeV3" / "reuseLive"). Stored as a plain string so an
-    /// old meta with a tier a future build renamed still decodes.
+    /// Which model class served the transcript. "universal" since the Parakeet
+    /// migration — there is one class now; pre-migration metas carry the old
+    /// RAM-tier raw values ("fullLargeV3" / "reuseLive"). A plain string
+    /// precisely so historical values keep decoding.
     var tier: String
-    /// True when a full-tier machine's pass was actually served by the live
-    /// model (snapshot absent / load failed) — a degraded pass must be
-    /// distinguishable from a full-tier pass after the fact.
+    /// Legacy: true when a full-tier machine's Whisper pass was served by the
+    /// live model instead. Always false since the migration (one model, no
+    /// fallback), kept so old metas decode.
     var servedByFallback: Bool
 
     nonisolated init(source: Source, modelName: String, tier: String, servedByFallback: Bool) {
@@ -130,7 +139,7 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
     /// encoded only when present, like `wordCount`: pre-SP-007 metas decode to
     /// `nil` (the UI renders "unknown"), and an untouched old `meta.json`
     /// keeps its exact bytes. Written only in the same step as the transcript
-    /// it describes (`replaceTranscript` / `recordLiveFloorProvenance`).
+    /// it describes (`replaceTranscript` / `recordTerminalProvenance`).
     var transcriptProvenance: TranscriptProvenance?
 
     /// The real name of the summary model that wrote `summary.json` (SP-007,

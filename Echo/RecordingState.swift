@@ -72,16 +72,6 @@ final class RecordingState {
     /// widens); `nil` while idle.
     private(set) var captureScope: CaptureScope?
 
-    /// Set when a session starts although the speech model never loaded
-    /// (e.g. its download failed at launch): every ingested sample is being
-    /// dropped, so the UI must say "not transcribing" instead of pretending.
-    /// Cleared on stop; the next session re-checks after the load retry.
-    private(set) var transcriberUnavailable = false
-
-    func markTranscriberUnavailable(_ unavailable: Bool) {
-        transcriberUnavailable = unavailable
-    }
-
     func updateStatus(_ text: String) { status = text }
 
     init() {
@@ -111,7 +101,6 @@ final class RecordingState {
         inputNotice = nil
         micHealthNotice = nil
         systemHealthNotice = nil
-        transcriberUnavailable = false
         inputLevels = Array(repeating: Self.idleLevel, count: barCount)
         outputLevels = Array(repeating: Self.idleLevel, count: barCount)
     }

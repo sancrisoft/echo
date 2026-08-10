@@ -214,8 +214,8 @@ struct MeetingStoreTests {
         }
     }
 
-    @Test("recordLiveFloorProvenance writes exactly meta.json — transcript untouched")
-    func recordLiveFloorProvenanceWritesOnlyMeta() async throws {
+    @Test("recordTerminalProvenance writes exactly meta.json — transcript untouched")
+    func recordTerminalProvenanceWritesOnlyMeta() async throws {
         try await withTempStore { store, _ in
             let meta = makeMeta()
             let segments = makeSegments()
@@ -225,11 +225,11 @@ struct MeetingStoreTests {
             let filesBefore = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
 
             let provenance = makeProvenance(
-                source: .liveFloor,
-                modelName: "large-v3-v20240930_626MB",
-                tier: "reuseLive"
+                source: .terminalFailure,
+                modelName: ParakeetModelManager.modelID,
+                tier: "universal"
             )
-            try await store.recordLiveFloorProvenance(for: meta.id, provenance: provenance)
+            try await store.recordTerminalProvenance(for: meta.id, provenance: provenance)
 
             let loaded = try await store.loadRecord(meta.id)
             #expect(loaded.meta.transcriptProvenance == provenance)
@@ -239,12 +239,14 @@ struct MeetingStoreTests {
         }
     }
 
-    @Test("recordLiveFloorProvenance on a missing meeting throws and creates nothing")
-    func recordLiveFloorProvenanceMissingMeetingThrows() async throws {
+    @Test("recordTerminalProvenance on a missing meeting throws and creates nothing")
+    func recordTerminalProvenanceMissingMeetingThrows() async throws {
         try await withTempStore { store, _ in
             let ghost = UUID()
             await #expect(throws: (any Error).self) {
-                try await store.recordLiveFloorProvenance(for: ghost, provenance: makeProvenance(source: .liveFloor))
+                try await store.recordTerminalProvenance(
+                    for: ghost, provenance: makeProvenance(source: .terminalFailure)
+                )
             }
             #expect(!FileManager.default.fileExists(atPath: store.directory(for: ghost).path))
         }
@@ -257,29 +259,79 @@ struct MeetingStoreTests {
             try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
             let metaURL = store.directory(for: meta.id).appending(path: "meta.json")
 
-            try await store.recordLiveFloorProvenance(
+            try await store.recordTerminalProvenance(
                 for: meta.id,
-                provenance: makeProvenance(source: .liveFloor, modelName: "large-v3-v20240930_626MB", tier: "reuseLive")
+                provenance: makeProvenance(
+                    source: .terminalFailure,
+                    modelName: ParakeetModelManager.modelID,
+                    tier: "universal"
+                )
             )
             var json = try String(decoding: Data(contentsOf: metaURL), as: UTF8.self)
-            #expect(json.contains("\"source\" : \"liveFloor\""))
-            #expect(json.contains("\"tier\" : \"reuseLive\""))
-            #expect(json.contains("\"modelName\" : \"large-v3-v20240930_626MB\""))
+            #expect(json.contains("\"source\" : \"terminalFailure\""))
+            #expect(json.contains("\"tier\" : \"universal\""))
+            #expect(json.contains("\"modelName\" : \"parakeet-tdt-0.6b-v3\""))
             #expect(json.contains("\"servedByFallback\" : false"))
 
             try await store.replaceTranscript(
                 makeSegments(),
-                provenance: makeProvenance(source: .finalPass, tier: "fullLargeV3"),
+                provenance: makeProvenance(source: .finalPass, tier: "universal"),
                 for: meta.id
             )
             json = try String(decoding: Data(contentsOf: metaURL), as: UTF8.self)
             #expect(json.contains("\"source\" : \"finalPass\""))
-            #expect(json.contains("\"tier\" : \"fullLargeV3\""))
+        }
+    }
 
-            // The tier raws come from FinalPassTier itself — one source of truth
-            // for what the ADR-024 launch scan will read back.
-            #expect(FinalPassTier.reuseLive.rawValue == "reuseLive")
-            #expect(FinalPassTier.fullLargeV3.rawValue == "fullLargeV3")
+    /// Legacy values must keep decoding: pre-migration metas carry
+    /// `liveFloor` with the old RAM-tier raws, and a build that couldn't read
+    /// them would strand every meeting recorded before the migration.
+    @Test("a pre-migration meta's provenance still decodes")
+    func legacyProvenanceStillDecodes() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let legacy = makeProvenance(
+                source: .liveFloor,
+                modelName: "large-v3-v20240930_626MB",
+                tier: "reuseLive"
+            )
+            try await store.recordTerminalProvenance(for: meta.id, provenance: legacy)
+
+            #expect(try await store.loadRecord(meta.id).meta.transcriptProvenance == legacy)
+        }
+    }
+
+    /// The normal stop path saves a meeting with NO words yet: its audio is
+    /// the payload. Writing an empty transcript.json would claim a transcript
+    /// that doesn't exist, and `loadRecord` must read the absence as "no
+    /// segments" rather than throwing.
+    @Test("a segment-less save writes no transcript.json and still loads")
+    func segmentLessSaveWritesNoTranscript() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: [], summary: nil))
+            let directory = store.directory(for: meta.id)
+
+            #expect(!FileManager.default.fileExists(
+                atPath: directory.appending(path: "transcript.json").path
+            ))
+            // The header is still fully readable — that is what the library
+            // list and the launch scan run on.
+            #expect(await store.listMetas().map(\.id) == [meta.id])
+
+            let loaded = try await store.loadRecord(meta.id)
+            #expect(loaded.segments.isEmpty)
+            #expect(loaded.meta.segmentCount == 0)
+
+            // The pass then writes the real transcript in one atomic step.
+            let segments = makeSegments()
+            try await store.replaceTranscript(
+                segments,
+                provenance: makeProvenance(source: .finalPass, tier: "universal"),
+                for: meta.id
+            )
+            #expect(try await store.loadRecord(meta.id).segments == segments)
         }
     }
 
@@ -292,7 +344,7 @@ struct MeetingStoreTests {
         try Data("retained".utf8).write(to: url)
     }
 
-    @Test("disposition reads audio presence + provenance source: none, pending, terminal draft, orphan")
+    @Test("disposition reads audio presence + provenance source: none, pending, terminal failure, orphan")
     func retainedAudioDispositionRows() async throws {
         try await withTempStore { store, _ in
             let meta = makeMeta()
@@ -309,13 +361,17 @@ struct MeetingStoreTests {
             #expect(await store.hasRetainedAudio(for: meta.id))
             #expect(await store.isPendingFinalization(meta.id))
 
-            // Audio + liveFloor → terminal draft: kept for the manual Retry,
-            // no longer pending (ADR-024's one atomic meta write).
-            try await store.recordLiveFloorProvenance(
+            // Audio + terminalFailure → kept for the manual Retry, no longer
+            // pending (ADR-024's one atomic meta write).
+            try await store.recordTerminalProvenance(
                 for: meta.id,
-                provenance: makeProvenance(source: .liveFloor, modelName: "large-v3-v20240930_626MB", tier: "reuseLive")
+                provenance: makeProvenance(
+                    source: .terminalFailure,
+                    modelName: ParakeetModelManager.modelID,
+                    tier: "universal"
+                )
             )
-            #expect(await store.retainedAudioDisposition(for: meta.id) == .terminalDraft)
+            #expect(await store.retainedAudioDisposition(for: meta.id) == .terminalFailure)
             #expect(await store.hasRetainedAudio(for: meta.id))
             #expect(await !store.isPendingFinalization(meta.id))
 
@@ -333,8 +389,8 @@ struct MeetingStoreTests {
             let meta = makeMeta()
             let segments = makeSegments()
             try await store.save(MeetingRecord(meta: meta, segments: segments, summary: nil))
-            // The terminal-draft state: liveFloor provenance + kept audio.
-            try await store.recordLiveFloorProvenance(
+            // The LEGACY terminal-draft state: liveFloor provenance + audio.
+            try await store.recordTerminalProvenance(
                 for: meta.id,
                 provenance: makeProvenance(source: .liveFloor, modelName: "large-v3-v20240930_626MB", tier: "reuseLive")
             )

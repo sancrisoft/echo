@@ -4,7 +4,7 @@
 //
 //  S5 signal-level tests (SP-001 test layer 1): fixture pairs through the
 //  real AEC engine, asserting post-cancellation energy against the
-//  pipeline's speech gates. Fast — no WhisperKit. Every test here skips
+//  monitor's speech gates. Fast — no model at all. Every test here skips
 //  with recording instructions until the fixture set exists; thresholds are
 //  the spec's starting points and get calibrated against the real fixtures.
 //
@@ -20,7 +20,7 @@ struct AECSignalLevelTests {
     private static let windowSamples = Int(AudioConstants.sampleRate)   // 1 s
 
     /// Scripted double-talk utterance spans, in seconds from take start.
-    /// Must match the script timing in EchoTests/Fixtures/README.md.
+    /// Must match the script timing in Fixtures/README.md.
     private static let doubleTalkSpans: [(start: Double, end: Double)] = [
         (12, 16), (18, 22), (24, 28),
     ]

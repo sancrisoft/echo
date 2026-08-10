@@ -68,6 +68,9 @@ enum MeetingSortOrder: String, CaseIterable, Identifiable {
 
 struct DashboardView: View {
     @Environment(RecordingController.self) private var controller
+    #if DEBUG
+    @Environment(\.openSettings) private var openSettings
+    #endif
 
     /// The detail currently covering the list, if any. Lives on the shell so
     /// the window title bar can swap between the breadcrumb and the opened
@@ -78,7 +81,6 @@ struct DashboardView: View {
     /// window (not the menu-bar popover, which would dismiss an alert as it
     /// closes) so both surfaces route through it; its CTA just closes the
     /// dialog, leaving the live download status visible in the banners behind.
-    @State private var showGateAlert = false
 
     var body: some View {
         // A plain HStack instead of NavigationSplitView: on this macOS the
@@ -116,29 +118,11 @@ struct DashboardView: View {
             // The menu bar opens this window on a gated press; the notice was
             // set before the window existed, so onChange can't catch it —
             // consume it here as the window appears.
-            consumeSpeechModelGateNotice()
         }
         // The window may already be open when the menu bar's Stop asks for the
         // live detail — onAppear won't re-fire then, so follow the flag too.
         .onChange(of: controller.pendingLiveDetailOpen) { _, pending in
             if pending { consumePendingLiveDetailOpen() }
-        }
-        // A record attempt gated on the speech-model download: its callout
-        // lives on the meetings list, so any open detail must step aside.
-        .onChange(of: controller.recordingAwaitingSpeechModel) { _, gated in
-            if gated { opened = nil }
-        }
-        // Raise the "can't record yet" dialog on each blocked press. The
-        // one-shot fires even when the sticky gate flag was already set (a
-        // repeat press), and covers the case where the window was already open.
-        .onChange(of: controller.pendingSpeechModelGateNotice) { _, pending in
-            if pending { consumeSpeechModelGateNotice() }
-        }
-        .alert("Can't start recording yet", isPresented: $showGateAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(RecordingGateDecision.decide(controller.speechModelState).message
-                ?? "The speech model isn't ready yet.")
         }
         #if DEBUG
         // Dev-only verification loop: with ECHO_SNAPSHOT_PATH set (and the
@@ -146,6 +130,24 @@ struct DashboardView: View {
         // this window to PNG every 2 s so UI work can be inspected from the
         // CLI without screen-recording permission. Inert in normal runs.
         .task {
+            // ECHO_OPEN_SETTINGS=1 (+ ECHO_SETTINGS_PROBE=path): open the
+            // native settings window from the CLI, dump every window's
+            // identifier/title plus the activation policy, and quit — how the
+            // Settings-scene window identifier `ActivationPolicy.sync`
+            // matches was verified on this OS.
+            if ProcessInfo.processInfo.environment["ECHO_OPEN_SETTINGS"] == "1" {
+                try? await Task.sleep(for: .seconds(1))
+                openSettings()
+                try? await Task.sleep(for: .seconds(2))
+                if let probePath = ProcessInfo.processInfo.environment["ECHO_SETTINGS_PROBE"] {
+                    let lines = NSApp.windows.map {
+                        "id=\($0.identifier?.rawValue ?? "nil") title=\($0.title) visible=\($0.isVisible) class=\(type(of: $0))"
+                    } + ["policy=\(NSApp.activationPolicy().rawValue)"]
+                    try? lines.joined(separator: "\n")
+                        .write(toFile: probePath, atomically: true, encoding: .utf8)
+                    NSApp.terminate(nil)
+                }
+            }
             guard let path = ProcessInfo.processInfo.environment["ECHO_SNAPSHOT_PATH"] else { return }
             // ECHO_APPEARANCE=dark|light forces the app-wide appearance so
             // dark-mode rendering can be verified regardless of the system
@@ -363,7 +365,7 @@ struct DashboardView: View {
                 MeetingGlyph(size: 20)
                 Text("Echo").font(.headline)
                 Text("/").foregroundStyle(.tertiary)
-                Text(controller.library.section == .trash ? "Trash" : "Meetings")
+                Text(sectionTitle)
                     .font(.headline)
                     .foregroundStyle(.secondary)
             }
@@ -374,6 +376,14 @@ struct DashboardView: View {
             if controller.state.isRecording {
                 RecPill { opened = OpenedDetail(target: .live) }
             }
+        }
+    }
+
+    private var sectionTitle: String {
+        switch controller.library.section {
+        case .all: return "Meetings"
+        case .trash: return "Trash"
+        case .settings: return "Settings"
         }
     }
 
@@ -420,11 +430,6 @@ struct DashboardView: View {
         opened = OpenedDetail(target: .live, tab: summaryDone ? .summary : .transcript)
     }
 
-    private func consumeSpeechModelGateNotice() {
-        guard controller.pendingSpeechModelGateNotice else { return }
-        controller.pendingSpeechModelGateNotice = false
-        showGateAlert = true
-    }
 }
 
 /// The display title for the in-progress session: the auto title it will be
@@ -550,6 +555,16 @@ private struct LibrarySidebar: View {
                 opened = nil
             }
 
+            SidebarRow(
+                title: "Settings",
+                systemImage: "gear",
+                count: nil,
+                isSelected: library.section == .settings
+            ) {
+                library.section = .settings
+                opened = nil
+            }
+
             Spacer()
 
             Divider()
@@ -586,12 +601,13 @@ private struct LibrarySidebar: View {
     }
 }
 
-/// One selectable sidebar row: icon + title + trailing count, with the
-/// selected state drawn as a tinted rounded rectangle (as in the mockup).
+/// One selectable sidebar row: icon + title + trailing count (`nil` hides
+/// the badge — the Settings row has nothing to count), with the selected
+/// state drawn as a tinted rounded rectangle (as in the mockup).
 private struct SidebarRow: View {
     let title: String
     let systemImage: String
-    let count: Int
+    let count: Int?
     let isSelected: Bool
     let action: () -> Void
 
@@ -606,9 +622,11 @@ private struct SidebarRow: View {
                     .font(.body.weight(isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? Color.echoIndigo : .primary)
                 Spacer()
-                Text("\(count)")
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(isSelected ? Color.echoIndigo : .secondary)
+                if let count {
+                    Text("\(count)")
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(isSelected ? Color.echoIndigo : .secondary)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
@@ -638,6 +656,8 @@ private struct MeetingLibraryDetail: View {
                 AllMeetingsView(opened: $opened)
             case .trash:
                 TrashView(opened: $opened)
+            case .settings:
+                SettingsPageView()
             }
         }
         // Opening a meeting shows the detail as a full-cover overlay (its back
@@ -675,14 +695,6 @@ private struct AllMeetingsView: View {
             header
             if !settings.privacyBannerDismissed {
                 PrivacyBanner { settings.dismissPrivacyBanner() }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 8)
-            }
-            // The user pressed record before the speech model was on disk:
-            // explain that recording unlocks once the download finishes and
-            // hand off with a Start button when it does.
-            if controller.recordingAwaitingSpeechModel {
-                SpeechModelGateBanner(opened: $opened)
                     .padding(.horizontal, 20)
                     .padding(.bottom, 8)
             }
@@ -959,6 +971,29 @@ private struct TrashView: View {
     }
 }
 
+// MARK: - Settings (embedded host)
+
+/// The dashboard's Settings page: the same `SettingsView` the native scene
+/// hosts, under a header matching the Meetings/Trash panes.
+private struct SettingsPageView: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Settings")
+                    .font(.title2.bold())
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+
+            SettingsView()
+                .frame(maxWidth: 720)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+}
+
 // MARK: - Rows
 
 /// The small indigo app mark used for meeting rows and the top bar.
@@ -1084,6 +1119,7 @@ private struct MeetingRow: View {
         switch meetingDisplayState(for: meta.id, controller: controller) {
         case .transcribing(let fraction): return .finalizing(fraction)
         case .waiting: return .waiting
+        case .failed: return .failed
         case .draft: return .draft
         case .recording, .final: return nil
         }
@@ -1165,8 +1201,10 @@ private struct LiveMeetingRow: View {
     }
 
     private var metadataText: String {
-        let words = MeetingMeta.wordCount(of: controller.state.segments)
-        var text = "\(recTimerString(controller.state.elapsed))  ·  \(words.formatted()) words"
+        // No transcript-derived number while recording: nothing is
+        // transcribed until the meeting stops. The word count reappears from
+        // `meta.wordCount` once the pass writes the transcript.
+        var text = recTimerString(controller.state.elapsed)
         // SP-008: a scoped session says so right on the row ("Zoom only") —
         // `captureScope` reflects the effective scope after any fallback, so
         // this never overstates the narrowing. A global session renders
@@ -1240,12 +1278,13 @@ private struct TrashRow: View {
 }
 
 private struct StatusPill: View {
-    /// The row's finalization face (SP-005 S6 + SP-007 S6): a running pass
-    /// with its honest fraction, a queued/deferred/pending pass waiting its
-    /// turn, or a terminal draft (persisted liveFloor provenance).
+    /// The row's finalization face: a running pass with its honest fraction,
+    /// a queued/deferred/pending pass waiting its turn, a terminally failed
+    /// meeting, or a legacy draft (persisted `liveFloor` provenance).
     enum Finalization: Equatable {
         case finalizing(Double?)
         case waiting
+        case failed
         case draft
     }
 
@@ -1282,6 +1321,11 @@ private struct StatusPill: View {
             return ("Finalizing \(percent)%", .echoIndigo, "clock", true)
         case .waiting:
             return ("Waiting to finalize", .secondary, "clock", false)
+        case .failed:
+            // Persistent, like the detail's face: keyed on persisted
+            // provenance, and it outranks every summary state below (a
+            // meeting with no transcript has nothing to summarize).
+            return ("Transcription failed", .red, "exclamationmark.triangle", false)
         case .draft:
             // Persistent, like the detail's badge: it keys on persisted
             // provenance and outranks the summary states below (a draft's
@@ -1347,130 +1391,6 @@ private struct PrivacyBanner: View {
     }
 }
 
-// MARK: - Speech-model gate banner
-
-/// Shown when the user pressed record before the speech model was ready
-/// (`RecordingController.recordingAwaitingSpeechModel`). ADR-009's gate blocks
-/// every not-ready sub-state, so this callout tracks all of them — the live
-/// download percent, the "preparing" load, or a download/load failure with a
-/// Retry — and, the moment the model is ready, offers the Start button the
-/// original click was aiming for.
-private struct SpeechModelGateBanner: View {
-    @Environment(RecordingController.self) private var controller
-    @Binding var opened: OpenedDetail?
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: icon)
-                .foregroundStyle(tint)
-                .font(.title3)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.callout.weight(.semibold))
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            trailing
-            Button {
-                controller.dismissSpeechModelGate()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Dismiss")
-        }
-        .padding(12)
-        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(tint.opacity(0.20))
-        )
-    }
-
-    private var icon: String {
-        switch controller.speechModelState {
-        case .downloading: return "arrow.down.circle.fill"
-        case .loading: return "waveform.circle.fill"
-        case .ready: return "checkmark.circle.fill"
-        case .failed: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var tint: Color {
-        switch controller.speechModelState {
-        case .downloading, .loading: return .echoIndigo
-        case .ready: return .green
-        case .failed: return .orange
-        }
-    }
-
-    private var title: String {
-        switch controller.speechModelState {
-        case .downloading: return "Downloading the speech model"
-        case .loading: return "Preparing the speech model"
-        case .ready: return "Speech model ready"
-        // Covers a failed load too, not only a failed download — with the
-        // loading/load-failed hole closed (ADR-009), a load failure now routes
-        // to this callout as well, and "download failed" would misname it.
-        case .failed: return "Speech model isn't ready"
-        }
-    }
-
-    private var message: String {
-        switch controller.speechModelState {
-        case .downloading:
-            return "Recording will be available once the download finishes — this happens only on the first run."
-        case .loading:
-            return "Almost there — recording will be available in a moment."
-        case .ready:
-            return "You can start recording now."
-        case .failed(let message):
-            return message
-        }
-    }
-
-    @ViewBuilder
-    private var trailing: some View {
-        switch controller.speechModelState {
-        case .downloading(let fraction):
-            let progress = ModelDownloadProgress(fraction: fraction)
-            HStack(spacing: 8) {
-                ProgressView(value: progress.fraction)
-                    .frame(width: 140)
-                Text("\(progress.percent)%")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        case .loading:
-            ProgressView()
-                .controlSize(.small)
-        case .ready:
-            Button {
-                Task {
-                    await controller.toggle()
-                    if controller.state.isRecording { opened = OpenedDetail(target: .live) }
-                }
-            } label: {
-                Label("Start recording", systemImage: "play.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.echoIndigo)
-            .controlSize(.small)
-        case .failed:
-            Button("Retry") {
-                Task { await controller.prepare() }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-    }
-}
-
 // MARK: - AI models banner
 
 /// Status card for the two on-device models: which model, what it's for, and
@@ -1485,26 +1405,17 @@ private struct ModelStatusBanner: View {
             VStack(alignment: .leading, spacing: 10) {
                 row(
                     icon: "waveform",
-                    name: "Speech · \(TranscriptionPipeline.modelDisplayName) · \(TranscriptionPipeline.modelDisplaySize)",
-                    purpose: "Turns meeting audio into the transcript"
-                ) { speechStatus }
+                    name: "Transcription · \(ParakeetModelManager.modelDisplayName) · \(ParakeetModelManager.modelDisplaySize)",
+                    // CC-BY-4.0 attribution rides with the model's name — the
+                    // one surface that names it.
+                    purpose: "Transcribes each meeting after it ends · \(ParakeetModelManager.attribution)"
+                ) { transcriptionStatus }
                 Divider()
                 row(
                     icon: "sparkles",
                     name: "Summary · \(SummaryModelManager.modelDisplayName) · \(SummaryModelManager.modelDisplaySize)",
                     purpose: "Writes the meeting notes after each recording"
                 ) { summaryStatus }
-                // The optional final-pass model (SP-005 story 16): a row only
-                // while it is genuinely doing something or honestly failed —
-                // hidden on the tier that never needs it, quiet once ready.
-                if finalPassNeedsAttention {
-                    Divider()
-                    row(
-                        icon: "waveform.badge.magnifyingglass",
-                        name: "Accuracy · \(FinalPassModelManager.modelDisplayName) · \(FinalPassModelManager.modelDisplaySize)",
-                        purpose: "Re-transcribes each meeting after it ends — optional, never blocks recording"
-                    ) { finalPassStatus }
-                }
             }
             .padding(12)
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -1513,33 +1424,27 @@ private struct ModelStatusBanner: View {
         }
     }
 
-    /// Both required models ready and the optional one quiet → the banner
-    /// disappears entirely.
+    /// Both models ready → the banner disappears entirely.
     private var needsAttention: Bool {
-        if finalPassNeedsAttention { return true }
-        if case .ready = controller.speechModelState,
+        if case .ready = controller.parakeetModelState,
            case .ready = controller.summaryModelState {
             return false
         }
         return true
     }
 
-    /// The final-pass model earns a row only while downloading (honest
-    /// fraction) or failed (honest line). `.notNeeded` (8 GB tier), `.absent`
-    /// (download not started yet), and `.ready` all stay quiet — an optional
-    /// model at rest needs no chrome.
-    private var finalPassNeedsAttention: Bool {
-        switch controller.finalPassModelState {
-        case .downloading, .failed: return true
-        case .notNeeded, .absent, .ready: return false
-        }
-    }
-
     @ViewBuilder
-    private var finalPassStatus: some View {
-        switch controller.finalPassModelState {
+    private var transcriptionStatus: some View {
+        switch controller.parakeetModelState {
+        case .absent:
+            // Queued behind the launch sequence; the fetch starts on its own.
+            Text("Waiting to download")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         case .downloading(let fraction):
             downloadProgress(fraction)
+        case .ready:
+            readyLabel
         case .failed(let message):
             // No Retry button: acquisition is once per launch by design (the
             // manager resumes the transfer on the next launch, skipping the
@@ -1550,8 +1455,6 @@ private struct ModelStatusBanner: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: 280, alignment: .trailing)
-        case .notNeeded, .absent, .ready:
-            EmptyView()
         }
     }
 
@@ -1574,22 +1477,6 @@ private struct ModelStatusBanner: View {
             }
             Spacer(minLength: 12)
             trailing()
-        }
-    }
-
-    @ViewBuilder
-    private var speechStatus: some View {
-        switch controller.speechModelState {
-        case .downloading(let fraction):
-            downloadProgress(fraction)
-        case .loading:
-            loadingIndicator
-        case .ready:
-            readyLabel
-        case .failed(let message):
-            failure(message) {
-                Task { await controller.prepare() }
-            }
         }
     }
 
@@ -1796,6 +1683,15 @@ private struct MeetingDetailScreen: View {
         VStack(spacing: 0) {
             DetailTabBar(selection: $selectedTab)
 
+            // The saved-recording strip (settings-page retention §3.4):
+            // exists exactly while the meeting's folder holds preserved
+            // audio; renders nothing otherwise. The live target maps to the
+            // just-stopped meeting once its stop-save lands.
+            if let recordingMeetingID {
+                PreservedRecordingBar(meetingID: recordingMeetingID)
+                    .id(recordingMeetingID)
+            }
+
             switch target {
             case .live:
                 LiveMeetingDetail(selectedTab: $selectedTab)
@@ -1812,6 +1708,13 @@ private struct MeetingDetailScreen: View {
         }
         // Escape returns to the list.
         .onExitCommand(perform: onClose)
+    }
+
+    private var recordingMeetingID: UUID? {
+        switch target {
+        case .saved(let id): return id
+        case .live: return controller.library.activeMeetingID
+        }
     }
 }
 
@@ -1888,6 +1791,12 @@ private struct MeetingTranscriptFace: View {
             case .transcribing(let fraction):
                 transcribing(fraction: fraction)
 
+            case .failed(let retryAvailable):
+                // No transcript exists — an empty transcript shell would read
+                // as "the meeting had no words" instead of "we couldn't
+                // transcribe it".
+                failedFace(retryAvailable: retryAvailable)
+
             case .draft(let retryAvailable):
                 VStack(spacing: 0) {
                     draftStrip(retryAvailable: retryAvailable)
@@ -1960,9 +1869,36 @@ private struct MeetingTranscriptFace: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// The draft chrome above the floor transcript: the persistent badge
-    /// (keyed on persisted liveFloor provenance — survives relaunch), plus
-    /// Retry / Keep draft exactly while the kept audio exists (ADR-024).
+    /// The honest terminal-failure face: the meeting's audio is kept and the
+    /// user decides — Retry (a fresh bounded cycle from that audio) or Delete
+    /// from the meeting's own menu. No Keep action: there is no text to keep.
+    @ViewBuilder
+    private func failedFace(retryAvailable: Bool) -> some View {
+        VStack(spacing: 14) {
+            ContentUnavailableView(
+                "Transcription failed",
+                systemImage: "exclamationmark.triangle",
+                description: Text(retryAvailable
+                    ? "The audio is kept. Retry to transcribe again."
+                    : "The audio is no longer available, so this meeting can't be transcribed.")
+            )
+            if retryAvailable {
+                Button {
+                    if let meetingID { controller.retryFinalization(meetingID) }
+                } label: {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Run a fresh transcription pass from the meeting's kept audio")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// LEGACY (pre-migration meetings only): the draft chrome above a floor
+    /// transcript — the persistent badge keyed on persisted `liveFloor`
+    /// provenance, plus Retry / Keep draft exactly while the kept audio
+    /// exists (ADR-024). Nothing writes `liveFloor` any more.
     private func draftStrip(retryAvailable: Bool) -> some View {
         HStack(spacing: 10) {
             Text("Draft")
@@ -2105,7 +2041,21 @@ private struct LiveMeetingDetail: View {
                     systemImage: "sparkles",
                     description: Text(idleSummaryDescription)
                 )
-                SummaryModelControl(onRetrySummary: retrySummaryAction)
+                // A summary-less meeting offers to make one, whether or not it
+                // is still the live session's — the same "Generate summary"
+                // the saved-meeting detail shows. Before, this idle state only
+                // ever carried the model control's "Retry", which named a
+                // failure that never happened and disappeared once the app was
+                // relaunched and the meeting stopped being the active one.
+                if let generate = generateSummaryAction {
+                    Button(action: generate) {
+                        Label("Generate summary", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .help("Generate this meeting's summary now")
+                } else {
+                    SummaryModelControl()
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -2152,7 +2102,25 @@ private struct LiveMeetingDetail: View {
             || controller.finalization.queuedMeetingIDs.contains(id) {
             return "Echo will generate this once the transcript finishes finalizing."
         }
+        // A transcript with no summary is not a dead end — say what the button
+        // below it can do, or what the model still needs, instead of asking
+        // for a recording the user has already made.
+        if !controller.state.segments.isEmpty {
+            if case .ready = controller.summaryModelState {
+                return "The transcript is saved, so you can generate one now."
+            }
+            return "Generating one needs the summary model. Download it and this meeting will be processed automatically."
+        }
         return "Start and stop a recording to generate meeting notes."
+    }
+
+    /// Generates this meeting's summary on demand — the same work the
+    /// automatic post-stop generation does, so it is also what "Retry" runs
+    /// after a failure. Offered only with a transcript to ground it in and the
+    /// model on disk; otherwise the model control takes the space instead.
+    private var generateSummaryAction: (() -> Void)? {
+        guard case .ready = controller.summaryModelState else { return nil }
+        return retrySummaryAction
     }
 
     /// Re-runs the just-stopped session's summary — only while its segments
@@ -2372,14 +2340,16 @@ private struct PastMeetingDetail: View {
         } else if controller.backfillingMeetingID == id {
             SummaryGenerationProgressView(subject: "this meeting's transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if isPendingFinalization {
-            // The summary is deliberately held back until the pass resolves
-            // (SP-005 sequencing) — say so instead of offering to generate
-            // one from a transcript that is about to be replaced.
+        } else if hasNoTranscriptYet {
+            // Nothing to ground a summary in: the pass is still owed (or
+            // failed outright). Offering "Generate summary" here would
+            // promise notes over words that don't exist.
             ContentUnavailableView(
-                "Summary after finalization",
+                "Summary after transcription",
                 systemImage: "sparkles",
-                description: Text("Echo will generate this once the transcript finishes finalizing.")
+                description: Text(isTranscriptionFailed
+                    ? "This meeting has no transcript. Retry transcription first."
+                    : "Echo will generate this once the transcript is ready.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -2417,15 +2387,20 @@ private struct PastMeetingDetail: View {
         return "Generating one needs the summary model. Download it and this meeting will be processed automatically."
     }
 
-    /// Waiting or transcribing, from the same pure function as the faces —
-    /// the sync subset (no audio probe: a pending meeting is enqueued or
-    /// running by the time this tab can be read, and the drafts/finals this
-    /// check misses are exactly the ones allowed to generate).
-    private var isPendingFinalization: Bool {
+    /// The meeting has no transcript to summarize — still owed (waiting /
+    /// transcribing) or permanently absent (failed). From the same pure
+    /// function as the faces: the sync subset (no audio probe, which only
+    /// distinguishes Retry availability — irrelevant here).
+    private var hasNoTranscriptYet: Bool {
         switch meetingDisplayState(for: id, controller: controller) {
-        case .waiting, .transcribing: return true
+        case .waiting, .transcribing, .failed: return true
         case .recording, .draft, .final: return false
         }
+    }
+
+    private var isTranscriptionFailed: Bool {
+        if case .failed = meetingDisplayState(for: id, controller: controller) { return true }
+        return false
     }
 }
 
@@ -2520,18 +2495,12 @@ private struct LiveTranscriptFooter: View {
 
                 Spacer(minLength: 12)
 
-                // Honest status: while the speech model isn't loaded the
-                // pipeline drops every sample, and "Transcribing…" would be
-                // a lie that costs the user the whole meeting.
-                if controller.state.transcriberUnavailable {
-                    Text("Not transcribing — speech model failed to load")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.orange)
-                } else {
-                    Text("Transcribing…")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(Color.echoIndigo)
-                }
+                // Honest status: nothing is transcribed during a recording —
+                // the audio is being captured and the meeting is transcribed
+                // once it stops. "Transcribing…" here would be a lie.
+                Text("Recording…")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(Color.echoIndigo)
 
                 HStack(spacing: 5) {
                     Image(systemName: "checkmark.shield")

@@ -25,8 +25,10 @@ nonisolated enum EchoPaths {
             .appending(path: "Echo", directoryHint: .isDirectory)
     }
 
-    /// ~/Library/Application Support/Echo/Models — HubApi download base for
-    /// every ML model the app fetches (summary LLM and WhisperKit models).
+    /// ~/Library/Application Support/Echo/Models — download base for every ML
+    /// model the app fetches (the summary LLM under HubApi's
+    /// `models/<org>/<repo>` layout, the Parakeet transcription model under
+    /// FluidAudio's flat repo-folder layout).
     /// Created on demand: the accessor is the only place that has to know the
     /// path, so it also guarantees existence (idempotent, cheap).
     static var modelsDirectory: URL {
@@ -75,6 +77,11 @@ nonisolated enum EchoPaths {
     /// base (~/Documents/huggingface) before Echo pinned every download to
     /// `modelsDirectory`. Layout under both bases is `models/<org>/<repo>`,
     /// which is what HubApi expects — a plain move preserves it.
+    ///
+    /// Both entries are Whisper's, and Whisper is retired. The migration stays
+    /// because it is what BRINGS a stray legacy cache under the models root,
+    /// where `RetiredModelCleanup` then deletes it — moving it home is how it
+    /// gets reclaimed rather than left orphaned in ~/Documents forever.
     private static let legacyHubRepoPaths = [
         "models/argmaxinc/whisperkit-coreml",
         "models/openai/whisper-large-v3",

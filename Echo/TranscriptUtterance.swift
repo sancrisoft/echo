@@ -44,16 +44,27 @@ nonisolated struct TranscriptUtterance: Identifiable, Hashable, Sendable {
     /// chunking already treats as a break.
     static let maxMergeGap: TimeInterval = 10
 
-    /// A standalone backchannel is at most this many normalized words.
-    /// Anything longer carries content even when it opens with a token
-    /// ("Okay, let's do the deploy tomorrow" must never filter).
-    static let maxBackchannelWords = 3
+    /// A standalone backchannel uses at most this many DISTINCT words.
+    ///
+    /// Counting words instead of distinct ones was the original rule and it
+    /// missed the ordinary case, because repetition is how people acknowledge:
+    /// "sí, sí, sí, sí, sí" and "ah, ok, ok, ok, ok" are one and two words of
+    /// vocabulary spent five times, and both blew a five-word row past a
+    /// three-word bound and back into the flow, where they split the other
+    /// speaker's paragraph in three.
+    ///
+    /// Length was never what made a row safe to drop — the table is. What a
+    /// bound still buys is protection from a garbled stretch that happens to
+    /// decode as table words: a long run of VARIED ones ("ya claro sí bien
+    /// gracias ok") is more likely mis-transcribed speech than a genuine
+    /// acknowledgment, and stays in. Repetition is free; vocabulary is not.
+    static let maxBackchannelVariety = 3
 
     /// The build-owned backchannel table (SP-007 open question 1), seeded
     /// from the 2026-08-04 real meeting's mic channel (es + en) plus close
-    /// spelling variants. Entries are `TranscriptionPipeline.normalizedWords`
-    /// forms — lowercase, punctuation stripped, hyphens/commas split words
-    /// ("Mm-hmm." → "mm hmm"). Tuning the filter is editing these rows.
+    /// spelling variants. Entries are `normalizedWords` forms — lowercase,
+    /// punctuation stripped, hyphens/commas split words ("Mm-hmm." → "mm
+    /// hmm"). Tuning the filter is editing these rows.
     static let backchannelTokens: Set<String> = [
         // English
         "mm hmm", "mm", "hmm", "mhm", "uh huh", "okay", "ok", "yeah",
@@ -65,22 +76,40 @@ nonisolated struct TranscriptUtterance: Identifiable, Hashable, Sendable {
 
     // MARK: - Backchannel classifier
 
+    /// Word-level normalization the backchannel table is written against:
+    /// lowercase, split on anything non-alphanumeric (so punctuation,
+    /// hyphens and apostrophes all become word breaks). Moved here from the
+    /// retired live pipeline — this is its only remaining consumer.
+    static func normalizedWords(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+
+    /// Longest table entry, in words — the only span length the partition
+    /// below ever needs to try. Derived from the table so adding a three-word
+    /// entry cannot silently stop matching.
+    static let longestBackchannelEntry = backchannelTokens
+        .map { $0.split(separator: " ").count }.max() ?? 1
+
     /// True when the segment's normalized text consists ONLY of backchannel
-    /// tokens within the length bound — a standalone acknowledgment that
-    /// should not interrupt the other speaker's paragraph. The word sequence
-    /// must partition into table entries ("ah ok" is one entry, "yeah okay"
-    /// is two), so any non-token word keeps the segment in the flow.
+    /// tokens drawn from a narrow vocabulary — a standalone acknowledgment
+    /// that should not interrupt the other speaker's paragraph. The word
+    /// sequence must partition into table entries ("ah ok" is one entry,
+    /// "yeah okay" is two), so any non-token word keeps the segment in the
+    /// flow however short it is.
     static func isStandaloneBackchannel(_ text: String) -> Bool {
-        let words = TranscriptionPipeline.normalizedWords(text)
-        guard !words.isEmpty, words.count <= maxBackchannelWords else { return false }
-        // Tiny DP over word positions (bounded by maxBackchannelWords):
-        // reachable[i] means words[0..<i] partitions into table entries.
+        let words = normalizedWords(text)
+        guard !words.isEmpty, Set(words).count <= maxBackchannelVariety else { return false }
+        // DP over word positions: reachable[i] means words[0..<i] partitions
+        // into table entries. Spans are capped at the longest entry, so this
+        // stays linear now that the row itself is unbounded in length.
         var reachable = [Bool](repeating: false, count: words.count + 1)
         reachable[0] = true
         for index in 0..<words.count where reachable[index] {
-            for endIndex in index..<words.count {
-                if backchannelTokens.contains(words[index...endIndex].joined(separator: " ")) {
-                    reachable[endIndex + 1] = true
+            for length in 1...min(longestBackchannelEntry, words.count - index) {
+                if backchannelTokens.contains(words[index ..< index + length].joined(separator: " ")) {
+                    reachable[index + length] = true
                 }
             }
         }

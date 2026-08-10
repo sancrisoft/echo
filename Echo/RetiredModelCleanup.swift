@@ -2,13 +2,12 @@
 //  RetiredModelCleanup.swift
 //  Echo
 //
-//  Launch-time reclamation of retired summary-model snapshots (ADR-011).
-//  When Echo swaps its summary model (SP-004: Gemma 4 12B → Qwen3.5 4B), the
-//  old snapshot — ~8.9 GB complete, or a partial with its .cache staging —
-//  is dead weight the updated app can never load. It is deleted at every
-//  launch, immediately and unconditionally, so the disk is freed before (or
-//  alongside) the new model's ~3 GB download on exactly the machines that
-//  need the room.
+//  Launch-time reclamation of retired model snapshots (ADR-011). When Echo
+//  swaps a model — the summary model (SP-004: Gemma 4 12B → Qwen3.5 4B), or
+//  the whole speech stack (Whisper → Parakeet) — the old snapshot is dead
+//  weight the updated app can never load. It is deleted at every launch,
+//  immediately and unconditionally, so the disk is freed before (or alongside)
+//  the new model's download on exactly the machines that need the room.
 //
 //  The discipline, reused verbatim by every future migration (which only
 //  appends to `retiredRepoIDs`, never edits the logic):
@@ -25,7 +24,7 @@
 //
 
 import Foundation
-import WhisperKit  // @_exported ArgmaxCore: HubApiWrapper (Hub snapshot path layout)
+import Hub  // HubApi: the snapshot path layout the summary model downloads into
 import os
 
 nonisolated enum RetiredModelCleanup {
@@ -39,23 +38,59 @@ nonisolated enum RetiredModelCleanup {
         // Retired by SP-004 (2026-07-28): the Gemma 4 12B summary model,
         // replaced by Qwen3.5 4B.
         "mlx-community/gemma-4-12B-it-qat-OptiQ-4bit",
+        // Retired by the Parakeet migration (2026-08-06): the whole WhisperKit
+        // repo — BOTH variants Echo ever downloaded (the live turbo
+        // `openai_whisper-large-v3-v20240930_626MB` and the final pass's
+        // `openai_whisper-large-v3_947MB`, ~1.6 GB together) plus the folder
+        // itself, which nothing else ever writes to. Scoped by construction:
+        // the models root also holds `mlx-community/*` and the Parakeet
+        // folder, and neither is named here.
+        "argmaxinc/whisperkit-coreml",
+        // ...and Whisper's tokenizer cache, fetched beside it.
+        "openai/whisper-large-v3",
     ]
 
-    /// Deletes every retired repo's directory under `modelsRoot`. Parameters
-    /// exist for the tests (temp roots, counting/failing removers);
-    /// production call sites use the defaults: `RetiredModelCleanup.run()`.
+    /// Retired files that live directly under the models root rather than in
+    /// a repo directory (same rules: named, idempotent, non-fatal).
+    static let retiredFileNames = [
+        // The final pass's RAM-tiered snapshot manifest — the tier and the
+        // model it vouched for both died with Whisper.
+        "final-pass-model-manifest.json",
+    ]
+
+    /// Deletes every retired repo's directory and every retired loose file
+    /// under `modelsRoot`. Parameters exist for the tests (temp roots,
+    /// counting/failing removers); production call sites use the defaults:
+    /// `RetiredModelCleanup.run()`.
     static func run(
         retiredRepoIDs: [String] = retiredRepoIDs,
+        retiredFileNames: [String] = retiredFileNames,
         modelsRoot: URL = EchoPaths.modelsDirectory,
         remove: @Sendable (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }
     ) {
+        for fileName in retiredFileNames {
+            let url = modelsRoot.appending(path: fileName, directoryHint: .notDirectory)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            do {
+                try remove(url)
+                log.info("Deleted retired model file \(fileName, privacy: .public)")
+            } catch {
+                ErrorTrace.record(
+                    "Retired model cleanup failed",
+                    error: error,
+                    category: "RetiredModelCleanup",
+                    metadata: ["file": fileName]
+                )
+            }
+        }
+
         for repoID in retiredRepoIDs {
             // The same models/<org>/<repo> derivation SummaryModelManager uses
             // for its snapshotDirectory (HubApi's layout) — going through the
             // same API means the cleanup's target can never drift from where
             // the manager actually put the files.
-            let directory = HubApiWrapper(downloadBase: modelsRoot)
-                .localRepoLocation(HubApiWrapper.Repo(id: repoID))
+            let directory = HubApi(downloadBase: modelsRoot, cache: nil)
+                .localRepoLocation(HubApi.Repo(id: repoID))
 
             // Already gone — the obligation is satisfied (ADR-011: durable by
             // repetition, no persisted trigger state). Checked instead of

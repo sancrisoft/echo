@@ -1,13 +1,12 @@
 //
-//  FinalPassReplayHarness.swift
+//  ParakeetReplayHarness.swift
 //  EchoTests
 //
-//  SP-007 developer replay harness (user story 13, Testing Decisions item 6):
-//  re-runs the FINAL PASS over a meeting's kept fixture audio outside the app
-//  flow, records the resulting segment set, and diffs it against the previous
-//  replay — so every anti-hallucination change is measured against real audio
-//  before it ships. A harness, not a judge: it prints and records, it never
-//  asserts accuracy.
+//  The developer replay harness: re-runs the transcription pass over a
+//  meeting's kept fixture audio outside the app flow, records the resulting
+//  segment set, and diffs it against the previous replay — so every change to
+//  the pass is measured against real audio before it ships. A harness, not a
+//  judge: it prints and records, it never asserts accuracy.
 //
 //  Producing a fixture (user story 12): run a DEBUG build of the app with
 //  ECHO_KEEP_RETAINED_AUDIO=1 in its environment; a meeting whose final pass
@@ -25,14 +24,15 @@
 //
 //      TEST_RUNNER_ECHO_REPLAY_DIR="$HOME/Library/Application Support/Echo/Meetings/<id>" \
 //      xcodebuild test -project Echo.xcodeproj -scheme Echo \
-//          -destination 'platform=macOS' \
-//          -only-testing:EchoTests/FinalPassReplayHarness
+//          -destination 'platform=macOS' -parallel-testing-enabled NO \
+//          -only-testing:EchoTests/ParakeetReplayHarness
 //
 //  Each run writes replay-<ISO timestamp>.json (the segment set) next to the
 //  audio and prints a compact per-channel report; when previous replay-*.json
 //  files exist, the run also prints the segment delta against the most recent
 //  one (keyed on normalized text + times rounded to 0.1 s). Slow: loads the
-//  live Whisper model (shared Acceptance.pipeline, once per process).
+//  Parakeet model, which must ALREADY be on disk under the app's Models
+//  folder — the harness never downloads anything.
 //
 
 import Foundation
@@ -52,13 +52,14 @@ nonisolated enum ReplayHarness {
     static var isEnabled: Bool { directory != nil }
 
     static let gate: Comment = """
-    Developer replay harness (SP-007 user story 13) — run on demand against a \
-    meeting's kept fixture audio: TEST_RUNNER_ECHO_REPLAY_DIR=<dir> xcodebuild \
-    test -project Echo.xcodeproj -scheme Echo -destination 'platform=macOS' \
-    -only-testing:EchoTests/FinalPassReplayHarness. Kept fixtures live at \
+    Developer replay harness — run on demand against a meeting's kept fixture \
+    audio: TEST_RUNNER_ECHO_REPLAY_DIR=<dir> xcodebuild test -project \
+    Echo.xcodeproj -scheme Echo -destination 'platform=macOS' \
+    -parallel-testing-enabled NO \
+    -only-testing:EchoTests/ParakeetReplayHarness. Kept fixtures live at \
     ~/Library/Application Support/Echo/Meetings/<id>/debug-kept-*.m4a — \
     produce them by running a DEBUG app build with ECHO_KEEP_RETAINED_AUDIO=1 \
-    (see the header of FinalPassReplayHarness.swift)
+    (see the header of ParakeetReplayHarness.swift)
     """
 
     /// The kept-fixture names the DEBUG keep flag writes. Sourced from the
@@ -73,9 +74,9 @@ nonisolated enum ReplayHarness {
 }
 
 @Suite(.serialized, .enabled(if: ReplayHarness.isEnabled, ReplayHarness.gate))
-struct FinalPassReplayHarness {
+struct ParakeetReplayHarness {
 
-    @Test func replayFinalPassOverKeptAudio() async throws {
+    @Test func replayTranscriptionPassOverKeptAudio() async throws {
         let directory = try #require(ReplayHarness.directory)
 
         // Either channel may be absent (a mic-only or system-only meeting);
@@ -102,18 +103,17 @@ struct FinalPassReplayHarness {
         // The previous takes, snapshotted BEFORE this run writes its own.
         let previousReplays = Self.replayFiles(in: directory)
 
-        // Load the real live Whisper model the way the accuracy acceptance
-        // suite does: the shared Acceptance.pipeline, loaded once per process.
-        let state = RecordingState()
-        await Acceptance.pipeline.start(appendingTo: state)
-
-        // Diagnostic mode (2026-08-05 second field report): the harness is a
-        // local dev tool, so printing transcript text and per-segment metrics
-        // to stdout is fine HERE — per window the language decision and A/B
-        // verdict, per dropped segment the rule that dropped it.
-        let segments = try await FinalizationPass.run(
+        // The model comes from the app's own manager — a pure disk check
+        // against ~/Library/Application Support/Echo/Models. If it isn't
+        // there the pass throws `modelUnavailable` and this test fails
+        // honestly instead of quietly downloading half a gigabyte.
+        //
+        // Diagnostic mode: the harness is a local dev tool, so printing
+        // transcript text to stdout is fine HERE — per channel the decode
+        // summary, then every produced segment with its times.
+        let segments = try await ParakeetPass.run(
             retainedFiles: retained,
-            model: LivePipelineModelProvider(pipeline: Acceptance.pipeline),
+            models: ManagedParakeetModelProvider(manager: ParakeetModelManager()),
             diagnostics: { line in print("[replay][diag] \(line)") }
         )
 

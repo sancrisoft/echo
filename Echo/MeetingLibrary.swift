@@ -19,10 +19,29 @@ enum MeetingSelection: Hashable, Sendable {
     case meeting(UUID)
 }
 
-/// The library's two top-level views, bound to the sidebar.
+/// The library's top-level views, bound to the sidebar. `.settings` renders
+/// the embedded settings page in the detail pane — the second host of the
+/// same `SettingsView` the native Settings scene shows.
 enum LibrarySection: Hashable, Sendable {
     case all
     case trash
+    case settings
+}
+
+/// The Settings page's storage breakdown (§3.9). Meetings and recordings are
+/// disjoint (recordings' bytes are subtracted from their folders), so the
+/// four rows roughly sum to the data folder's real footprint.
+nonisolated struct StorageBreakdown: Equatable, Sendable {
+    /// Non-trashed meeting folders, minus their preserved `audio-*` bytes.
+    var meetingsBytes: Int64 = 0
+    /// Preserved `audio-*` bytes across non-trashed folders.
+    var recordingsBytes: Int64 = 0
+    /// Non-trashed meetings holding a preserved recording.
+    var recordingsCount: Int = 0
+    /// Trashed meeting folders, whole.
+    var trashBytes: Int64 = 0
+    /// The models directory under the data root (display-only in v1).
+    var modelsBytes: Int64 = 0
 }
 
 @Observable
@@ -250,13 +269,13 @@ final class MeetingLibrary {
         }
     }
 
-    /// Records that the meeting's persisted transcript is the live floor —
-    /// one atomic meta write, nothing else touched (SP-007, ADR-022/ADR-024).
-    /// Best-effort: a failure is logged and the meeting stays diagnosable as
-    /// "unknown" provenance rather than blocking the stop path.
-    func recordLiveFloorProvenance(for id: UUID, provenance: TranscriptProvenance) async {
+    /// Records the meeting's terminal provenance — one atomic meta write,
+    /// nothing else touched (SP-007, ADR-022/ADR-024). Best-effort: a failure
+    /// is logged and the meeting stays classified as pending, so the next
+    /// launch simply converges again.
+    func recordTerminalProvenance(for id: UUID, provenance: TranscriptProvenance) async {
         do {
-            try await store.recordLiveFloorProvenance(for: id, provenance: provenance)
+            try await store.recordTerminalProvenance(for: id, provenance: provenance)
             await refresh()
         } catch {
             ErrorTrace.record(
@@ -291,6 +310,65 @@ final class MeetingLibrary {
         await store.preserveRetainedAudioAsDebugFixture(for: id)
     }
     #endif
+
+    // MARK: - Preserved recordings (settings-page retention)
+
+    /// Renames the meeting's retained audio to its preserved `audio-*` names
+    /// (the "keep recordings" product feature). Returns whether anything was
+    /// preserved; failures are non-fatal and logged by the store.
+    @discardableResult
+    func preserveRetainedAudio(for id: UUID) async -> Bool {
+        await store.preserveRetainedAudio(for: id)
+    }
+
+    /// The preserved-audio files currently in the meeting's folder.
+    func preservedAudioFiles(for id: UUID) async -> [AudioChannel: URL] {
+        await store.preservedAudioFiles(for: id)
+    }
+
+    /// Whether the meeting holds a preserved recording — gates the detail's
+    /// player, Delete Recording and Re-transcribe affordances.
+    func hasPreservedAudio(for id: UUID) async -> Bool {
+        await store.hasPreservedAudio(for: id)
+    }
+
+    /// Deletes exactly the meeting's preserved-audio files (named targets,
+    /// never a sweep). Failures are non-fatal and logged by the store.
+    func deletePreservedAudio(for id: UUID) async {
+        await store.deletePreservedAudio(for: id)
+    }
+
+    /// Count and total bytes of the non-trashed meetings' saved recordings.
+    func preservedAudioTotals() async -> (meetings: Int, bytes: Int64) {
+        await store.preservedAudioTotals()
+    }
+
+    /// Clones the meeting's preserved audio back to its retained names —
+    /// re-transcribe's arming step. Returns whether the full channel set
+    /// cloned; failures are logged by the store.
+    func cloneAudioForRetranscription(for id: UUID) async -> Bool {
+        await store.cloneAudioForRetranscription(for: id)
+    }
+
+    /// Deletes the meeting's summary artifacts (summary.json + stale RAG
+    /// sidecar) and clears their meta bits, then refreshes so the list drops
+    /// the caption and pill immediately. Returns whether the write landed.
+    @discardableResult
+    func removeSummaryArtifacts(for id: UUID) async -> Bool {
+        do {
+            try await store.removeSummaryArtifacts(for: id)
+            await refresh()
+            return true
+        } catch {
+            ErrorTrace.record(
+                "Removing summary artifacts failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
+            return false
+        }
+    }
 
     /// Meetings pending finalization, newest first (retained audio with no
     /// recorded transcript provenance — ADR-016 amended by ADR-024) — feeds
@@ -428,6 +506,75 @@ final class MeetingLibrary {
                 }
             }
         }
+    }
+
+    // MARK: - Storage breakdown (§3.9)
+
+    /// The Settings page's storage rows. `nil` until the first measurement;
+    /// recomputed on Settings-section appearance and after deletion actions
+    /// (`refreshStorageBreakdown`).
+    private(set) var storageBreakdown: StorageBreakdown?
+
+    /// Measures the breakdown off the main actor (the `measureStorage`
+    /// pattern: detached, utility priority) and publishes it.
+    func refreshStorageBreakdown() {
+        Task.detached(priority: .utility) { [
+            root = store.rootDirectory,
+            live = metas.map(\.id),
+            trashed = trashedMetas.map(\.id)
+        ] in
+            let breakdown = MeetingLibrary.measureBreakdown(
+                meetingsRoot: root,
+                nonTrashedIDs: live,
+                trashedIDs: trashed,
+                modelsDirectory: EchoPaths.modelsDirectory
+            )
+            await MainActor.run { [weak self] in self?.storageBreakdown = breakdown }
+        }
+    }
+
+    /// The pure aggregation, parameterized for tests (synthetic temp trees):
+    /// meeting folders split into "meeting data" vs "saved recording" by the
+    /// preserved names, trash counted whole, models counted whole.
+    nonisolated static func measureBreakdown(
+        meetingsRoot: URL,
+        nonTrashedIDs: [UUID],
+        trashedIDs: [UUID],
+        modelsDirectory: URL
+    ) -> StorageBreakdown {
+        var breakdown = StorageBreakdown()
+        let sizeKeys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey]
+        for id in nonTrashedIDs {
+            let folder = meetingsRoot.appending(path: id.uuidString, directoryHint: .isDirectory)
+            let whole = directorySize(at: folder)
+            var audio: Int64 = 0
+            for channel in [AudioChannel.microphone, .system] {
+                let url = folder.appending(
+                    path: MeetingStore.preservedAudioFileName(for: channel),
+                    directoryHint: .notDirectory
+                )
+                let values = try? url.resourceValues(forKeys: sizeKeys)
+                audio += Int64(values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0)
+            }
+            if audio > 0 { breakdown.recordingsCount += 1 }
+            breakdown.recordingsBytes += audio
+            breakdown.meetingsBytes += max(0, whole - audio)
+        }
+        for id in trashedIDs {
+            breakdown.trashBytes += directorySize(
+                at: meetingsRoot.appending(path: id.uuidString, directoryHint: .isDirectory)
+            )
+        }
+        breakdown.modelsBytes = directorySize(at: modelsDirectory)
+        return breakdown
+    }
+
+    /// Deletes every saved recording (the Settings page's global action) and
+    /// refreshes the footer + breakdown so the numbers move with the bytes.
+    func deleteAllPreservedAudio() async {
+        await store.deleteAllPreservedAudio()
+        await refresh()
+        refreshStorageBreakdown()
     }
 
     /// Measures the meeting data's on-disk footprint off the main actor and

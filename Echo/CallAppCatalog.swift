@@ -110,4 +110,13 @@ nonisolated enum CallAppCatalog {
     static func match(bundleID: String) -> CallApp? {
         apps.first { $0.matches(bundleID: bundleID) }
     }
+
+    /// The catalog's unique display names, in order of first appearance —
+    /// the Settings page's per-app rows. One row per app: a name owning
+    /// several prefixes (Teams, FaceTime, Safari) appears once and disabling
+    /// it covers all of them.
+    static var uniqueDisplayNames: [String] {
+        var seen = Set<String>()
+        return apps.compactMap { seen.insert($0.displayName).inserted ? $0.displayName : nil }
+    }
 }

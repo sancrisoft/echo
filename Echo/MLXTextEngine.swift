@@ -6,7 +6,7 @@
 //  the loaded ModelContainer — no subprocess, no HTTP server.
 //
 //  Prompt construction is manual. The vendored tokenizer surface Echo already
-//  ships (ArgmaxCore's TokenizerWrapper) exposes encode/decode but not
+//  ships (swift-transformers' Tokenizer) exposes encode/decode but not
 //  applyChatTemplate, and chat templates historically fold or drop the system
 //  prompt for some models (Gemma among them) — building the turn string
 //  ourselves keeps the system prompt's survival guaranteed and inspectable

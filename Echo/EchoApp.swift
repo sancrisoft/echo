@@ -57,6 +57,11 @@ struct EchoApp: App {
         // effects live in `start()` and the launch tasks, both gated.
         let recording = RecordingController()
         let settings = AppSettings()
+        // The retention and auto-summary seams read the preference at the
+        // moment they act; the controller deliberately doesn't hold
+        // AppSettings (§3.3, §3.6).
+        recording.shouldKeepRecordingsAfterTranscription = { settings.keepRecordingsAfterTranscription }
+        recording.shouldAutoGenerateSummaries = { settings.autoGenerateSummaries }
         let callDetection = CallDetectionController(recording: recording, settings: settings)
         if !TestHost.isActive {
             callDetection.start()
@@ -113,5 +118,17 @@ struct EchoApp: App {
         .restorationBehavior(.disabled)
         .defaultSize(width: 1100, height: 720)
         .windowResizability(.contentMinSize)
+
+        // The native settings window (Cmd+, and the menu-bar gear). The same
+        // SettingsView the dashboard sidebar embeds — one view, two hosts.
+        // `EchoAppDelegate.sync()` keeps the app `.regular` while it is open,
+        // exactly as it does for the dashboard.
+        Settings {
+            SettingsView()
+                .environment(controller)
+                .environment(settings)
+                .environment(callDetection)
+                .frame(minWidth: 520, minHeight: 400)
+        }
     }
 }

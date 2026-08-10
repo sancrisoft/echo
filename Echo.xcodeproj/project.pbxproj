@@ -7,11 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		5CA250182FF3399500E2563C /* SpeakerKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5CA250172FF3399500E2563C /* SpeakerKit */; };
-		5CA2501A2FF3399500E2563C /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 5CA250192FF3399500E2563C /* WhisperKit */; };
 		5CB100000000000000000B02 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5CB100000000000000000A02 /* MLXLLM */; };
 		5CB100000000000000000B03 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 5CB100000000000000000A03 /* MLXLMCommon */; };
 		5CB100000000000000000B04 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = 5CB100000000000000000A04 /* MLXEmbedders */; };
+		5CF100000000000000000B02 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF100000000000000000A02 /* FluidAudio */; };
+		5CF200000000000000000B02 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF200000000000000000A02 /* Hub */; };
+		5CF200000000000000000B03 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF200000000000000000A03 /* Tokenizers */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -47,8 +48,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				5CA2501A2FF3399500E2563C /* WhisperKit in Frameworks */,
-				5CA250182FF3399500E2563C /* SpeakerKit in Frameworks */,
+				5CF100000000000000000B02 /* FluidAudio in Frameworks */,
+				5CF200000000000000000B02 /* Hub in Frameworks */,
+				5CF200000000000000000B03 /* Tokenizers in Frameworks */,
 				5CB100000000000000000B02 /* MLXLLM in Frameworks */,
 				5CB100000000000000000B03 /* MLXLMCommon in Frameworks */,
 				5CB100000000000000000B04 /* MLXEmbedders in Frameworks */,
@@ -103,8 +105,9 @@
 			);
 			name = Echo;
 			packageProductDependencies = (
-				5CA250172FF3399500E2563C /* SpeakerKit */,
-				5CA250192FF3399500E2563C /* WhisperKit */,
+				5CF100000000000000000A02 /* FluidAudio */,
+				5CF200000000000000000A02 /* Hub */,
+				5CF200000000000000000A03 /* Tokenizers */,
 				5CB100000000000000000A02 /* MLXLLM */,
 				5CB100000000000000000A03 /* MLXLMCommon */,
 				5CB100000000000000000A04 /* MLXEmbedders */,
@@ -165,8 +168,9 @@
 			mainGroup = 5CDE08D42FEA41D600DFAFA7;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				5CA250162FF3399500E2563C /* XCRemoteSwiftPackageReference "argmax-oss-swift" */,
 				5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5CDE08DE2FEA41D600DFAFA7 /* Products */;
@@ -503,14 +507,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		5CA250162FF3399500E2563C /* XCRemoteSwiftPackageReference "argmax-oss-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/argmaxinc/argmax-oss-swift";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
 		5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
@@ -519,19 +515,25 @@
 				version = 3.31.4;
 			};
 		};
+		5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio";
+			requirement = {
+				kind = exactVersion;
+				version = 0.15.5;
+			};
+		};
+		5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers";
+			requirement = {
+				kind = exactVersion;
+				version = 1.3.3;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		5CA250172FF3399500E2563C /* SpeakerKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5CA250162FF3399500E2563C /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
-			productName = SpeakerKit;
-		};
-		5CA250192FF3399500E2563C /* WhisperKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5CA250162FF3399500E2563C /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
-			productName = WhisperKit;
-		};
 		5CB100000000000000000A02 /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
@@ -546,6 +548,21 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
 			productName = MLXEmbedders;
+		};
+		5CF100000000000000000A02 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
+		5CF200000000000000000A02 /* Hub */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Hub;
+		};
+		5CF200000000000000000A03 /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

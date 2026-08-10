@@ -30,10 +30,9 @@ struct CaptureGapTests {
     /// exactly where the arithmetic says.
     private static let batchSamples = 1600
 
-    private static func makePipeline() async -> (TranscriptionPipeline, CollectingGateSink) {
+    private static func makePipeline() async -> (LiveInputMonitor, CollectingGateSink) {
         let sink = CollectingGateSink()
-        let pipeline = TranscriptionPipeline(gateDiagnostics: sink)
-        await pipeline.prepareForGateTestingWithoutTranscriber()
+        let pipeline = LiveInputMonitor(gateDiagnostics: sink)
         return (pipeline, sink)
     }
 
@@ -42,7 +41,7 @@ struct CaptureGapTests {
     /// second of buffered audio finalizes as exactly one 1.0 s chunk.
     private static func ingestSilence(
         _ seconds: Double,
-        into pipeline: TranscriptionPipeline,
+        into pipeline: LiveInputMonitor,
         on channel: AudioChannel
     ) async {
         let total = Int(seconds * AudioConstants.sampleRate)

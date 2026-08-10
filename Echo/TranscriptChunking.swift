@@ -125,7 +125,7 @@ struct TranscriptChunk: Identifiable, Hashable, Sendable {
     var end: TimeInterval { segments.last?.end ?? 0 }
 
     /// One line per segment, e.g.
-    /// `"[3:05–3:12] You: …\n[3:13–3:30] Team: …"`.
+    /// `"[3:05–3:12] You: …\n[3:13–3:30] Others: …"`.
     /// Uses `Speaker.displayName` and the same `m:ss` / `h:mm:ss` rule as
     /// `SummarizationPipeline.timestamp`.
     var plainText: String {

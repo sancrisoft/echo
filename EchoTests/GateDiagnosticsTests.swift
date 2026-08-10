@@ -129,8 +129,7 @@ struct GateDiagnosticsTests {
     /// mechanism SP-002 instruments).
     @Test func silentIngestEmitsOneDropRecordPerFinalizedChunk() async {
         let sink = CollectingGateSink()
-        let pipeline = TranscriptionPipeline(gateDiagnostics: sink)
-        await pipeline.prepareForGateTestingWithoutTranscriber()
+        let pipeline = LiveInputMonitor(gateDiagnostics: sink)
 
         let chunk = [Float](repeating: 0, count: AECFixtureRunner.chunkSize)
         let totalSamples = 2 * Int(AudioConstants.sampleRate)
@@ -156,8 +155,7 @@ struct GateDiagnosticsTests {
     /// (SP-002 success criterion: never a silently mute Team channel).
     @Test func systemChannelRecordsCarryTheSystemFallbackBreakdown() async {
         let sink = CollectingGateSink()
-        let pipeline = TranscriptionPipeline(gateDiagnostics: sink)
-        await pipeline.prepareForGateTestingWithoutTranscriber()
+        let pipeline = LiveInputMonitor(gateDiagnostics: sink)
 
         let chunk = [Float](repeating: 0, count: AECFixtureRunner.chunkSize)
         for _ in 0 ..< (Int(AudioConstants.sampleRate) / AECFixtureRunner.chunkSize) {
@@ -243,8 +241,7 @@ struct GateDiagnosticsTests {
     func bleedOnlyRawMicTakeIsFullyCoveredByPerChunkRecords() async throws {
         let take = try Fixtures.loadWAV(at: Fixtures.micURL("bleed-only"))
         let sink = CollectingGateSink()
-        let pipeline = TranscriptionPipeline(gateDiagnostics: sink)
-        await pipeline.prepareForGateTestingWithoutTranscriber()
+        let pipeline = LiveInputMonitor(gateDiagnostics: sink)
 
         await Self.replay(take, into: pipeline, on: .microphone)
 
@@ -265,8 +262,7 @@ struct GateDiagnosticsTests {
     func monologueMicTakeIsMajorityTranscribedByDuration() async throws {
         let take = try Fixtures.loadWAV(at: Fixtures.micURL("monologue"))
         let sink = CollectingGateSink()
-        let pipeline = TranscriptionPipeline(gateDiagnostics: sink)
-        await pipeline.prepareForGateTestingWithoutTranscriber()
+        let pipeline = LiveInputMonitor(gateDiagnostics: sink)
 
         await Self.replay(take, into: pipeline, on: .microphone)
 
@@ -288,7 +284,7 @@ struct GateDiagnosticsTests {
     /// mirroring a real session end.
     private static func replay(
         _ samples: [Float],
-        into pipeline: TranscriptionPipeline,
+        into pipeline: LiveInputMonitor,
         on channel: AudioChannel
     ) async {
         var offset = 0

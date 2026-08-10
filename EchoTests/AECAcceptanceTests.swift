@@ -3,16 +3,17 @@
 //  EchoTests
 //
 //  S5 acceptance suite (SP-001 test layer 4): the Success Criteria scenarios
-//  end-to-end — fixture audio → SwitchingAECStage → TranscriptionPipeline →
-//  RecordingState (transcript dedup included) — asserting on the emitted
-//  transcript segments per channel. This suite is the executable definition
-//  of done for SP-001.
+//  end-to-end — fixture audio → SwitchingAECStage → ParakeetPass — asserting
+//  on the transcribed segments per channel. This suite is the executable
+//  definition of done for SP-001.
 //
-//  Slow: it loads WhisperKit large-v3, so it is gated on ECHO_ACCEPTANCE=1
-//  in addition to the recorded fixtures. See EchoTests/Fixtures/README.md
-//  for the exact invocation.
+//  Slow: it loads the Parakeet model (which must already be on disk — the
+//  suite never downloads), so it is gated on ECHO_ACCEPTANCE=1 in addition
+//  to the recorded fixtures. See Fixtures/README.md for the exact
+//  invocation.
 //
 
+import AVFoundation
 import Foundation
 import Testing
 @testable import Echo
@@ -24,13 +25,58 @@ nonisolated enum Acceptance {
     }
 
     static let gate: Comment = """
-    Slow WhisperKit suite — run on demand with \
+    Slow transcription suite — run on demand with \
     TEST_RUNNER_ECHO_ACCEPTANCE=1 xcodebuild test -project Echo.xcodeproj \
-    -scheme Echo -destination 'platform=macOS' (see EchoTests/Fixtures/README.md)
+    -scheme Echo -destination 'platform=macOS' (see Fixtures/README.md). \
+    Needs the Parakeet model already downloaded under \
+    ~/Library/Application Support/Echo/Models — the suite never fetches it.
     """
 
-    /// One pipeline for the whole suite so the (heavy) model loads once.
-    static let pipeline = TranscriptionPipeline()
+    /// The real on-disk model, resolved through the app's own manager. Purely
+    /// a disk check: nothing here downloads, and nothing is written to the
+    /// app's data folder.
+    static let models = ManagedParakeetModelProvider(manager: ParakeetModelManager())
+
+    /// Transcribes in-memory 16 kHz mono channels through the production pass.
+    /// The pass reads `AVAudioFile` URLs (retained audio is its input), so each
+    /// channel is staged as a canonical temp WAV and removed afterwards.
+    static func transcribe(_ audio: [AudioChannel: [Float]]) async throws -> [TranscriptSegment] {
+        var files: [AudioChannel: URL] = [:]
+        for (channel, samples) in audio where !samples.isEmpty {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "echo-acceptance-\(channel.rawValue)-\(UUID().uuidString).wav"
+            )
+            try writeCanonicalWAV(samples, to: url)
+            files[channel] = url
+        }
+        defer {
+            for url in files.values { try? FileManager.default.removeItem(at: url) }
+        }
+        return try await ParakeetPass.run(retainedFiles: files, models: models)
+    }
+
+    /// 16 kHz mono Float32 — the canonical ingest format retained audio uses,
+    /// so the staged file decodes exactly like a real meeting's.
+    static func writeCanonicalWAV(_ samples: [Float], to url: URL) throws {
+        let format = AudioConstants.captureFormat
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: format.settings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(samples.count)
+        ), let channelData = buffer.floatChannelData else {
+            throw Fixtures.LoadError.unsupportedFormat(url)
+        }
+        samples.withUnsafeBufferPointer {
+            channelData[0].update(from: $0.baseAddress!, count: samples.count)
+        }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        try file.write(from: buffer)
+    }
 }
 
 @Suite(.serialized, .enabled(if: Acceptance.isEnabled, Acceptance.gate))
@@ -42,16 +88,18 @@ struct AECAcceptanceTests {
     // MARK: - Harness
 
     /// Replays a fixture pair through the production audio path at full
-    /// speed: read-only far-end copy + Team ingest, mic through the stage,
-    /// interleaved at the 10 ms capture cadence.
+    /// speed: read-only far-end copy + Team retention, mic through the stage,
+    /// interleaved at the 10 ms capture cadence. The processed samples are
+    /// exactly what retention would have written, so transcribing them is
+    /// what the real meeting's pass would see.
     private func transcribe(
         mic: [Float],
         system: [Float],
         mode: EchoHandlingMode
     ) async throws -> [TranscriptSegment] {
-        let state = RecordingState()
         let stage = SwitchingAECStage(engineStage: WebRTCAECStage(), mode: mode)
-        await Acceptance.pipeline.start(appendingTo: state)
+        var retainedMic: [Float] = []
+        var retainedSystem: [Float] = []
 
         let chunk = AECFixtureRunner.chunkSize
         var offset = 0
@@ -60,16 +108,16 @@ struct AECAcceptanceTests {
             if offset < system.count {
                 let far = Array(system[offset ..< min(offset + chunk, system.count)])
                 stage.feedFarEnd(far)
-                await Acceptance.pipeline.ingest(far, from: .system)
+                retainedSystem += far
             }
             if offset < mic.count {
-                let near = stage.processMicSamples(Array(mic[offset ..< min(offset + chunk, mic.count)]))
-                await Acceptance.pipeline.ingest(near, from: .microphone)
+                retainedMic += stage.processMicSamples(
+                    Array(mic[offset ..< min(offset + chunk, mic.count)])
+                )
             }
             offset += chunk
         }
-        await Acceptance.pipeline.stop()
-        return state.segments
+        return try await Acceptance.transcribe([.microphone: retainedMic, .system: retainedSystem])
     }
 
     private nonisolated static func words(_ text: String) -> [String] {
@@ -80,7 +128,7 @@ struct AECAcceptanceTests {
 
     /// Fraction of `needle`'s words present in `haystack` (multiset
     /// containment) — the fuzzy-containment measure that absorbs normal
-    /// Whisper wording variance between two runs.
+    /// decoder wording variance between two runs.
     private nonisolated static func containment(of needle: [String], in haystack: [String]) -> Double {
         guard !needle.isEmpty else { return 1 }
         var pool: [String: Int] = [:]
@@ -123,8 +171,8 @@ struct AECAcceptanceTests {
         Fixtures.instructions
     ))
     func doubleTalkKeepsEveryBaselineUserUtterance() async throws {
-        // Headphones baseline (echo processing bypassed) defines what
-        // Whisper can hear at all — its miss rate is not charged to AEC.
+        // Headphones baseline (echo processing bypassed) defines what the
+        // model can hear at all — its miss rate is not charged to AEC.
         let baselinePair = try Fixtures.load("double-talk-baseline")
         let baseline = try await transcribe(
             mic: baselinePair.mic,
@@ -146,7 +194,7 @@ struct AECAcceptanceTests {
         for utterance in baselineUtterances {
             let ratio = Self.containment(of: Self.words(utterance.text), in: youPool)
             // Tunable fuzzy floor: full word-for-word equality would charge
-            // Whisper's own variance to the feature.
+            // the decoder's own variance to the feature.
             #expect(
                 ratio >= 0.7,
                 "utterance suppressed under cancellation: \"\(utterance.text)\" (containment \(ratio))"
@@ -172,7 +220,7 @@ struct AECAcceptanceTests {
 
         // The far-end reference is a read-only copy, so the Team ingest path
         // is byte-identical in both runs; require near-total bidirectional
-        // text overlap (tunable margin for residual Whisper nondeterminism).
+        // text overlap (tunable margin for residual decoder nondeterminism).
         let onWords = Self.words(withAEC.map(\.text).joined(separator: " "))
         let offWords = Self.words(withoutAEC.map(\.text).joined(separator: " "))
         #expect(

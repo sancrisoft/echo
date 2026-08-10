@@ -241,7 +241,7 @@ struct TranscriptChunkingTests {
 
         #expect(chunks.count == 1)
         #expect(chunks[0].plainText ==
-            "[3:05–3:12] You: Let's start the standup.\n[3:13–3:30] Team: Backend deploy is done.")
+            "[3:05–3:12] You: Let's start the standup.\n[3:13–3:30] Others: Backend deploy is done.")
     }
 
     @Test func plainTextUsesHourFormatPastOneHour() {
@@ -249,7 +249,7 @@ struct TranscriptChunkingTests {
                                   text: "Wrapping up.", start: 3_661, end: 3_665)
         let chunks = TranscriptChunker.chunks(from: [s])
 
-        #expect(chunks[0].plainText == "[1:01:01–1:01:05] Team: Wrapping up.")
+        #expect(chunks[0].plainText == "[1:01:01–1:01:05] Others: Wrapping up.")
     }
 
     // MARK: Properties over a long generated transcript

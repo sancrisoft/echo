@@ -59,10 +59,16 @@ actor MeetingStore {
 
     // MARK: - Write
 
-    /// Creates the meeting folder and writes `meta.json` + `transcript.json`
-    /// (+ `summary.json` when the record already carries one). `meta` is
-    /// normalized to the record it is saved with — `segmentCount` and
-    /// `hasSummary` always reflect what actually landed on disk.
+    /// Creates the meeting folder and writes `meta.json` (+ `transcript.json`
+    /// when the record carries segments, + `summary.json` when it carries a
+    /// summary). `meta` is normalized to the record it is saved with —
+    /// `segmentCount` and `hasSummary` always reflect what actually landed on
+    /// disk.
+    ///
+    /// A segment-less save is the normal stop path now: a just-stopped meeting
+    /// has retained audio and no words yet, and writing an empty
+    /// `transcript.json` beside it would claim a transcript that doesn't
+    /// exist. `ParakeetPass` writes the real one through `replaceTranscript`.
     func save(_ record: MeetingRecord) async throws {
         let directory = directory(for: record.meta.id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -71,7 +77,9 @@ actor MeetingStore {
         meta.segmentCount = record.segments.count
         meta.hasSummary = record.summary != nil
 
-        try writeJSON(record.segments, to: directory.appending(path: Filename.transcript))
+        if !record.segments.isEmpty {
+            try writeJSON(record.segments, to: directory.appending(path: Filename.transcript))
+        }
         if let summary = record.summary {
             try await writeSummary(summary, to: directory.appending(path: Filename.summary))
         }
@@ -150,14 +158,24 @@ actor MeetingStore {
         return metas.sorted { $0.startedAt > $1.startedAt }
     }
 
-    /// The full meeting (header + transcript + summary if present). Throws if the
-    /// folder / meta / transcript is missing or corrupt.
+    /// The full meeting (header + transcript + summary if present). Throws if
+    /// the folder / meta is missing or corrupt, or if a transcript that exists
+    /// can't be read.
+    ///
+    /// A meeting with NO `transcript.json` loads with no segments rather than
+    /// throwing: that is the honest state of a meeting whose pass hasn't
+    /// produced words yet (pending) or never will (terminal failure). Only an
+    /// absent file reads that way — an unreadable one still throws, so real
+    /// corruption is never silently rendered as "no transcript".
     func loadRecord(_ id: UUID) async throws -> MeetingRecord {
         let directory = directory(for: id)
         let meta = try decode(MeetingMeta.self, from: directory.appending(path: Filename.meta))
         // The transcript is the big payload (MBs for a 3 h meeting); it decodes
         // here in the actor, off the main thread, via its nonisolated conformance.
-        let segments = try decode([TranscriptSegment].self, from: directory.appending(path: Filename.transcript))
+        let transcriptURL = directory.appending(path: Filename.transcript)
+        let segments = FileManager.default.fileExists(atPath: transcriptURL.path)
+            ? try decode([TranscriptSegment].self, from: transcriptURL)
+            : []
         let summaryURL = directory.appending(path: Filename.summary)
         let summary = FileManager.default.fileExists(atPath: summaryURL.path)
             ? try await readSummary(from: summaryURL)
@@ -204,14 +222,14 @@ actor MeetingStore {
         try writeJSON(meta, to: metaURL)
     }
 
-    /// Records that the meeting's persisted transcript is (and will remain)
-    /// the live floor — a single atomic `meta.json` write, no other file
-    /// touched (ADR-022/ADR-024: the terminal transition is safe as a state
-    /// bit precisely because nothing else is written beside it). Called when
-    /// the live-floor outcome is known: retention never armed, or a pass
-    /// cycle terminally converged (the ADR-024 slice). Throws if the meeting
-    /// folder / meta is missing.
-    func recordLiveFloorProvenance(for id: UUID, provenance: TranscriptProvenance) throws {
+    /// Records the meeting's terminal transcript provenance — a single atomic
+    /// `meta.json` write, no other file touched (ADR-022/ADR-024: the terminal
+    /// transition is safe as a state bit precisely because nothing else is
+    /// written beside it). Called when a pass cycle terminally converged: the
+    /// retained audio stays for the manual Retry, and this bit is what ends
+    /// the meeting's pending classification. Throws if the meeting folder /
+    /// meta is missing.
+    func recordTerminalProvenance(for id: UUID, provenance: TranscriptProvenance) throws {
         let metaURL = directory(for: id).appending(path: Filename.meta)
         var meta = try decode(MeetingMeta.self, from: metaURL)
         meta.transcriptProvenance = provenance
@@ -266,8 +284,12 @@ actor MeetingStore {
         /// Audio with no transcript provenance: an unfinished cycle — the
         /// launch scan auto-resumes it (ADR-016, unchanged).
         case pending
-        /// Audio with `liveFloor` provenance: a terminally converged draft —
-        /// never auto-resumed; only the user's Retry opens a new cycle.
+        /// Audio with `terminalFailure` provenance: the pass exhausted its
+        /// retries and the meeting has no transcript — never auto-resumed;
+        /// only the user's Retry opens a new cycle.
+        case terminalFailure
+        /// Audio with legacy `liveFloor` provenance: a pre-migration draft
+        /// whose live transcript stands — never auto-resumed either.
         case terminalDraft
         /// Audio with `finalPass` provenance: the orphan of a success whose
         /// cleanup crashed between the transcript replace and the audio
@@ -284,6 +306,7 @@ actor MeetingStore {
         guard present else { return .none }
         switch transcriptSource {
         case nil: return .pending
+        case .terminalFailure: return .terminalFailure
         case .liveFloor: return .terminalDraft
         case .finalPass: return .finalPassOrphan
         }
@@ -303,8 +326,8 @@ actor MeetingStore {
 
     /// ADR-016 amended by ADR-024: retained audio marks a meeting pending
     /// only while no transcript provenance is recorded — the terminal
-    /// transition's single atomic meta write (`liveFloor`) is what ends the
-    /// pending classification while the audio stays for the manual Retry.
+    /// transition's single atomic meta write is what ends the pending
+    /// classification while the audio stays for the manual Retry.
     func isPendingFinalization(_ id: UUID) -> Bool {
         retainedAudioDisposition(for: id) == .pending
     }
@@ -312,9 +335,8 @@ actor MeetingStore {
     /// Meetings still pending finalization, newest first — the launch-resume
     /// work queue (ADR-016: crash-resume is a directory scan) and the
     /// summary backfill's exclusion set. Only the true pending class
-    /// qualifies (ADR-024): terminal drafts rest until the user retries (and
-    /// their floor summary may generate), finalPass orphans are sweep
-    /// targets. Trashed meetings are excluded: the user set them aside, and
+    /// qualifies (ADR-024): terminal failures and legacy drafts rest until
+    /// the user retries, finalPass orphans are sweep targets. Trashed meetings are excluded: the user set them aside, and
     /// their retention is deleted with the folder (a restore surfaces them
     /// to the next launch's scan).
     func pendingFinalizationMeetingIDs() -> [UUID] {
@@ -419,6 +441,190 @@ actor MeetingStore {
                 )
             }
         }
+    }
+
+    // MARK: - Preserved recordings (settings-page retention)
+
+    /// Canonical name of a channel's *preserved* audio file — the product
+    /// "keep recordings" feature's sibling of the retained and DEBUG-kept
+    /// names. Deliberately NOT `retained-*`: `retainedAudioFiles` never looks
+    /// for these, so a preserved meeting classifies `.none` under ADR-024 —
+    /// never auto-resumed, never swept. The files stay inside the meeting's
+    /// own folder, so trashing or deleting the meeting takes them along.
+    nonisolated static func preservedAudioFileName(for channel: AudioChannel) -> String {
+        switch channel {
+        case .microphone: return "audio-mic.m4a"
+        case .system: return "audio-system.m4a"
+        }
+    }
+
+    /// The preserved-audio files currently present in a meeting's folder.
+    func preservedAudioFiles(for id: UUID) -> [AudioChannel: URL] {
+        let directory = directory(for: id)
+        var files: [AudioChannel: URL] = [:]
+        for channel in [AudioChannel.microphone, .system] {
+            let url = directory.appending(
+                path: Self.preservedAudioFileName(for: channel),
+                directoryHint: .notDirectory
+            )
+            if FileManager.default.fileExists(atPath: url.path) {
+                files[channel] = url
+            }
+        }
+        return files
+    }
+
+    /// Whether the meeting's folder holds a preserved recording — the exact
+    /// lifetime of the detail's player/re-transcribe affordances.
+    func hasPreservedAudio(for id: UUID) -> Bool {
+        !preservedAudioFiles(for: id).isEmpty
+    }
+
+    /// Preserves the meeting's retained audio as its saved recording: each
+    /// retained file currently present is RENAMED to its preserved name in
+    /// the same folder (a move — cheap and atomic on the same volume, bytes
+    /// untouched), mirroring `preserveRetainedAudioAsDebugFixture`. The
+    /// success path's normal `deleteRetainedAudio` then finds nothing,
+    /// harmlessly. An existing preserved file is replaced first — the
+    /// overwrite case is a re-transcribe writing the same bytes back.
+    /// Returns whether anything was preserved. A per-file failure is
+    /// non-fatal: the file stays under its retained name and the normal
+    /// deletion cleans it up.
+    @discardableResult
+    func preserveRetainedAudio(for id: UUID) -> Bool {
+        var preserved = false
+        for (channel, url) in retainedAudioFiles(for: id) {
+            let destination = directory(for: id).appending(
+                path: Self.preservedAudioFileName(for: channel),
+                directoryHint: .notDirectory
+            )
+            do {
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.moveItem(at: url, to: destination)
+                preserved = true
+            } catch {
+                ErrorTrace.record(
+                    "Preserving retained audio failed",
+                    error: error,
+                    category: "MeetingStore",
+                    metadata: [
+                        "meetingID": id.uuidString,
+                        "file": url.lastPathComponent,
+                    ]
+                )
+            }
+        }
+        return preserved
+    }
+
+    /// Deletes exactly this meeting's preserved-audio files — named targets,
+    /// never a directory sweep, like `deleteRetainedAudio`. A per-file
+    /// failure is non-fatal (logged).
+    func deletePreservedAudio(for id: UUID) {
+        for url in preservedAudioFiles(for: id).values {
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                ErrorTrace.record(
+                    "Preserved-audio deletion failed",
+                    error: error,
+                    category: "MeetingStore",
+                    metadata: [
+                        "meetingID": id.uuidString,
+                        "file": url.lastPathComponent,
+                    ]
+                )
+            }
+        }
+    }
+
+    /// Clones the meeting's preserved audio back to its retained names —
+    /// re-transcribe's arming step (§3.5). COPY, never rename: the preserved
+    /// copy is the archive, so it survives crashes, terminal failures and a
+    /// mid-flight retention-setting change. On APFS the copy is a clone (no
+    /// real disk cost). Crash-safety needs no new state: a quit between this
+    /// clone and the pass concluding leaves `retained-*` + `finalPass`
+    /// provenance — ADR-024's orphan class, swept at the next launch while
+    /// `audio-*` survives and the previous transcript stands. All-or-nothing
+    /// like `adoptRetainedAudio`: a partial channel set must never feed a
+    /// pass, or it would replace a fuller transcript with less.
+    func cloneAudioForRetranscription(for id: UUID) -> Bool {
+        let preserved = preservedAudioFiles(for: id)
+        guard !preserved.isEmpty else { return false }
+        var cloned: [URL] = []
+        do {
+            for (channel, source) in preserved {
+                let destination = directory(for: id).appending(
+                    path: Self.retainedAudioFileName(for: channel),
+                    directoryHint: .notDirectory
+                )
+                // A leftover retained file (a previous cycle's terminal
+                // failure, or a re-tap) is replaced by the fresh clone.
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.copyItem(at: source, to: destination)
+                cloned.append(destination)
+            }
+            return true
+        } catch {
+            for url in cloned {
+                try? FileManager.default.removeItem(at: url)
+            }
+            ErrorTrace.record(
+                "Cloning preserved audio for re-transcription failed",
+                error: error,
+                category: "MeetingStore",
+                metadata: ["meetingID": id.uuidString]
+            )
+            return false
+        }
+    }
+
+    /// Deletes the meeting's derived summary artifacts — `summary.json` and
+    /// any stale `rag_index.json` sidecar — and clears the meta bits that
+    /// describe them (named targets only, mirroring the store's delete
+    /// discipline). Re-transcribe calls this before arming its pass: the new
+    /// transcript invalidates both, and the cleared `hasSummary` is what
+    /// makes the post-pass backfill regenerate the summary. Throws if the
+    /// meeting folder / meta is missing.
+    func removeSummaryArtifacts(for id: UUID) throws {
+        let directory = directory(for: id)
+        let metaURL = directory.appending(path: Filename.meta)
+        var meta = try decode(MeetingMeta.self, from: metaURL)
+        try? FileManager.default.removeItem(at: directory.appending(path: Filename.summary))
+        try? FileManager.default.removeItem(at: directory.appending(path: "rag_index.json"))
+        meta.hasSummary = false
+        meta.oneLineDescription = nil
+        meta.summaryModelName = nil
+        try writeJSON(meta, to: metaURL)
+    }
+
+    /// Deletes every non-trashed meeting's preserved recording — the
+    /// Settings page's "Delete All Saved Recordings…" action. Per-meeting
+    /// named targets (`deletePreservedAudio`), never a directory sweep.
+    func deleteAllPreservedAudio() {
+        for meta in listMetas() where !meta.isTrashed {
+            deletePreservedAudio(for: meta.id)
+        }
+    }
+
+    /// How many non-trashed meetings hold a preserved recording, and the
+    /// recordings' total bytes — the Settings page's "Delete All Saved
+    /// Recordings (3 — 214 MB)…" label and the storage breakdown's
+    /// saved-recordings row. Trashed meetings are excluded (their recordings
+    /// leave with the trash purge, and the breakdown counts them under Trash).
+    func preservedAudioTotals() -> (meetings: Int, bytes: Int64) {
+        var meetings = 0
+        var bytes: Int64 = 0
+        for meta in listMetas() where !meta.isTrashed {
+            let files = preservedAudioFiles(for: meta.id)
+            guard !files.isEmpty else { continue }
+            meetings += 1
+            for url in files.values {
+                let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey])
+                bytes += Int64(values?.totalFileAllocatedSize ?? values?.fileAllocatedSize ?? 0)
+            }
+        }
+        return (meetings, bytes)
     }
 
     // MARK: - DEBUG kept fixtures (SP-007 keep flag)

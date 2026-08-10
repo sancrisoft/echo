@@ -202,8 +202,7 @@ struct ExternalInputMeasurementTests {
 
     private static func runGate(_ samples: [Float], on channel: AudioChannel) async -> [GateDecisionRecord] {
         let sink = CollectingGateSink()
-        let pipeline = TranscriptionPipeline(gateDiagnostics: sink)
-        await pipeline.prepareForGateTestingWithoutTranscriber()
+        let pipeline = LiveInputMonitor(gateDiagnostics: sink)
         var offset = 0
         while offset < samples.count {
             let end = min(offset + AECFixtureRunner.chunkSize, samples.count)

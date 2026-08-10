@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import Hub
 import Testing
 @testable import Echo
 
@@ -55,9 +56,9 @@ struct RetiredModelCleanupTests {
     }
 
     /// models/<org>/<repo> under a root — the Hub snapshot layout. Built
-    /// literally here (not through HubApiWrapper) on purpose: the test pins
-    /// the real on-disk contract, so a drift in production's derivation
-    /// fails loudly instead of being followed silently.
+    /// literally here (not through HubApi) on purpose: the test pins the real
+    /// on-disk contract, so a drift in production's derivation fails loudly
+    /// instead of being followed silently.
     private func repoDirectory(for repoID: String, under modelsRoot: URL) -> URL {
         modelsRoot.appending(path: "models").appending(path: repoID)
     }
@@ -94,6 +95,7 @@ struct RetiredModelCleanupTests {
     private final class CountingRemover: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
+        private var urls: [URL] = []
         private var fails: Bool
 
         init(fails: Bool = false) { self.fails = fails }
@@ -104,6 +106,7 @@ struct RetiredModelCleanupTests {
             { [self] url in
                 lock.lock()
                 count += 1
+                urls.append(url)
                 let shouldFail = fails
                 lock.unlock()
                 if shouldFail { throw StubbedRemovalError() }
@@ -115,6 +118,8 @@ struct RetiredModelCleanupTests {
         /// the next launch.
         func setFails(_ newValue: Bool) { lock.lock(); fails = newValue; lock.unlock() }
         var removeCount: Int { lock.lock(); defer { lock.unlock() }; return count }
+        /// What was actually targeted — the named-scope assertion.
+        var removedURLs: [URL] { lock.lock(); defer { lock.unlock() }; return urls }
     }
 
     /// Every regular file under `root`, keyed by relative path, with full
@@ -171,15 +176,18 @@ struct RetiredModelCleanupTests {
             "qwen partial",
             at: qwen.appending(path: ".cache/huggingface/download/model.safetensors.def456.incomplete")
         )
-        let whisper = repoDirectory(for: "argmaxinc/whisperkit-coreml", under: world.modelsRoot)
-        try write("whisper weights", at: whisper.appending(path: "openai_whisper-large-v3/MelSpectrogram.mlmodelc/model.mil"))
+        // The transcription model, which uses a FLAT repo folder under the
+        // models root rather than the models/<org>/<repo> layout — it must
+        // survive every cleanup untouched.
+        let parakeet = world.modelsRoot.appending(path: "parakeet-tdt-0.6b-v3-coreml", directoryHint: .isDirectory)
+        try write("parakeet weights", at: parakeet.appending(path: "Encoder.mlmodelc/model.mil"))
         let embeddings = repoDirectory(for: "mlx-community/embeddinggemma-300m-bf16", under: world.modelsRoot)
         try write("embedding weights", at: embeddings.appending(path: "model.safetensors"))
         try write("a meeting", at: world.meetingsRoot.appending(path: "2026-07-28-standup/meeting.json"))
 
         let before = try (
             qwen: fingerprint(of: qwen),
-            whisper: fingerprint(of: whisper),
+            parakeet: fingerprint(of: parakeet),
             embeddings: fingerprint(of: embeddings),
             meetings: fingerprint(of: world.meetingsRoot)
         )
@@ -191,7 +199,7 @@ struct RetiredModelCleanupTests {
 
         #expect(!FileManager.default.fileExists(atPath: retired.path))
         #expect(try fingerprint(of: qwen) == before.qwen)
-        #expect(try fingerprint(of: whisper) == before.whisper)
+        #expect(try fingerprint(of: parakeet) == before.parakeet)
         #expect(try fingerprint(of: embeddings) == before.embeddings)
         #expect(try fingerprint(of: world.meetingsRoot) == before.meetings)
     }
@@ -223,9 +231,9 @@ struct RetiredModelCleanupTests {
         defer { world.destroy() }
         let retired = repoDirectory(for: Self.retiredID, under: world.modelsRoot)
         try populateRetiredRepo(at: retired)
-        let whisper = repoDirectory(for: "argmaxinc/whisperkit-coreml", under: world.modelsRoot)
-        try write("whisper weights", at: whisper.appending(path: "model.mil"))
-        let beforeWhisper = try fingerprint(of: whisper)
+        let parakeet = world.modelsRoot.appending(path: "parakeet-tdt-0.6b-v3-coreml", directoryHint: .isDirectory)
+        try write("parakeet weights", at: parakeet.appending(path: "Encoder.mlmodelc/model.mil"))
+        let beforeParakeet = try fingerprint(of: parakeet)
         let beforeRetired = try fingerprint(of: retired)
         let remover = CountingRemover(fails: true)
 
@@ -240,7 +248,7 @@ struct RetiredModelCleanupTests {
 
         #expect(remover.removeCount == 1)
         #expect(try fingerprint(of: retired) == beforeRetired)
-        #expect(try fingerprint(of: whisper) == beforeWhisper)
+        #expect(try fingerprint(of: parakeet) == beforeParakeet)
 
         // Launch 2: the lock is gone. No persisted trigger state to consult —
         // repetition alone makes the obligation durable.
@@ -253,7 +261,7 @@ struct RetiredModelCleanupTests {
 
         #expect(remover.removeCount == 2)
         #expect(!FileManager.default.fileExists(atPath: retired.path))
-        #expect(try fingerprint(of: whisper) == beforeWhisper)
+        #expect(try fingerprint(of: parakeet) == beforeParakeet)
     }
 
     // MARK: - Behavior 5: staging-only partials are covered the same
@@ -299,11 +307,71 @@ struct RetiredModelCleanupTests {
 
         RetiredModelCleanup.run(
             retiredRepoIDs: [],
+            retiredFileNames: [],
             modelsRoot: world.modelsRoot,
             remove: remover.remove
         )
 
         #expect(remover.removeCount == 0)
         #expect(try fingerprint(of: world.modelsRoot) == before)
+    }
+
+    // MARK: - Behavior 7: retired loose files
+
+    @Test("a retired loose file is deleted; an absent one attempts nothing")
+    func retiredLooseFileRemoved() throws {
+        let world = try TempWorld.make()
+        defer { world.destroy() }
+        let manifest = world.modelsRoot.appending(path: "final-pass-model-manifest.json")
+        try write("{}", at: manifest)
+        // A sibling file the list does not name must survive — the same
+        // named-target scope the repo deletions have.
+        let keeper = world.modelsRoot.appending(path: "summary-model-manifest.json")
+        try write("{}", at: keeper)
+        let remover = CountingRemover()
+
+        RetiredModelCleanup.run(
+            retiredRepoIDs: [],
+            retiredFileNames: ["final-pass-model-manifest.json"],
+            modelsRoot: world.modelsRoot,
+            remove: remover.remove
+        )
+
+        #expect(remover.removeCount == 1)
+        #expect(remover.removedURLs == [manifest])
+        #expect(FileManager.default.fileExists(atPath: keeper.path))
+
+        // Second launch: already gone (the run above deleted it), so no
+        // attempt at all — idempotent by repetition, no persisted trigger.
+        #expect(!FileManager.default.fileExists(atPath: manifest.path))
+        let second = CountingRemover()
+        RetiredModelCleanup.run(
+            retiredRepoIDs: [],
+            retiredFileNames: ["final-pass-model-manifest.json"],
+            modelsRoot: world.modelsRoot,
+            remove: second.remove
+        )
+        #expect(second.removeCount == 0)
+    }
+
+    // MARK: - Behavior 8: layout parity across the Hub client swap
+
+    /// The guarantee that made retiring the Argmax package a zero-migration
+    /// swap: swift-transformers' `HubApi` computes the SAME
+    /// `<downloadBase>/models/<org>/<repo>` path the vendored client did, so
+    /// the summary model's existing snapshot keeps loading and this cleanup
+    /// keeps targeting the right directory. Pinned executably, against the
+    /// literal path — if the layout ever drifts, both break here first.
+    @Test("HubApi's repo location is downloadBase/models/<org>/<repo>")
+    func hubLayoutParity() throws {
+        let world = try TempWorld.make()
+        defer { world.destroy() }
+        let repoID = "mlx-community/Qwen3.5-4B-OptiQ-4bit"
+
+        let resolved = HubApi(downloadBase: world.modelsRoot, cache: nil)
+            .localRepoLocation(HubApi.Repo(id: repoID))
+
+        #expect(resolved == repoDirectory(for: repoID, under: world.modelsRoot))
+        #expect(resolved.path == world.modelsRoot.appending(path: "models/\(repoID)").path)
     }
 }

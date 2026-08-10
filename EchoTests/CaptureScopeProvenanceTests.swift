@@ -183,17 +183,17 @@ struct CaptureScopeProvenanceTests {
         }
     }
 
-    @Test("recordLiveFloorProvenance preserves a previously persisted scope record")
-    func recordLiveFloorProvenancePreservesScope() async throws {
+    @Test("recordTerminalProvenance preserves a previously persisted scope record")
+    func recordTerminalProvenancePreservesScope() async throws {
         try await withTempStore { store, _ in
             let record = CaptureScopeRecord(kind: "app", appName: "FaceTime")
             let meta = makeMeta(captureScope: record)
             try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
 
-            try await store.recordLiveFloorProvenance(
+            try await store.recordTerminalProvenance(
                 for: meta.id,
                 provenance: TranscriptProvenance(
-                    source: .liveFloor,
+                    source: .terminalFailure,
                     modelName: "large-v3-v20240930_626MB",
                     tier: "reuseLive",
                     servedByFallback: false
