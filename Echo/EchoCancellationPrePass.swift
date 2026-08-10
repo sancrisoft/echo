@@ -74,7 +74,30 @@ nonisolated enum EchoCancellationPrePass {
     /// Bounding the filter to bleed-shaped audio trades the double-talk
     /// residue — which dedup and the cutter still see — for never deleting
     /// speech only this stage can see.
-    static let nearEndRatioFloor: Float = 0.5
+    /// Lowering it protects MORE (the frame only has to clear a smaller share
+    /// of the reference), at the cost of leaving more bleed behind — but
+    /// measurably it is NOT the lever on word loss. Swept 0.50 → 0.05 over the
+    /// E656 and 65B5 replays (2026-08-10), own-word preservation moved
+    /// 0.622 → 0.671 and 0.820 → 0.848: a tenfold change in the threshold buys
+    /// five points, nowhere near the ≥0.90 the plan asks for. The frames that
+    /// carry the lost words fail `near >= EnergyEnvelope.silenceFloor`, not
+    /// this ratio — on E656 the user's voice sits under the floor while the
+    /// TV's bleed does not, which caps protection at 51% however low this
+    /// goes. The floor, or the envelope under it, is where to look next.
+    static var nearEndRatioFloor: Float {
+        #if DEBUG
+        // Measurement hook: sweep the guard against the replay fixtures
+        // without a rebuild — TEST_RUNNER_ECHO_AEC_NEAR_END_RATIO=<float>
+        // through xcodebuild. Unset everywhere else, including the app.
+        if let raw = ProcessInfo.processInfo.environment["ECHO_AEC_NEAR_END_RATIO"],
+           let override = Float(raw) {
+            return override
+        }
+        #endif
+        return defaultNearEndRatioFloor
+    }
+
+    static let defaultNearEndRatioFloor: Float = 0.5
 
     /// Levels are compared over this much either side of a frame. Raw 100 ms
     /// frames cross constantly inside ordinary speech — a syllable's decay
