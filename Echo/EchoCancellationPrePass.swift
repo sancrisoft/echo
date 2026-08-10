@@ -35,16 +35,28 @@ nonisolated enum EchoCancellationPrePass {
 
     static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "EchoCancellationPrePass")
 
-    /// Off, because it costs more speech than it saves.
+    /// Off, because it deletes a fifth of the user's words wherever it runs and
+    /// what it buys for them is inconsistent.
     ///
-    /// Measured 2026-08-10 by replaying the two fixtures where the probe fires
-    /// (E656, 65B5) with and without this stage: it removes bleed — E656's
-    /// bleed-shaped rows fall from 61.9 s to 15.0 s — but only 62% and 82% of
-    /// the user's own vocabulary survives it, against the ≥90% the plan set as
-    /// its gate. Losing the user's own words is the worse of the two failures:
-    /// the summary is grounded in the transcript, so a word deleted here is
-    /// gone from the notes, while surviving bleed is only misattributed — the
-    /// words are still on the teammate's row and the summary still reads them.
+    /// Measured 2026-08-10 over every meeting on disk holding a kept pair —
+    /// nine — replayed with this stage on and off, everything else equal. The
+    /// probe fires on four and correctly skips the five with no speaker path,
+    /// which are byte-identical either way. Where it does fire, the share of
+    /// the user's own vocabulary that survives it, and the bleed-shaped
+    /// seconds left in the mic rows:
+    ///
+    ///     1CB18219  215 ms   80%   34.1 s → 19.3 s
+    ///     583FCA7D  278 ms   75%   29.8 s →  5.0 s
+    ///     65B5A4C0  125 ms   84%   12.2 s → 12.1 s
+    ///     E656A3F9  140 ms   77%    9.7 s → 15.1 s
+    ///
+    /// The price is steady — a fifth to a quarter of the user's words, against
+    /// the ≥90% the plan set as its gate — while the return runs from most of
+    /// the bleed gone to none of it to worse than before. Losing the user's
+    /// own words is also the worse of the two failures: the summary is
+    /// grounded in the transcript, so a word deleted here is gone from the
+    /// notes, while surviving bleed is only misattributed — the words are
+    /// still on the teammate's row and the summary still reads them.
     ///
     /// Nothing is deleted with the stage off: the probe, the engine and the
     /// near-end guard all stay, and `ECHO_AEC_PRE_PASS=1` runs them for the
