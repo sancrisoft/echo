@@ -2041,7 +2041,21 @@ private struct LiveMeetingDetail: View {
                     systemImage: "sparkles",
                     description: Text(idleSummaryDescription)
                 )
-                SummaryModelControl(onRetrySummary: retrySummaryAction)
+                // A summary-less meeting offers to make one, whether or not it
+                // is still the live session's — the same "Generate summary"
+                // the saved-meeting detail shows. Before, this idle state only
+                // ever carried the model control's "Retry", which named a
+                // failure that never happened and disappeared once the app was
+                // relaunched and the meeting stopped being the active one.
+                if let generate = generateSummaryAction {
+                    Button(action: generate) {
+                        Label("Generate summary", systemImage: "sparkles")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .help("Generate this meeting's summary now")
+                } else {
+                    SummaryModelControl()
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -2088,7 +2102,25 @@ private struct LiveMeetingDetail: View {
             || controller.finalization.queuedMeetingIDs.contains(id) {
             return "Echo will generate this once the transcript finishes finalizing."
         }
+        // A transcript with no summary is not a dead end — say what the button
+        // below it can do, or what the model still needs, instead of asking
+        // for a recording the user has already made.
+        if !controller.state.segments.isEmpty {
+            if case .ready = controller.summaryModelState {
+                return "The transcript is saved, so you can generate one now."
+            }
+            return "Generating one needs the summary model. Download it and this meeting will be processed automatically."
+        }
         return "Start and stop a recording to generate meeting notes."
+    }
+
+    /// Generates this meeting's summary on demand — the same work the
+    /// automatic post-stop generation does, so it is also what "Retry" runs
+    /// after a failure. Offered only with a transcript to ground it in and the
+    /// model on disk; otherwise the model control takes the space instead.
+    private var generateSummaryAction: (() -> Void)? {
+        guard case .ready = controller.summaryModelState else { return nil }
+        return retrySummaryAction
     }
 
     /// Re-runs the just-stopped session's summary — only while its segments
