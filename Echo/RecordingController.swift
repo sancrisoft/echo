@@ -274,7 +274,17 @@ final class RecordingController {
             // preempted): re-read from disk so an open detail — and a later
             // retrySummary — shows the final transcript (SP-005 S6).
             self.refreshLiveSegments(for: meetingID)
-            self.kickSummaryBackfill()
+            // A finished re-transcribe asks for its summary by name rather
+            // than leaving it to the scan, which is skipped entirely while
+            // automatic summaries are off. Discarded on any other conclusion
+            // (failed, terminal): the meeting kept its summary, so the
+            // request would find nothing eligible anyway.
+            if self.retranscribedAwaitingSummary.remove(meetingID) != nil,
+               self.library.meta(for: meetingID)?.hasSummary == false {
+                self.requestSummary(for: meetingID)
+            } else {
+                self.kickSummaryBackfill()
+            }
         }
 
         // Under a test host every launch side effect below is skipped (see
@@ -590,6 +600,15 @@ final class RecordingController {
     /// before the newest-first scan. Survives until a run actually consumes
     /// it, so a request made while a generation is busy still lands.
     private var requestedSummaryID: UUID?
+
+    /// Meetings whose re-transcribe is in flight and that HAD a summary when
+    /// it was asked for. Re-transcribing is an explicit user action, so the
+    /// summary it invalidates is regenerated on success even while automatic
+    /// summaries are off — the same rule the "Generate summary" button
+    /// follows. In-memory on purpose: a run that never finishes leaves the
+    /// meeting's original transcript and summary untouched, so there is
+    /// nothing for a later launch to make good on.
+    private var retranscribedAwaitingSummary: Set<UUID> = []
 
     /// User-initiated summary generation for one saved meeting. Clears the
     /// meeting's failed-this-run mark so the backfill genuinely retries it.
@@ -974,6 +993,14 @@ final class RecordingController {
             guard await library.replaceTranscript(final, provenance: provenance, for: meetingID) else {
                 return .failed
             }
+            // The new words are on disk, so the summary describing the old
+            // ones is now stale — retire it here, where the replacement it
+            // waited for actually happened. Clearing `hasSummary` is also
+            // what re-admits the meeting to the backfill; `onPassConcluded`
+            // then asks for the regeneration explicitly.
+            if retranscribedAwaitingSummary.contains(meetingID) {
+                await library.removeSummaryArtifacts(for: meetingID)
+            }
             #if DEBUG
             // SP-007 keep flag (user story 12): preserve this meeting's audio
             // as a replayable fixture; the deletion below then finds nothing,
@@ -1065,9 +1092,14 @@ final class RecordingController {
     func retranscribe(_ meetingID: UUID) async {
         guard await library.hasPreservedAudio(for: meetingID) else { return }
         guard await library.cloneAudioForRetranscription(for: meetingID) else { return }
-        // The old summary describes words about to be replaced; clearing
-        // `hasSummary` is also what re-admits the meeting to the backfill.
-        await library.removeSummaryArtifacts(for: meetingID)
+        // The old summary describes words that are only ABOUT to be replaced,
+        // so it outlives the request: a pass killed, preempted or failed
+        // mid-flight leaves the meeting exactly as it was, transcript and
+        // summary still describing each other. `replaceTranscript` retires it
+        // the moment the new words actually land.
+        if library.meta(for: meetingID)?.hasSummary == true {
+            retranscribedAwaitingSummary.insert(meetingID)
+        }
         finalization.requestManualRetry(meetingID)
     }
 
