@@ -44,11 +44,28 @@ struct TranscriptUtteranceTests {
             "Mm-hmm.", "Uh-huh.", "Okay.", "Ok.", "Ajá.", "Ah, ok.", "Ya.",
             "Claro", "Sí.", "Bien.", "Yeah.", "Mm.", "Hmm.", "Good.",
             "Thank you.", "Gracias.",
-            // Token combinations within the length bound.
+            // Token combinations.
             "Yeah, okay.", "Sí, claro.",
+            // Repetition — how people actually acknowledge, and what the old
+            // word-count bound pushed back into the flow. Both verbatim from
+            // the 2026-08-10 meeting, where they split a turn into three.
+            ". sí, sí, sí, sí, sí.", "Ah, ok, ok, ok, ok.",
+            "Mm-hmm, mm-hmm. Mm-hmm.", "ya, ya, ya, ya, ya, ya, ya",
         ])
         func standaloneRows(text: String) {
             #expect(TranscriptUtterance.isStandaloneBackchannel(text))
+        }
+
+        /// Repetition is free, vocabulary is not: a long run of VARIED table
+        /// words is likelier a garbled stretch of real speech than a genuine
+        /// acknowledgment, and erasing speech is the one thing this must not
+        /// do to buy a tidier paragraph.
+        @Test("a varied run of table words stays in the flow", arguments: [
+            "ya claro sí bien gracias",
+            "okay yeah good thanks mm",
+        ])
+        func variedTableRunsAreKept(text: String) {
+            #expect(!TranscriptUtterance.isStandaloneBackchannel(text))
         }
 
         @Test("real content never classifies as backchannel", arguments: [
