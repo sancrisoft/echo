@@ -41,7 +41,7 @@ import Testing
 nonisolated enum AccuracyFixtures {
 
     /// Accuracy fixtures live OUTSIDE the repository, in the user's home
-    /// folder — unlike EchoTests/Fixtures they are full meeting-shaped
+    /// folder — unlike Fixtures they are full meeting-shaped
     /// personal recordings and must never be committed (SP-005 Privacy).
     static var root: URL {
         FileManager.default.homeDirectoryForCurrentUser

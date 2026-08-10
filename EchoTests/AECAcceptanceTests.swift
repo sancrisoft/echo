@@ -9,7 +9,7 @@
 //
 //  Slow: it loads the Parakeet model (which must already be on disk — the
 //  suite never downloads), so it is gated on ECHO_ACCEPTANCE=1 in addition
-//  to the recorded fixtures. See EchoTests/Fixtures/README.md for the exact
+//  to the recorded fixtures. See Fixtures/README.md for the exact
 //  invocation.
 //
 
@@ -27,7 +27,7 @@ nonisolated enum Acceptance {
     static let gate: Comment = """
     Slow transcription suite — run on demand with \
     TEST_RUNNER_ECHO_ACCEPTANCE=1 xcodebuild test -project Echo.xcodeproj \
-    -scheme Echo -destination 'platform=macOS' (see EchoTests/Fixtures/README.md). \
+    -scheme Echo -destination 'platform=macOS' (see Fixtures/README.md). \
     Needs the Parakeet model already downloaded under \
     ~/Library/Application Support/Echo/Models — the suite never fetches it.
     """

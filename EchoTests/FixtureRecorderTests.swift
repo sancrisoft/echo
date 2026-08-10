@@ -24,7 +24,7 @@ struct FixtureRecorderTests {
     @Test func scenarioIDsAreTheFixtureFolderNames() {
         // Exact order matters only for the DEBUG picker menu (SP-001 block
         // first); the raw values are the kebab-case folder names under
-        // EchoTests/Fixtures and must never drift from the README.
+        // Fixtures and must never drift from the README.
         #expect(FixtureScenario.allCases.map(\.rawValue) == [
             // SP-001 — echo-cancellation suite.
             "bleed-only",

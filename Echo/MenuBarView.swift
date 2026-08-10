@@ -397,7 +397,7 @@ struct MenuBarView: View {
     private func recordFixture(_ scenario: FixtureScenario) {
         let panel = NSOpenPanel()
         panel.title = "Choose the fixtures folder"
-        panel.message = "The take is written to {folder}/\(scenario.rawValue)/ — pick EchoTests/Fixtures to install it directly."
+        panel.message = "The take is written to {folder}/\(scenario.rawValue)/ — pick Fixtures to install it directly."
         panel.prompt = "Record"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true

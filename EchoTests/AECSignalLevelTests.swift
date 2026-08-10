@@ -20,7 +20,7 @@ struct AECSignalLevelTests {
     private static let windowSamples = Int(AudioConstants.sampleRate)   // 1 s
 
     /// Scripted double-talk utterance spans, in seconds from take start.
-    /// Must match the script timing in EchoTests/Fixtures/README.md.
+    /// Must match the script timing in Fixtures/README.md.
     private static let doubleTalkSpans: [(start: Double, end: Double)] = [
         (12, 16), (18, 22), (24, 28),
     ]

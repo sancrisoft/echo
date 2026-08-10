@@ -32,5 +32,5 @@ DerivedData/
 # Test fixtures — real recorded audio, local-only (never shipped in the repo).
 # Test sources ARE tracked as of 2026-07-13; only fixtures and generated
 # reports stay local.
-EchoTests/Fixtures/
+/Fixtures/
 EchoTests/sp002-measure-report.txt

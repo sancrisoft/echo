@@ -26,9 +26,9 @@ import Foundation
 import Observation
 
 /// The fixture scenarios — SP-001's echo-cancellation set and SP-002's
-/// external-input-device set (see EchoTests/Fixtures/README.md for the
+/// external-input-device set (see Fixtures/README.md for the
 /// recording instructions each of these implies). Raw values are the fixture
-/// folder names under EchoTests/Fixtures.
+/// folder names under Fixtures.
 enum FixtureScenario: String, CaseIterable, Identifiable {
     // SP-001 — echo cancellation (built-in mic + built-in loudspeakers).
     case bleedOnly = "bleed-only"

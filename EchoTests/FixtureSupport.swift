@@ -4,7 +4,7 @@
 //
 //  Discovery, loading, and signal helpers for the SP-001 and SP-002 fixture
 //  suites. Fixtures are real hardware recordings placed at
-//  EchoTests/Fixtures/{scenario}/mic.wav|system.wav (plus the optional
+//  Fixtures/{scenario}/mic.wav|system.wav (plus the optional
 //  pre-downmix mic-native.wav for multi-channel devices, SP-002) per the
 //  README — never synthesized (project rule: no simulated audio data). Tests
 //  gate on `Fixtures.available(_:)` and skip with instructions until the set
@@ -19,14 +19,22 @@ import Testing
 nonisolated enum Fixtures {
 
     /// Skip reason shown while the fixture set is not recorded yet.
-    static let instructions: Comment = "Record fixtures per EchoTests/Fixtures/README.md"
+    static let instructions: Comment = "Record fixtures per Fixtures/README.md"
 
     /// Resolved from this source file, not the test bundle: fixtures are
     /// repository content, and discovery must work without relying on Xcode
     /// resource copying.
+    ///
+    /// They live at the repository root, deliberately outside `EchoTests/`:
+    /// that folder is a file-system-synchronized group, so anything under it
+    /// is copied into the test bundle — and every scenario's `mic.wav` would
+    /// then land on the same flattened path, failing the build with "Multiple
+    /// commands produce …/mic.wav". Nothing here reads the bundle, so the
+    /// files have no business being in it.
     static var root: URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
+            .deletingLastPathComponent()   // EchoTests/
+            .deletingLastPathComponent()   // repository root
             .appendingPathComponent("Fixtures", isDirectory: true)
     }
 
@@ -225,13 +233,14 @@ struct FixtureSupportTests {
     }
     #endif
 
-    @Test func fixtureRootPointsIntoEchoTests() {
-        #expect(Fixtures.root.path.hasSuffix("EchoTests/Fixtures"))
+    @Test func fixtureRootSitsOutsideTheTestTargetsFolder() {
+        #expect(Fixtures.root.path.hasSuffix("/Fixtures"))
+        #expect(!Fixtures.root.path.contains("EchoTests"))
     }
 
     @Test func micNativeURLResolvesInsideTheScenarioFolder() {
         let url = Fixtures.micNativeURL("parity-dji-20cm")
-        #expect(url.path.hasSuffix("EchoTests/Fixtures/parity-dji-20cm/mic-native.wav"))
+        #expect(url.path.hasSuffix("/Fixtures/parity-dji-20cm/mic-native.wav"))
     }
 
     @Test func micNativeIsAbsentForUnrecordedScenarios() {
