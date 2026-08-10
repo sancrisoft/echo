@@ -35,6 +35,30 @@ nonisolated enum EchoCancellationPrePass {
 
     static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "EchoCancellationPrePass")
 
+    /// Off, because it costs more speech than it saves.
+    ///
+    /// Measured 2026-08-10 by replaying the two fixtures where the probe fires
+    /// (E656, 65B5) with and without this stage: it removes bleed — E656's
+    /// bleed-shaped rows fall from 61.9 s to 15.0 s — but only 62% and 82% of
+    /// the user's own vocabulary survives it, against the ≥90% the plan set as
+    /// its gate. Losing the user's own words is the worse of the two failures:
+    /// the summary is grounded in the transcript, so a word deleted here is
+    /// gone from the notes, while surviving bleed is only misattributed — the
+    /// words are still on the teammate's row and the summary still reads them.
+    ///
+    /// Nothing is deleted with the stage off: the probe, the engine and the
+    /// near-end guard all stay, and `ECHO_AEC_PRE_PASS=1` runs them for the
+    /// next measurement. Turn it back on when a sweep shows preservation
+    /// clearing the gate — the near-end ratio is not the knob for that (see
+    /// `nearEndRatioFloor`), the silence floor beneath it is the open lead.
+    static var isEnabled: Bool {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["ECHO_AEC_PRE_PASS"] == "1"
+        #else
+        return false
+        #endif
+    }
+
     /// 10 ms at 16 kHz (ADR-002) — the stage's own frame, and the cadence the
     /// two channels are interleaved at so the engine sees them the way the
     /// capture path would have.

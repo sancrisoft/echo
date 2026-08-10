@@ -513,6 +513,7 @@ nonisolated enum ParakeetPass {
         shouldYield: @escaping @Sendable () -> Bool,
         diagnostics: DiagnosticSink?
     ) throws {
+        guard EchoCancellationPrePass.isEnabled else { return }
         guard let mic = samples[.microphone], let system = samples[.system] else { return }
 
         let outcome = try EchoCancellationPrePass.run(
