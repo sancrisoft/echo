@@ -721,27 +721,16 @@ nonisolated enum ParakeetPass {
             )]
         }
 
-        var produced: [TranscriptSegment] = []
+        // Rows are grouped as tokens first and turned into segments at the
+        // end, because a row's leading punctuation has to be able to move to
+        // the row before it — which is a decision about two rows at once.
+        var groups: [[TokenTiming]] = []
         var current: [TokenTiming] = []
 
         func flush() {
-            guard let first = current.first, let last = current.last else { return }
-            let text = joinedText(current)
+            guard !current.isEmpty else { return }
+            groups.append(current)
             current = []
-            // A row with no letter and no digit in it says nothing — and
-            // dropping one can't cost a word, because it has none. Silence
-            // draws a lone "." out of the model, and cancelled bleed leaves
-            // long stretches of exactly that: a measured 25 s of "You: ."
-            // where the teammate's voice used to be. Same rule as the empty
-            // check this replaces, one character wider.
-            guard text.contains(where: { $0.isLetter || $0.isNumber }) else { return }
-            produced.append(TranscriptSegment(
-                channel: channel,
-                speaker: speaker,
-                text: text,
-                start: first.startTime,
-                end: last.endTime
-            ))
         }
 
         var nextSilence = 0
@@ -779,7 +768,45 @@ nonisolated enum ParakeetPass {
             current.append(timing)
         }
         flush()
-        return produced
+
+        // A row must never OPEN with punctuation. The model dates the period
+        // that closes a sentence after the pause it was spoken before, so a
+        // cut placed where the audio says lands in FRONT of it and the next
+        // row reads ". Clásic te baja colección" — 30% of rows on a measured
+        // meeting. The mark belongs to the sentence it closes, so it moves
+        // back to it.
+        //
+        // Only legal while the row keeps a word of its own. A lone "." IS the
+        // whole row when the model stretched one across a long silence, and
+        // welding that back would drag the previous row's span across the
+        // silence — a lie to the dedup, whose evidence is levels measured over
+        // a span. Those rows have no word to keep and are dropped below,
+        // exactly as before.
+        for index in groups.indices.dropFirst() {
+            guard let firstWord = groups[index].firstIndex(where: { carriesAWord($0.token) }),
+                  firstWord > 0
+            else { continue }
+            groups[index - 1].append(contentsOf: groups[index].prefix(firstWord))
+            groups[index].removeFirst(firstWord)
+        }
+
+        return groups.compactMap { group in
+            guard let first = group.first, let last = group.last else { return nil }
+            let text = joinedText(group)
+            // A row with no letter and no digit in it says nothing — and
+            // dropping one can't cost a word, because it has none. Silence
+            // draws a lone "." out of the model, and cancelled bleed leaves
+            // long stretches of exactly that: a measured 25 s of "You: ."
+            // where the teammate's voice used to be.
+            guard text.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
+            return TranscriptSegment(
+                channel: channel,
+                speaker: speaker,
+                text: text,
+                start: first.startTime,
+                end: last.endTime
+            )
+        }
     }
 
     /// SentencePiece detokenization, identical to FluidAudio's own: pieces
@@ -806,7 +833,13 @@ nonisolated enum ParakeetPass {
     /// welded onto the last real word — which would hand the dedup a row
     /// whose span covers the whole pause.
     static func canStartSegment(_ token: String) -> Bool {
-        isWordStart(token) || !token.contains { $0.isLetter || $0.isNumber }
+        isWordStart(token) || !carriesAWord(token)
+    }
+
+    /// Whether a token holds any letter or digit — the same question `flush`
+    /// asks of a whole row, asked of one piece.
+    static func carriesAWord(_ token: String) -> Bool {
+        token.contains { $0.isLetter || $0.isNumber }
     }
 
     // MARK: Audio reading

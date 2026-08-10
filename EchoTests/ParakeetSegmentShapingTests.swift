@@ -209,19 +209,53 @@ struct ParakeetSegmentShapingTests {
         #expect(cut(timings, silenceStarts: [0.95]).map(\.text) == ["a bc", "d e"])
     }
 
-    /// Punctuation may open a row: the detokenizer welds it to whatever came
-    /// before, so a boundary in front of it strands no word fragment. This is
-    /// what keeps the lone "." of a long pause off the end of the last real
-    /// word, where it would stretch that row's span across the whole silence.
-    @Test("a pause before punctuation still ends the row")
-    func punctuationMayStartASegment() {
+    /// A cut may be placed in front of punctuation — the detokenizer welds it
+    /// to whatever came before, so no word fragment is stranded — but the row
+    /// must not be left OPENING with it. The mark closes the sentence before
+    /// the pause, so it moves back onto it.
+    @Test("punctuation closes the row before the pause, never opens the one after")
+    func punctuationMovesBackToTheRowItCloses() {
         let timings = [
             token("hola", 0.0, 0.4),
             piece(".", 2.0, 2.2),
             token("adios", 2.3, 2.7),
         ]
 
-        #expect(cut(timings, silenceStarts: []).map(\.text) == ["hola", ". adios"])
+        let result = cut(timings, silenceStarts: [])
+        #expect(result.map(\.text) == ["hola.", "adios"])
+        // The mark's own time goes with it; the next row starts at its word.
+        #expect(result[0].end == 2.2)
+        #expect(result[1].start == 2.3)
+    }
+
+    /// Every leading mark moves, not just the first.
+    @Test("a run of leading punctuation all moves back")
+    func everyLeadingMarkMoves() {
+        let timings = [
+            token("ya", 0.0, 0.4),
+            piece(".", 2.0, 2.1), piece("...", 2.1, 2.2),
+            token("bueno", 2.3, 2.7),
+        ]
+
+        #expect(cut(timings, silenceStarts: []).map(\.text) == ["ya....", "bueno"])
+    }
+
+    /// The row that is ONLY a mark keeps it. A "." the model stretched across
+    /// a long silence is the whole row, and welding it back would drag the
+    /// previous row's span over the silence — which is what the dedup measures
+    /// levels across. It has no word to keep, so it is dropped instead.
+    @Test("a lone mark spanning a silence is dropped, not welded backwards")
+    func loneMarkIsNotMovedOntoThePreviousRow() {
+        let timings = [
+            token("one", 0.0, 0.4),
+            piece(".", 2.0, 27.3),
+            token("two", 30.0, 30.4),
+        ]
+
+        let result = cut(timings)
+        #expect(result.map(\.text) == ["one", "two"])
+        // The point of the rule: "one" still ends where "one" ended.
+        #expect(result[0].end == 0.4)
     }
 }
 
