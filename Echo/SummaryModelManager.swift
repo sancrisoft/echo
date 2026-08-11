@@ -23,6 +23,7 @@
 //  sites construct `SummaryModelManager()` unchanged.
 //
 
+import CryptoKit
 import Foundation
 import MLX
 import MLXLLM
@@ -84,11 +85,27 @@ actor SummaryModelManager {
     /// against the manual RSS measurements (SP-003 open question 4).
     static let summaryModelIdleTimeout: Duration = .seconds(60)
 
-    /// The repo also carries bf16 sidecars under optiq/ (mtp.safetensors and
-    /// optiq_vision.safetensors) that the text path neither downloads nor
-    /// loads: these globs match the weight file (`model.safetensors`) and the
-    /// top-level configs/tokenizer, and cannot match anything under optiq/.
-    private static let downloadGlobs = ["model*.safetensors", "*.json"]
+    /// The weight files, which Echo transfers itself: they are the ones big
+    /// enough that the Hub client's broken progress reporting turns into a
+    /// guaranteed false stall, and the ones worth resuming byte-exactly
+    /// (see ResumableFileDownload). Glob, not a filename: a resharded repo
+    /// publishes `model-00001-of-0000N.safetensors` and this keeps matching.
+    private static let weightGlobs = ["model*.safetensors"]
+
+    /// Everything else — configs and tokenizer — which stays with
+    /// HubApi.snapshot. Small enough that its files-finished progress is
+    /// accurate to within its own 0.6% of the bytes, and Hub keeps owning
+    /// their etag/metadata bookkeeping.
+    private static let configGlobs = ["*.json"]
+
+    /// Every file the snapshot is made of, and so what the completeness
+    /// manifest records (ADR-012). The repo also carries bf16 sidecars under
+    /// optiq/ (mtp.safetensors and optiq_vision.safetensors) that the text path
+    /// neither downloads nor loads: these globs match the weight file
+    /// (`model.safetensors`) and the top-level configs/tokenizer, and cannot
+    /// match anything under optiq/. The two transports' globs are disjoint —
+    /// `model.safetensors.index.json` is a config, not a weight file.
+    private static let downloadGlobs = weightGlobs + configGlobs
 
     /// Free-disk floor for starting the download. The retired 12B's 15 GB
     /// floor gave its ~8.9 GB snapshot roughly 1.7× headroom (fetch plus Hub
@@ -290,19 +307,28 @@ actor SummaryModelManager {
         snapshotExistsCheck()
     }
 
-    /// Bytes an interrupted download already put on disk (complete files plus
-    /// the Hub's resumable `*.incomplete` partials under `.cache/`), or nil
-    /// when nothing is there. Consumed only as a boolean "is there a resumable
-    /// partial" signal — the number itself must never reach the UI: it sums
-    /// staging alongside committed files and can exceed the committed total, so
-    /// it cannot back a percentage or an "X of Y" readout (ADR-007). A resumed
-    /// download skips whatever is already on disk regardless.
+    /// Bytes an interrupted download already put on disk (complete files, the
+    /// Hub's resumable `*.incomplete` staging under `.cache/`, and Echo's own
+    /// `.partial` weight transfers), or nil when nothing is there. Consumed
+    /// only as a boolean "is there a resumable partial" signal — the number
+    /// itself must never reach the UI: it sums staging alongside committed
+    /// files and can exceed the committed total, so it cannot back a percentage
+    /// or an "X of Y" readout (ADR-007). A resumed download continues from
+    /// whatever is already on disk regardless.
     func partialDownloadBytes() -> Int64? {
         guard !cachedModelExists() else { return nil }
+        let total = Self.byteCount(under: Self.snapshotDirectory)
+            + Self.byteCount(under: Self.partialDownloadDirectory)
+        return total > 0 ? total : nil
+    }
+
+    /// Recursive byte sum of the regular files under `directory`; 0 when it
+    /// doesn't exist.
+    private static func byteCount(under directory: URL) -> Int64 {
         guard let enumerator = FileManager.default.enumerator(
-            at: Self.snapshotDirectory,
+            at: directory,
             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
-        ) else { return nil }
+        ) else { return 0 }
 
         var total: Int64 = 0
         for case let url as URL in enumerator {
@@ -310,7 +336,7 @@ actor SummaryModelManager {
                   values.isRegularFile == true else { continue }
             total += Int64(values.fileSize ?? 0)
         }
-        return total > 0 ? total : nil
+        return total
     }
 
     /// Releases the loaded container's RAM. Wired behind the idle timer
@@ -379,9 +405,9 @@ actor SummaryModelManager {
         return MLXTextEngine(container: container)
     }
 
-    /// The real Hub snapshot download (repo-metadata fraction + stall-retry),
-    /// plus the completeness manifest recorded at completion (ADR-012) — part
-    /// of the downloader seam so test fakes stand in for both halves at once.
+    /// The real snapshot download (byte-honest progress + stall-retry), plus
+    /// the completeness manifest recorded at completion (ADR-012) — part of the
+    /// downloader seam so test fakes stand in for both halves at once.
     static let liveDownloader: SnapshotDownloader = { progress in
         try SummaryModelManager.checkDiskSpace()
         progress("Downloading summary model…", 0)
@@ -392,24 +418,29 @@ actor SummaryModelManager {
         // URLSession worker threads, hence the lock).
         let reached = LockedFraction()
         do {
-            // Stall watchdog + retry: a download whose connection goes
-            // idle is cancelled and re-run (the Hub snapshot skips files
-            // already on disk, so a retry resumes where it stalled).
+            // Stall watchdog + retry: a download that stops moving BYTES is
+            // cancelled and re-run, resuming from the bytes already on disk.
+            // The heartbeat is byte-derived on purpose — fed the Hub client's
+            // own fraction, this watchdog killed every healthy multi-GB
+            // transfer at the 60 s mark (see ResumableFileDownload).
             _ = try await ModelDownload.withStallRetry(
                 onRetry: { attempt in
                     log.warning("Summary model download stalled; retrying (attempt \(attempt, privacy: .public))")
                     progress("Download stalled — retrying…", reached.value)
                 }
             ) { noteProgress in
-                try await hub.snapshot(
-                    from: repo,
-                    matching: SummaryModelManager.downloadGlobs
-                ) { snapshotProgress in
-                    noteProgress(snapshotProgress.fractionCompleted)
-                    reached.update(snapshotProgress.fractionCompleted)
-                    progress("Downloading summary model…", snapshotProgress.fractionCompleted)
+                try await SummaryModelManager.transferSnapshot(hub: hub, repo: repo) { fraction in
+                    noteProgress(fraction)
+                    reached.update(fraction)
+                    progress("Downloading summary model…", fraction)
                 }
             }
+        } catch is CancellationError {
+            // A pause (or the watchdog's own cancel) is not a failure: the
+            // partial stays on disk and the resume continues from it. Leaving
+            // through the cancellation path keeps `downloadIfNeeded`'s joiners
+            // able to tell a pause from a broken download.
+            throw CancellationError()
         } catch {
             throw SummaryModelError.downloadFailed(error.localizedDescription)
         }
@@ -441,6 +472,11 @@ actor SummaryModelManager {
                 throw SnapshotVerificationFailed()
             }
             try manifest.write(to: SummaryModelManager.manifestFileURL)
+            // The transfers were moved into the snapshot, so what's left here is
+            // at most an empty directory — or a `.partial` for a file this
+            // snapshot no longer contains (a model swap mid-download). Either
+            // way it is dead weight the moment completeness is recorded.
+            try? FileManager.default.removeItem(at: SummaryModelManager.partialDownloadDirectory)
         } catch {
             // Fail-safe direction: no manifest was recorded, so the snapshot
             // keeps reading incomplete and a retry re-verifies cheaply (the
@@ -456,6 +492,189 @@ actor SummaryModelManager {
         var errorDescription: String? {
             "The downloaded model files did not pass verification. Retry to resume the download."
         }
+    }
+
+    /// The repo answered without the size/etag/location a transfer needs. Its
+    /// own error rather than a crash on a force-unwrap: the recovery is a
+    /// retry, and the message has to say which file.
+    private struct MissingFileMetadata: LocalizedError {
+        let file: String
+        var errorDescription: String? {
+            "The model server did not describe \(file). Retry the download."
+        }
+    }
+
+    /// A committed file's bytes don't hash to the sha256 the repo published for
+    /// it. Nothing is recorded and the file is dropped, so the next attempt
+    /// re-fetches it rather than handing MLX a corrupt tensor file.
+    private struct IntegrityCheckFailed: LocalizedError {
+        let file: String
+        var errorDescription: String? {
+            "\(file) did not match its published checksum and was discarded. Retry the download."
+        }
+    }
+
+    // MARK: - The two-transport transfer
+
+    /// Fetches the snapshot: the small files through HubApi, the weight files
+    /// through Echo's own resumable transfer, reporting ONE byte-weighted
+    /// fraction across both (`SnapshotDownloadTally`).
+    ///
+    /// Re-resolves repo metadata on every attempt, by design: the `location` a
+    /// HEAD returns for an LFS file is a signed CDN URL that expires, so a
+    /// stall retry an hour into a slow download needs a fresh one. The HEADs
+    /// cost one request per file against a transfer measured in gigabytes.
+    private static func transferSnapshot(
+        hub: HubApi,
+        repo: HubApi.Repo,
+        report: @Sendable @escaping (Double) -> Void
+    ) async throws {
+        let weightNames = try await hub.getFilenames(from: repo, matching: weightGlobs)
+        var weights: [(name: String, metadata: HubApi.FileMetadata)] = []
+        for name in weightNames {
+            guard let metadata = try await hub.getFileMetadata(from: repo, matching: [name]).first else {
+                throw MissingFileMetadata(file: name)
+            }
+            weights.append((name, metadata))
+        }
+
+        let configBytes = try await hub.getFileMetadata(from: repo, matching: configGlobs)
+            .reduce(Int64(0)) { $0 + Int64($1.size ?? 0) }
+        let budget = SnapshotDownloadBudget(
+            configBytes: configBytes,
+            weightBytes: weights.reduce(Int64(0)) { $0 + Int64($1.metadata.size ?? 0) }
+        )
+        // Weight bytes an earlier attempt already committed: counted from the
+        // start so a resumed download's bar continues instead of restarting.
+        let alreadyCommitted = weights.reduce(Int64(0)) { total, weight in
+            total + ResumableFileDownload.byteCount(at: snapshotDirectory.appending(path: weight.name))
+        }
+        let tally = SnapshotDownloadTally(budget: budget, committedWeightBytes: alreadyCommitted)
+        report(tally.fraction)
+
+        // The small files first: quick, and it gets the tokenizer/configs on
+        // disk early so a snapshot interrupted mid-weights is one file from
+        // complete. Hub skips whatever is already committed.
+        _ = try await hub.snapshot(from: repo, matching: configGlobs) { snapshotProgress in
+            report(tally.noteConfigFraction(snapshotProgress.fractionCompleted))
+        }
+        report(tally.noteConfigFraction(1))
+
+        for weight in weights {
+            try Task.checkCancellation()
+            let destination = snapshotDirectory.appending(path: weight.name)
+            let expected = weight.metadata.size.map(Int64.init)
+
+            // Already committed at the published size: leave it alone (this is
+            // what makes a re-run after a partial snapshot cheap) but make sure
+            // the Hub sidecar is there, since a file Echo wrote is otherwise
+            // invisible to the Hub's own resume bookkeeping.
+            if let expected, ResumableFileDownload.byteCount(at: destination) == expected {
+                try writeHubSidecar(for: weight.name, metadata: weight.metadata)
+                report(tally.commitWeightFile(bytes: expected))
+                continue
+            }
+
+            guard let location = URL(string: weight.metadata.location) else {
+                throw MissingFileMetadata(file: weight.name)
+            }
+            let partial = partialFileURL(for: weight.name)
+            let bytes = try await ResumableFileDownload.fetch(
+                from: location,
+                expectedBytes: expected,
+                into: partial,
+                progress: { report(tally.noteWeightBytes($0)) }
+            )
+            try commitWeightFile(
+                at: partial,
+                to: destination,
+                name: weight.name,
+                metadata: weight.metadata
+            )
+            report(tally.commitWeightFile(bytes: bytes))
+        }
+    }
+
+    /// Moves a completed transfer into the snapshot directory, verifying it
+    /// first. For LFS files the Hub's etag IS the sha256 of the content
+    /// (measured against a file the Hub itself downloaded), so this is a real
+    /// end-to-end integrity check on a resumed, range-stitched transfer — the
+    /// one place a silent corruption could otherwise enter the snapshot.
+    private static func commitWeightFile(
+        at partial: URL,
+        to destination: URL,
+        name: String,
+        metadata: HubApi.FileMetadata
+    ) throws {
+        if let etag = metadata.etag, isSHA256(etag) {
+            guard try sha256Hex(of: partial) == etag else {
+                try? FileManager.default.removeItem(at: partial)
+                throw IntegrityCheckFailed(file: name)
+            }
+        }
+
+        let fm = FileManager.default
+        try fm.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if fm.fileExists(atPath: destination.path) {
+            try fm.removeItem(at: destination)
+        }
+        try fm.moveItem(at: partial, to: destination)
+        try writeHubSidecar(for: name, metadata: metadata)
+    }
+
+    /// Writes the `.metadata` sidecar HubApi keeps for every file it manages
+    /// (`commitHash\netag\ntimestamp`), so a file Echo transferred is
+    /// indistinguishable from one the Hub fetched: its download pass returns
+    /// early on the etag match instead of re-fetching, and its offline pass
+    /// stops rejecting the repo directory for a file without a sidecar.
+    private static func writeHubSidecar(for name: String, metadata: HubApi.FileMetadata) throws {
+        guard let commitHash = metadata.commitHash, let etag = metadata.etag else { return }
+        let sidecar = snapshotDirectory
+            .appending(path: ".cache", directoryHint: .isDirectory)
+            .appending(path: "huggingface", directoryHint: .isDirectory)
+            .appending(path: "download", directoryHint: .isDirectory)
+            .appending(path: name + ".metadata", directoryHint: .notDirectory)
+        try FileManager.default.createDirectory(
+            at: sidecar.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let contents = "\(commitHash)\n\(etag)\n\(Date().timeIntervalSince1970)\n"
+        try contents.write(to: sidecar, atomically: true, encoding: .utf8)
+    }
+
+    /// Where an in-flight transfer accumulates. Beside the models tree rather
+    /// than inside the snapshot directory, for the same reason the completeness
+    /// manifest lives there: HubApi's offline pass validates every file it finds
+    /// in the repo directory and would reject a `.partial` it never wrote.
+    private static func partialFileURL(for name: String) -> URL {
+        EchoPaths.modelsDirectory
+            .appending(path: "summary-model-download", directoryHint: .isDirectory)
+            .appending(path: name + ".partial", directoryHint: .notDirectory)
+    }
+
+    /// Directory holding in-flight `.partial` files, consulted by the
+    /// "is there something resumable" check.
+    static var partialDownloadDirectory: URL {
+        EchoPaths.modelsDirectory
+            .appending(path: "summary-model-download", directoryHint: .isDirectory)
+    }
+
+    private static func isSHA256(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy(\.isHexDigit)
+    }
+
+    /// Streamed so a 3 GB file is hashed without being held in memory.
+    private static func sha256Hex(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while let chunk = try handle.read(upToCount: 4 * 1024 * 1024), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     /// The real on-disk snapshot check: manifest ∧ files-on-disk (ADR-012).

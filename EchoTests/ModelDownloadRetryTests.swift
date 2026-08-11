@@ -95,6 +95,33 @@ struct ModelDownloadRetryTests {
         #expect(attempts.count == 1)
     }
 
+    /// The load-dependent version of the case above: the operation throws a real
+    /// error, but not before the watchdog has already decided it stalled (a
+    /// starved machine can delay the throw past the timeout). A stall retry must
+    /// not swallow it — retrying would re-run a download that is broken for a
+    /// reason retrying can't fix.
+    @Test func realErrorThrownWhileTheWatchdogFiresStillPropagates() async {
+        struct DownloadBroke: Error {}
+        let attempts = AttemptCounter()
+
+        await #expect(throws: DownloadBroke.self) {
+            try await ModelDownload.withStallRetry(
+                attempts: 3,
+                stallTimeout: 0.1,
+                watchdogInterval: 0.02
+            ) { noteProgress -> String in
+                _ = attempts.next()
+                noteProgress(0.5)
+                // Idle past the stall timeout, so the watchdog marks a stall and
+                // cancels — then fail for a reason of our own.
+                try? await Task.sleep(for: .seconds(0.4))
+                throw DownloadBroke()
+            }
+        }
+
+        #expect(attempts.count == 1)
+    }
+
     @Test func progressBeatsKeepTheWatchdogQuiet() async throws {
         let retries = AttemptCounter()
 
