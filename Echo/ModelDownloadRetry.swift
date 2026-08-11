@@ -69,13 +69,28 @@ nonisolated enum ModelDownload {
             } catch {
                 watchdog.cancel()
                 // A real failure (offline, disk full, server error) is not a
-                // stall — the caller's own error handling owns it.
-                guard tracker.wasStalled else { throw error }
+                // stall — the caller's own error handling owns it. Both
+                // conditions are required: `wasStalled` alone would retry an
+                // operation that threw a genuine error in the same instant the
+                // watchdog happened to fire, and `isOurCancellation` alone would
+                // retry a user-initiated pause.
+                guard tracker.wasStalled, Self.isOurCancellation(error) else { throw error }
                 guard attempt < attempts else { throw StalledError() }
                 attempt += 1
                 onRetry(attempt)
             }
         }
+    }
+
+    /// Whether `error` is the download reacting to the watchdog's own
+    /// `cancel()` — the only failure a stall may retry. URLSession surfaces a
+    /// cancelled transfer as `URLError.cancelled`, structured concurrency as
+    /// `CancellationError`, and both mean "we stopped it", never "the transfer
+    /// broke".
+    private static func isOurCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
     }
 
     /// Lock-guarded because the progress callbacks arrive on URLSession
