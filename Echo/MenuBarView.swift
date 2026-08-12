@@ -232,8 +232,7 @@ struct MenuBarView: View {
                 set: { settings.setCallDetection(enabled: $0) }
             ))
             .font(.caption)
-            .toggleStyle(.switch)
-            .controlSize(.mini)
+            .toggleStyle(PopoverSwitchStyle())
         }
         .frame(maxWidth: .infinity)
         // `initial: true` covers a popup opened mid-call; later changes cover
@@ -408,4 +407,47 @@ struct MenuBarView: View {
         Task { await fixtureRecorder.record(scenario: scenario, into: url) }
     }
     #endif
+}
+
+/// The popover paints its own switch.
+///
+/// Echo is an `LSUIElement` agent and clicking the status item doesn't activate
+/// it, so this popover is drawn while the app is *inactive* — and macOS drops
+/// the accent fill from an **on** `NSSwitch` there, leaving the same grey track
+/// it draws for **off**. All that separates the two states is then the knob's
+/// travel, which at `.controlSize(.mini)` is a couple of points: the setting is
+/// enabled and reads as disabled. Drawing the capsule ourselves keeps it
+/// legible whatever the activation state — the same reason `IslandButtonStyle`
+/// exists for the island's buttons.
+private struct PopoverSwitchStyle: ToggleStyle {
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            HStack(spacing: 8) {
+                configuration.label
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                track(isOn: configuration.isOn)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(configuration.isOn ? "On" : "Off")
+    }
+
+    private func track(isOn: Bool) -> some View {
+        Capsule()
+            .fill(isOn ? Color.echoIndigo : Color.secondary.opacity(0.35))
+            .frame(width: 30, height: 18)
+            .overlay(alignment: isOn ? .trailing : .leading) {
+                Circle()
+                    .fill(.white)
+                    .frame(width: 14, height: 14)
+                    .padding(2)
+                    .shadow(color: .black.opacity(0.2), radius: 1, y: 0.5)
+            }
+            .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isOn)
+    }
 }
