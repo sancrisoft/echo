@@ -68,9 +68,6 @@ enum MeetingSortOrder: String, CaseIterable, Identifiable {
 
 struct DashboardView: View {
     @Environment(RecordingController.self) private var controller
-    #if DEBUG
-    @Environment(\.openSettings) private var openSettings
-    #endif
 
     /// The detail currently covering the list, if any. Lives on the shell so
     /// the window title bar can swap between the breadcrumb and the opened
@@ -130,19 +127,33 @@ struct DashboardView: View {
         // this window to PNG every 2 s so UI work can be inspected from the
         // CLI without screen-recording permission. Inert in normal runs.
         .task {
-            // ECHO_OPEN_SETTINGS=1 (+ ECHO_SETTINGS_PROBE=path): open the
-            // native settings window from the CLI, dump every window's
-            // identifier/title plus the activation policy, and quit — how the
-            // Settings-scene window identifier `ActivationPolicy.sync`
-            // matches was verified on this OS.
+            // ECHO_OPEN_SETTINGS=1 (+ ECHO_SETTINGS_PROBE=path): fire the app
+            // menu's own "Settings…" item from the CLI, then dump what it did
+            // — the item's shortcut, the section the library landed on, the
+            // window census, and the activation policy — and quit. It used to
+            // call `openSettings()` and check which window appeared; with the
+            // native Settings scene gone, Cmd-, must instead select the
+            // dashboard's Settings page and open no second window, and this
+            // exercises that whole chain rather than the destination alone.
             if ProcessInfo.processInfo.environment["ECHO_OPEN_SETTINGS"] == "1" {
                 try? await Task.sleep(for: .seconds(1))
-                openSettings()
+                var invoked: [String] = []
+                if let appMenu = NSApp.mainMenu?.items.first?.submenu,
+                   let index = appMenu.items.firstIndex(where: { $0.title.hasPrefix("Settings") }) {
+                    let item = appMenu.items[index]
+                    invoked.append("item=\"\(item.title)\" key=\"\(item.keyEquivalent)\" cmd=\(item.keyEquivalentModifierMask.contains(.command))")
+                    appMenu.performActionForItem(at: index)
+                } else {
+                    invoked.append("item=MISSING")
+                }
                 try? await Task.sleep(for: .seconds(2))
                 if let probePath = ProcessInfo.processInfo.environment["ECHO_SETTINGS_PROBE"] {
-                    let lines = NSApp.windows.map {
-                        "id=\($0.identifier?.rawValue ?? "nil") title=\($0.title) visible=\($0.isVisible) class=\(type(of: $0))"
-                    } + ["policy=\(NSApp.activationPolicy().rawValue)"]
+                    let lines = invoked
+                        + ["section=\(controller.library.section)"]
+                        + NSApp.windows.map {
+                            "id=\($0.identifier?.rawValue ?? "nil") title=\($0.title) visible=\($0.isVisible) class=\(type(of: $0))"
+                        }
+                        + ["policy=\(NSApp.activationPolicy().rawValue)"]
                     try? lines.joined(separator: "\n")
                         .write(toFile: probePath, atomically: true, encoding: .utf8)
                     NSApp.terminate(nil)
@@ -973,8 +984,9 @@ private struct TrashView: View {
 
 // MARK: - Settings (embedded host)
 
-/// The dashboard's Settings page: the same `SettingsView` the native scene
-/// hosts, under a header matching the Meetings/Trash panes.
+/// The dashboard's Settings page — since the native `Settings` scene was
+/// dropped, the only host of `SettingsView`, reached from the sidebar row and
+/// from Cmd-, . Header matches the Meetings/Trash panes.
 private struct SettingsPageView: View {
     var body: some View {
         VStack(spacing: 0) {
