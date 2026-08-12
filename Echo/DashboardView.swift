@@ -1097,7 +1097,7 @@ private struct MeetingRow: View {
                 Label("Export…", systemImage: "square.and.arrow.up")
             }
 
-            Button { copySummary() } label: { Label("Copy summary", systemImage: "doc.on.doc") }
+            Button { copySummary() } label: { Label("Copy summary as Markdown", systemImage: "doc.on.doc") }
                 .disabled(!meta.hasSummary)
             Button { reveal() } label: { Label("Reveal in Finder", systemImage: "folder") }
 
@@ -2076,10 +2076,19 @@ private struct LiveMeetingDetail: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         case .streaming(let meetingSummary):
-            SummaryContentView(summary: meetingSummary, segments: controller.state.segments, isStreaming: true)
+            SummaryContentView(
+                summary: meetingSummary,
+                segments: controller.state.segments,
+                meta: activeMeta,
+                isStreaming: true
+            )
 
         case .ready(let meetingSummary):
-            SummaryContentView(summary: meetingSummary, segments: controller.state.segments)
+            SummaryContentView(
+                summary: meetingSummary,
+                segments: controller.state.segments,
+                meta: activeMeta
+            )
 
         case .unavailable(let message):
             ContentUnavailableView(
@@ -2100,6 +2109,13 @@ private struct LiveMeetingDetail: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// The just-stopped session's persisted meta, for the copied Markdown's
+    /// title and date line. A summary only ever exists after the stop-save, so
+    /// in practice this is present whenever the copy button is enabled.
+    private var activeMeta: MeetingMeta? {
+        controller.library.activeMeetingID.flatMap { controller.library.meta(for: $0) }
     }
 
     /// Honest idle copy (SP-005 S6): while the just-stopped meeting's final
@@ -2348,7 +2364,7 @@ private struct PastMeetingDetail: View {
     @ViewBuilder
     private func summary(for record: MeetingRecord) -> some View {
         if let summary = record.summary {
-            SummaryContentView(summary: summary, segments: record.segments)
+            SummaryContentView(summary: summary, segments: record.segments, meta: record.meta)
         } else if controller.backfillingMeetingID == id {
             SummaryGenerationProgressView(subject: "this meeting's transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2531,13 +2547,56 @@ private struct LiveTranscriptFooter: View {
 private struct SummaryContentView: View {
     let summary: MeetingSummary
     let segments: [TranscriptSegment]
+    /// Titles and dates the copied Markdown header — `nil` for a session that
+    /// hasn't persisted yet, which copies the summary body alone.
+    var meta: MeetingMeta?
     var isStreaming: Bool = false
+
+    /// Two-second "Copied" confirmation on the share button.
+    @State private var copied = false
 
     private var segmentByID: [String: TranscriptSegment] {
         Dictionary(uniqueKeysWithValues: segments.map { ($0.id.uuidString.lowercased(), $0) })
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            copyBar
+            scrollingSummary
+        }
+    }
+
+    /// The share affordance. Outside the scroll view on purpose: a summary long
+    /// enough to be worth sharing is long enough to scroll a floating button
+    /// out of reach.
+    private var copyBar: some View {
+        HStack {
+            Spacer()
+            Button {
+                MeetingActions.copySummary(summary, meta: meta)
+                copied = true
+            } label: {
+                Label(copied ? "Copied" : "Copy summary",
+                      systemImage: copied ? "checkmark" : "doc.on.doc")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(isStreaming)
+            .help(isStreaming
+                  ? "Available once the summary finishes"
+                  : "Copy this summary as Markdown, ready to paste and share")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(2))
+            copied = false
+        }
+    }
+
+    private var scrollingSummary: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 if isStreaming {
@@ -2576,6 +2635,7 @@ private struct SummaryContentView: View {
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxHeight: .infinity)
     }
 
     private var decisionsSection: some View {
