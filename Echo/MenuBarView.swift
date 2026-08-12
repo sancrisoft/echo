@@ -134,8 +134,8 @@ struct MenuBarView: View {
             }
 
             DualWaveView(
-                inputLevel: DualWaveView.amplitude(controller.state.inputLevels),
-                outputLevel: DualWaveView.amplitude(controller.state.outputLevels)
+                inputLevel: controller.state.inputAmplitude,
+                outputLevel: controller.state.outputAmplitude
             )
             .frame(height: 54)
             .padding(.vertical, 2)

@@ -35,6 +35,11 @@ final class MicrophoneCapture: AudioCaptureSource {
     /// Built per `start()`: a device change invalidates the old engine's
     /// input format, so restart = tear down + fresh engine on the new device.
     private var engine: AVAudioEngine?
+    /// Advisory: macOS clamps the tap to its own minimum. Measured on this Mac
+    /// (2026-08-12, 48 kHz built-in input), the engine delivers 4800-frame
+    /// buffers — exactly 100.0 ms — whatever this asks for. That interval is
+    /// the floor on how fresh anything derived from mic audio can be, the
+    /// waveform included (see `RecordingState.levelWindow`).
     private let tapBufferSize: AVAudioFrameCount = 4096
 
     enum CaptureError: LocalizedError {

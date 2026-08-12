@@ -2488,8 +2488,8 @@ private struct LiveTranscriptFooter: View {
             Divider()
             HStack(spacing: 14) {
                 DualWaveView(
-                    inputLevel: DualWaveView.amplitude(controller.state.inputLevels),
-                    outputLevel: DualWaveView.amplitude(controller.state.outputLevels)
+                    inputLevel: controller.state.inputAmplitude,
+                    outputLevel: controller.state.outputAmplitude
                 )
                 .frame(width: 130, height: 30)
 

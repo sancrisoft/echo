@@ -9,6 +9,13 @@
 //  capture level (never simulated data), so a silent channel collapses toward a
 //  gentle resting line and a loud one swells to fill the card.
 //
+//  The amplitudes arrive already derived: `RecordingState` averages each
+//  channel over the same span of *audio* (`levelWindow`), which is what makes
+//  the two waves comparable across taps that fire at very different rates.
+//  This view decides only how those heights move between readings —
+//  see `GlidingLevel`, which is what keeps the slow channel from rendering as
+//  a ten-frames-per-second slideshow next to the fast one.
+//
 
 import SwiftUI
 
@@ -24,37 +31,36 @@ struct DualWaveView: View {
     /// Current system amplitude, 0...1 (real capture level — teammates).
     var outputLevel: CGFloat
 
-    /// A single display amplitude (0...1) from a channel's rolling levels: the
-    /// mean of the most recent samples, lightly gained so ordinary speech reads
-    /// as a visible wave. Still entirely real capture data. Shared by every
-    /// surface that renders these waves (menu bar popover, live detail footer).
-    static func amplitude(_ levels: [CGFloat]) -> CGFloat {
-        guard !levels.isEmpty else { return 0 }
-        let recent = levels.suffix(8)
-        let mean = recent.reduce(0, +) / CGFloat(recent.count)
-        return min(1, mean * 1.4)
-    }
+    /// Per-channel glides (see `GlidingLevel`): the screen redraws ~10x more
+    /// often than the mic reports, so the indigo wave is drawn between
+    /// readings rather than held still until the next one lands.
+    @State private var input = GlidingLevel()
+    @State private var output = GlidingLevel()
 
     var body: some View {
-        // `.animation` gives a per-frame date; only the phase advances with it,
-        // so the waves travel while their height stays tied to real levels.
+        // `.animation` gives a per-frame date: the phase advances with it, and
+        // each height is the glide's position at that same instant — so every
+        // frame draws something new no matter how slowly the levels arrive.
         TimelineView(.animation) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
+            let now = timeline.date
+            let t = now.timeIntervalSinceReferenceDate
             Canvas { context, size in
                 // Behind: teammates / system audio (gray).
                 drawWave(
                     in: &context, size: size,
-                    amplitude: outputLevel, phase: t * 1.7, frequency: 2.1,
+                    amplitude: output.value(at: now), phase: t * 1.7, frequency: 2.1,
                     color: Color(white: 0.74), lineWidth: 2.5
                 )
                 // Front: the user / microphone (indigo).
                 drawWave(
                     in: &context, size: size,
-                    amplitude: inputLevel, phase: t * 2.3 + 0.7, frequency: 2.6,
+                    amplitude: input.value(at: now), phase: t * 2.3 + 0.7, frequency: 2.6,
                     color: .echoIndigo, lineWidth: 3
                 )
             }
         }
+        .onChange(of: inputLevel) { _, level in input.retarget(level) }
+        .onChange(of: outputLevel) { _, level in output.retarget(level) }
     }
 
     private func drawWave(
@@ -92,6 +98,56 @@ struct DualWaveView: View {
             with: .color(color),
             style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
         )
+    }
+}
+
+/// Carries one wave's height *between* the readings that feed it.
+///
+/// The two channels report at very different rates — system audio every ~12 ms,
+/// the mic every 100 ms (macOS clamps the tap, see `MicrophoneCapture`) — while
+/// the display redraws 60–120 times a second. Painting the raw value means the
+/// gray wave gets a fresh height almost every frame and looks fluid, while the
+/// indigo one holds the same height for six to twelve frames and then jumps:
+/// identical drawing code, visibly worse motion. So instead of snapping to each
+/// new reading, the height slides to it over the time the *next* reading is
+/// expected to take — measured from the gap between the last two, never assumed,
+/// so each channel self-tunes and the fast one is left essentially untouched.
+///
+/// Motion starts the instant a reading lands (the slide begins immediately);
+/// only the peak arrives a beat later, which is the trade that buys continuous
+/// movement instead of a ten-frames-per-second slideshow.
+struct GlidingLevel {
+
+    /// Bounds on the slide. The floor keeps a burst of near-simultaneous
+    /// readings from dividing by ~zero; the ceiling means a channel that
+    /// stalls can't leave the wave crawling toward a stale target.
+    private static let minimumSlide: TimeInterval = 0.008
+    private static let maximumSlide: TimeInterval = 0.12
+
+    private var from: CGFloat = 0
+    private var to: CGFloat = 0
+    private var startedAt: Date = .distantPast
+    private var previousReadingAt: Date?
+    private var slide: TimeInterval = maximumSlide
+
+    /// Points the glide at a newly reported level, starting from wherever the
+    /// wave is drawn right now (never from the previous *target*, which would
+    /// jump on a reading that lands mid-slide).
+    mutating func retarget(_ level: CGFloat, now: Date = Date()) {
+        from = value(at: now)
+        to = level
+        if let previousReadingAt {
+            slide = min(max(now.timeIntervalSince(previousReadingAt), Self.minimumSlide), Self.maximumSlide)
+        }
+        previousReadingAt = now
+        startedAt = now
+    }
+
+    /// The height to draw at `now`.
+    func value(at now: Date) -> CGFloat {
+        guard slide > 0 else { return to }
+        let progress = min(max(now.timeIntervalSince(startedAt) / slide, 0), 1)
+        return from + (to - from) * CGFloat(progress)
     }
 }
 
