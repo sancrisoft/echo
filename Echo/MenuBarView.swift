@@ -12,9 +12,11 @@
 //      No transcript-derived numbers while recording (SP-007 final-only UX);
 //      word counts reappear once the meeting resolves.
 //
-//  The gear in the header opens the full dashboard. Capture-health problems
-//  (mic lost, degraded echo handling, unusable input) temporarily replace the
-//  info line under the waves; the default line returns once they clear.
+//  The header carries exactly one navigation affordance — "Open Echo" — and
+//  Settings live inside that window (the sidebar's Settings row). Capture-health
+//  problems (mic lost, degraded echo handling, unusable input) temporarily
+//  replace the info line under the waves; the default line returns once they
+//  clear.
 //
 
 import SwiftUI
@@ -25,7 +27,6 @@ struct MenuBarView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(CallDetectionController.self) private var callDetection
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
 
     /// Stats for the most recently saved meeting, shown on the idle face.
     /// Word count needs the transcript, so it is loaded lazily (the meta alone
@@ -83,32 +84,18 @@ struct MenuBarView: View {
                 .foregroundStyle(.tertiary)
                 .padding(.top, 3)
             Spacer()
-            // The native Settings window (the dashboard sidebar's Settings row
-            // is the second, embedded host). `openSettings` — the documented
-            // programmatic action — rather than `SettingsLink`: from an
-            // accessory app's MenuBarExtra popover the link can open the
-            // window without activating the app, leaving it behind whatever
-            // is frontmost. The explicit activate below plus the activation
-            // policy's own promotion (`EchoAppDelegate.sync`) front it.
-            Button {
-                NSApp.activate(ignoringOtherApps: true)
-                openSettings()
-            } label: {
-                Image(systemName: "gear")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Open Settings")
-            // Was a gearshape; renamed glyph so it can't be read as a second
-            // settings button now that a real one sits beside it.
+            // One button, one destination. A gear used to sit beside this one
+            // opening the native Settings window, but two glyphs in a 300pt
+            // popover read as two apps: the window is the app, and Settings is
+            // a room inside it (the sidebar's Settings row, same view). Cmd-,
+            // still opens the native window once Echo is frontmost.
             Button(action: openDashboard) {
                 Image(systemName: "macwindow")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
-            .help("Open dashboard")
+            .help("Open Echo")
         }
     }
 
