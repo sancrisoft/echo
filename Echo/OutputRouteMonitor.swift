@@ -45,8 +45,23 @@ final class OutputRouteMonitor {
 
     var onRouteChange: ((OutputRouteClass) -> Void)?
 
+    /// Fires when the default output DEVICE ITSELF changes — AirPods
+    /// connecting mid-meeting, a monitor waking up — as opposed to the
+    /// classified route above, which collapses every non-built-in device into
+    /// `.unsupported` and so cannot tell one pair of headphones from another.
+    ///
+    /// The system-audio tap needs this because its aggregate device is built
+    /// around whichever device was default at start and keeps that anchor —
+    /// and that device's sample rate — after the sound moves elsewhere
+    /// (BRN-006). Echo handling reads the classified route; capture reads this.
+    var onDefaultOutputDeviceChange: ((AudioObjectID) -> Void)?
+
     private var listenerBlock: AudioObjectPropertyListenerBlock?
     private var dataSourceDeviceID: AudioObjectID?
+    /// Deduplicates: the listeners fire on data-source changes and on
+    /// spurious notifications too, and a rebuild is only owed to a real
+    /// device swap.
+    private var lastDefaultOutputDeviceID: AudioObjectID?
 
     private static let defaultOutputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -83,6 +98,9 @@ final class OutputRouteMonitor {
             MainActor.assumeIsolated { self?.handleChange() }
         }
         listenerBlock = block
+        // Seeded so the first real swap reads as a change and a session that
+        // never changes device never reports one.
+        lastDefaultOutputDeviceID = defaultOutputDeviceID()
 
         var address = Self.defaultOutputAddress
         AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, block)
@@ -95,6 +113,7 @@ final class OutputRouteMonitor {
         AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, .main, block)
         detachDataSourceListener()
         listenerBlock = nil
+        lastDefaultOutputDeviceID = nil
     }
 
     // MARK: - Listeners
@@ -109,6 +128,13 @@ final class OutputRouteMonitor {
         let route = currentRoute()
         Self.log.info("Output route changed: \(String(describing: route), privacy: .public)")
         onRouteChange?(route)
+
+        // Reported after the route so echo handling has already switched mode
+        // when capture rebuilds on the new device.
+        guard let deviceID = defaultOutputDeviceID(), deviceID != lastDefaultOutputDeviceID else { return }
+        lastDefaultOutputDeviceID = deviceID
+        Self.log.info("Default output device changed: \(deviceID, privacy: .public)")
+        onDefaultOutputDeviceChange?(deviceID)
     }
 
     private func attachDataSourceListener() {
