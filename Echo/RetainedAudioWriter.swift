@@ -47,6 +47,21 @@ actor RetainedAudioWriter {
     private var files: [AudioChannel: AVAudioFile] = [:]
     private var finished = false
 
+    /// What actually reached each file, and what asked to and was turned away.
+    /// The Team channel's retained audio comes out systematically shorter than
+    /// the meeting (measured 4–8% across real recordings, growing with load),
+    /// and these two counters split the possible causes apart: audio that
+    /// never arrived versus audio that arrived after the file was closed. The
+    /// capture path counts what it handed over; the difference is the answer.
+    struct Accounting: Sendable {
+        var writtenFrames: [AudioChannel: Int] = [:]
+        /// Appends refused because the file was already finalized — the
+        /// straggler ingest tasks `finish()` documents dropping.
+        var rejectedFrames: [AudioChannel: Int] = [:]
+    }
+
+    private var accounting = Accounting()
+
     /// True once a write failed and retention was abandoned for this session.
     private(set) var isDisabled = false
 
@@ -60,9 +75,13 @@ actor RetainedAudioWriter {
     /// position in the timeline: call it with exactly the samples the pipeline
     /// receives, in the same order.
     func append(_ samples: [Float], to channel: AudioChannel) {
-        guard !isDisabled, !finished, !samples.isEmpty else { return }
+        guard !samples.isEmpty else { return }
+        guard !isDisabled, !finished else {
+            accounting.rejectedFrames[channel, default: 0] += samples.count
+            return
+        }
         do {
-            try write(samples, to: file(for: channel))
+            try write(samples, to: file(for: channel), channel: channel)
         } catch {
             disable(reporting: error)
         }
@@ -83,7 +102,7 @@ actor RetainedAudioWriter {
             let file = try file(for: channel)
             while remaining > 0 {
                 let count = min(remaining, slab.count)
-                try write(count == slab.count ? slab : Array(slab.prefix(count)), to: file)
+                try write(count == slab.count ? slab : Array(slab.prefix(count)), to: file, channel: channel)
                 remaining -= count
             }
         } catch {
@@ -113,6 +132,10 @@ actor RetainedAudioWriter {
 
     // MARK: - Internals
 
+    /// Read after `finish()`, so the counts are final. Never clears: the stop
+    /// path reads it once the files are closed and adopted.
+    func currentAccounting() -> Accounting { accounting }
+
     private func file(for channel: AudioChannel) throws -> AVAudioFile {
         if let file = files[channel] { return file }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -128,6 +151,11 @@ actor RetainedAudioWriter {
         )
         files[channel] = file
         return file
+    }
+
+    private func write(_ samples: [Float], to file: AVAudioFile, channel: AudioChannel) throws {
+        try write(samples, to: file)
+        accounting.writtenFrames[channel, default: 0] += samples.count
     }
 
     private func write(_ samples: [Float], to file: AVAudioFile) throws {
