@@ -118,17 +118,28 @@ struct EchoApp: App {
         .restorationBehavior(.disabled)
         .defaultSize(width: 1100, height: 720)
         .windowResizability(.contentMinSize)
-
-        // The native settings window (Cmd+, and the menu-bar gear). The same
-        // SettingsView the dashboard sidebar embeds — one view, two hosts.
-        // `EchoAppDelegate.sync()` keeps the app `.regular` while it is open,
-        // exactly as it does for the dashboard.
-        Settings {
-            SettingsView()
-                .environment(controller)
-                .environment(settings)
-                .environment(callDetection)
-                .frame(minWidth: 520, minHeight: 400)
+        // Cmd-, lands on the dashboard's Settings page instead of raising a
+        // second, floating window. There is no `Settings` scene any more:
+        // Echo had two hosts for one `SettingsView`, and the native one was
+        // the worse of the pair — a bare dialog with no sidebar, no way back
+        // to the meetings, and its own Cmd-Tab entry to manage. Replacing the
+        // standard menu item (rather than adding one) keeps a single
+        // "Settings…" in the app menu, still at its conventional shortcut.
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { openSettingsPage() }
+                    .keyboardShortcut(",", modifiers: .command)
+            }
         }
+    }
+
+    /// Selects the Settings section *before* opening the window so it appears
+    /// already on that page — never a flash of the meetings list first. Routed
+    /// through `DashboardOpener` (the same handle SP-006's island uses) since
+    /// `openWindow` doesn't exist in a commands builder; it also performs the
+    /// activate-and-front dance an agent app needs to actually surface.
+    private func openSettingsPage() {
+        controller.library.section = .settings
+        DashboardOpener.shared.openDashboard()
     }
 }

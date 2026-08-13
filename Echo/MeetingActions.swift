@@ -2,9 +2,10 @@
 //  MeetingActions.swift
 //  Echo
 //
-//  The row quick actions that leave the app boundary: Export (a save panel that
-//  writes Markdown or plain text), Copy summary (to the pasteboard), and Reveal
-//  in Finder. Kept out of the view so the list stays about layout, and grouped
+//  The quick actions that leave the app boundary: Export (a save panel that
+//  writes Markdown or plain text), Copy summary (Markdown, to the pasteboard —
+//  the share path, offered on the row and in the detail), and Reveal in
+//  Finder. Kept out of the view so the list stays about layout, and grouped
 //  here because they all turn a loaded `MeetingRecord` (or its folder) into
 //  something the rest of the system consumes.
 //
@@ -64,15 +65,43 @@ enum MeetingActions {
 
     // MARK: - Copy summary
 
-    /// Copies the meeting's summary as plain text. Returns `false` when there is
-    /// no summary to copy (the caller can keep the action disabled).
+    /// Copies the meeting's summary as Markdown — the share format: a title
+    /// heading, the meta line, and the same sections the export writes, so the
+    /// paste lands formatted in Slack, Notion, Linear or a PR description.
+    /// Returns `false` when there is no summary to copy (the caller can keep
+    /// the action disabled).
     @discardableResult
     static func copySummary(_ record: MeetingRecord) -> Bool {
         guard let summary = record.summary else { return false }
+        copySummary(summary, meta: record.meta)
+        return true
+    }
+
+    /// The same copy from a summary that is not (yet) a record loaded off disk
+    /// — the live detail holds the just-generated one in memory. `meta` is
+    /// optional because a session that hasn't persisted yet has none; the
+    /// Markdown then simply starts at the summary itself.
+    static func copySummary(_ summary: MeetingSummary, meta: MeetingMeta?) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(summaryText(summary), forType: .string)
-        return true
+        pasteboard.setString(summaryMarkdown(summary, meta: meta), forType: .string)
+    }
+
+    /// A standalone, shareable Markdown document for one summary.
+    static func summaryMarkdown(_ summary: MeetingSummary, meta: MeetingMeta?) -> String {
+        var lines: [String] = []
+        if let meta {
+            lines.append("# \(meta.title)")
+            lines.append("")
+            lines.append("_\(header(for: meta))_")
+            lines.append("")
+        }
+        // Top-level document, so its sections sit one rung higher than the
+        // export's (where they nest under "## Summary").
+        appendSummary(summary, headingLevel: 2, into: &lines)
+        // No trailing newline: this goes to the pasteboard, and one pasted into
+        // a chat box is an empty line the sender has to delete.
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Reveal
@@ -93,12 +122,7 @@ enum MeetingActions {
         if let summary = record.summary {
             lines.append("## Summary")
             lines.append("")
-            if !summary.shortSummary.isEmpty { lines.append(summary.shortSummary); lines.append("") }
-            if !summary.detailedSummary.isEmpty { lines.append(summary.detailedSummary); lines.append("") }
-            appendMarkdownSection("Decisions", summary.decisions.map { bullet($0.title, $0.details) }, into: &lines)
-            appendMarkdownSection("Action Items", summary.actionItems.map { actionItemLine($0) }, into: &lines)
-            appendMarkdownSection("Open Questions", summary.openQuestions.map { bullet($0.question, $0.context) }, into: &lines)
-            appendMarkdownSection("Risks or Blockers", summary.risks.map { bullet($0.risk, $0.details) }, into: &lines)
+            appendSummary(summary, headingLevel: 3, into: &lines)
         }
 
         lines.append("## Transcript")
@@ -141,9 +165,22 @@ enum MeetingActions {
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func appendMarkdownSection(_ title: String, _ items: [String], into lines: inout [String]) {
+    /// The one Markdown rendering of a summary, shared by the export (nested
+    /// under "## Summary") and the copy action (a document of its own) — they
+    /// differ only in heading depth, never in content.
+    private static func appendSummary(_ summary: MeetingSummary, headingLevel: Int, into lines: inout [String]) {
+        if !summary.shortSummary.isEmpty { lines.append(summary.shortSummary); lines.append("") }
+        if !summary.detailedSummary.isEmpty { lines.append(summary.detailedSummary); lines.append("") }
+        let hashes = String(repeating: "#", count: headingLevel)
+        appendMarkdownSection(hashes, "Decisions", summary.decisions.map { bullet($0.title, $0.details) }, into: &lines)
+        appendMarkdownSection(hashes, "Action Items", summary.actionItems.map { actionItemLine($0) }, into: &lines)
+        appendMarkdownSection(hashes, "Open Questions", summary.openQuestions.map { bullet($0.question, $0.context) }, into: &lines)
+        appendMarkdownSection(hashes, "Risks or Blockers", summary.risks.map { bullet($0.risk, $0.details) }, into: &lines)
+    }
+
+    private static func appendMarkdownSection(_ hashes: String, _ title: String, _ items: [String], into lines: inout [String]) {
         guard !items.isEmpty else { return }
-        lines.append("### \(title)")
+        lines.append("\(hashes) \(title)")
         lines.append("")
         for item in items { lines.append("- \(item)") }
         lines.append("")

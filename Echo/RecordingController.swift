@@ -14,24 +14,28 @@ import SwiftUI
 import Observation
 import os
 
-/// Measures real mic-capture gaps for SP-002's "input switch mid-recording"
-/// criterion: wall time in which the mic channel captured nothing while the
-/// Team channel kept running. `RecordingController` opens an episode when it
-/// takes the mic down (device-switch rebuild, lost-device degradation, or a
-/// session that starts with no input device), and the first delivered batch
-/// afterwards closes it; the measured gap is reported to
-/// `LiveInputMonitor.noteCaptureGap` so the mic clock stays wall-aligned
-/// with the Team channel (SP-001's 100 ms skew budget, ADR-003's timing gate).
+/// Measures real capture gaps for SP-002's "input switch mid-recording"
+/// criterion: wall time in which one channel captured nothing while the other
+/// kept running. `RecordingController` opens an episode when it takes a
+/// channel down (a device-switch rebuild on either side, lost-device
+/// degradation, or a session that starts with no input device), and the first
+/// delivered batch afterwards closes it; the measured gap is reported to
+/// `LiveInputMonitor.noteCaptureGap` so that channel's clock stays
+/// wall-aligned with the other (SP-001's 100 ms skew budget, ADR-003's timing
+/// gate).
+///
+/// One instance per channel: the mic's rebuilds and the Team channel's
+/// output-device rebuilds (BRN-006) are separate outages on separate clocks.
 ///
 /// `ContinuousClock` on purpose: the gap feeds a clock *correction*, so the
 /// measurement must be monotonic — wall-clock `Date` drifts and jumps with
 /// NTP/user changes.
 ///
-/// Thread-safety: `noteDelivery` runs on the mic capture callback while
+/// Thread-safety: `noteDelivery` runs on the capture callback while
 /// `beginEpisode` runs on the main actor, so state is lock-guarded (the same
 /// pattern as the diagnostics sinks); the per-batch cost is one uncontended
 /// lock acquisition.
-nonisolated final class MicCaptureGapTracker: @unchecked Sendable {
+nonisolated final class CaptureGapTracker: @unchecked Sendable {
 
     private let lock = NSLock()
     /// Instant of the most recent delivered batch ≈ the end of the last
@@ -42,8 +46,8 @@ nonisolated final class MicCaptureGapTracker: @unchecked Sendable {
     /// that closes the episode.
     private var episodeStart: ContinuousClock.Instant?
 
-    /// Marks the mic as going down (engine teardown, device lost, or a
-    /// degraded no-device session start). Idempotent within an episode: with
+    /// Marks the channel as going down (engine or tap teardown, device lost,
+    /// or a degraded no-device session start). Idempotent within an episode: with
     /// no delivery in between, chained teardowns (a failed restart followed
     /// by another under device churn) keep the earliest instant, so one
     /// continuous outage measures as one gap.
@@ -54,7 +58,7 @@ nonisolated final class MicCaptureGapTracker: @unchecked Sendable {
         episodeStart = now
     }
 
-    /// Records one delivered mic batch (`batchDuration` seconds of audio
+    /// Records one delivered batch (`batchDuration` seconds of audio
     /// ending at `now`). Returns the measured capture gap when this batch is
     /// the first after a pending episode, `nil` on the steady-state path.
     ///
@@ -83,6 +87,29 @@ nonisolated final class MicCaptureGapTracker: @unchecked Sendable {
     private static func seconds(_ duration: Duration) -> TimeInterval {
         let parts = duration.components
         return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+    }
+}
+
+/// Counts the audio each channel actually handed to the pipeline, in frames.
+/// Paired with `RetainedAudioWriter.Accounting` it answers the one question
+/// the Team channel's missing seconds turn on: was the audio never captured,
+/// captured but never written, or written after the file had closed. One
+/// uncontended lock per batch, on a number the callback already has.
+nonisolated final class ChannelFrameCounter: @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var frames: [AudioChannel: Int] = [:]
+
+    func add(_ count: Int, to channel: AudioChannel) {
+        lock.lock()
+        defer { lock.unlock() }
+        frames[channel, default: 0] += count
+    }
+
+    func seconds(_ channel: AudioChannel) -> TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        return Double(frames[channel] ?? 0) / AudioConstants.sampleRate
     }
 }
 
@@ -155,11 +182,22 @@ final class RecordingController {
     // Serializes engine rebuilds under device churn: each restart awaits the
     // previous one, so two rebuilds can never interleave.
     private var micRestartTask: Task<Void, Never>?
+    // The same discipline for the Team channel's rebuilds on output-device
+    // changes (BRN-006), on its own chain: the two channels rebuild for
+    // unrelated reasons and must not block each other.
+    private var systemRestartTask: Task<Void, Never>?
     // Per-session (built in `wireCallbacks`): measures how long the mic
     // channel captured nothing across device-change rebuilds and lost-device
     // episodes, so the pipeline's mic clock can be realigned (SP-002 "input
     // switch mid-recording"; SP-001 100 ms skew budget).
-    private var micGapTracker: MicCaptureGapTracker?
+    private var micGapTracker: CaptureGapTracker?
+    // Per-session (built in `wireCallbacks`): the same measurement for the
+    // Team channel, which now has an outage of its own to declare — the tap
+    // rebuild that follows the user moving the sound to another device.
+    private var systemGapTracker: CaptureGapTracker?
+    // Per-session (built in `wireCallbacks`): what each channel handed over,
+    // against what the retention writer says it stored.
+    private var deliveredFrames = ChannelFrameCounter()
     // Per-session (built in `startEchoHandling`): wraps a fresh engine stage
     // and applies the mode machine's current mode to the audio path.
     private var switchingStage: SwitchingAECStage?
@@ -389,6 +427,17 @@ final class RecordingController {
         do {
             await monitor.start()
             try await startMicIfExpected()
+            // The Team channel is deaf from here until its tap is built —
+            // seconds, on a cold start (the tap and its private aggregate
+            // device are not cheap). The mic is already capturing by now, so
+            // that stretch is a real hole in the Team timeline, and an
+            // undeclared one would shift every later Team timestamp earlier
+            // by its whole length: teammates answering before the question,
+            // and ADR-003's dedup gate comparing the two channels off by
+            // seconds. Opened here — the instant the mic went live — so both
+            // channels count from the same zero. The first Team buffer closes
+            // it and declares the measured hole.
+            systemGapTracker?.beginEpisode()
             let effectiveScope = try await startSystemCapture(
                 requestedScope: requestedScope,
                 aecStage: aecStage
@@ -804,6 +853,10 @@ final class RecordingController {
         // First: no input-device event or in-flight restart may revive the
         // mic once teardown begins.
         await stopInputDeviceHandling()
+        await stopOutputDeviceHandling()
+        // Read while the tap still knows what it did; `stop()` keeps the
+        // counters, but the uptime it reports must end here.
+        let systemTapStats = system.deliveryStats()
         mic.stop()
         system.stop()
         // A scoped session's second tap (ADR-025) dies with the session; a
@@ -843,11 +896,19 @@ final class RecordingController {
         // transcript: there is no live text any more, so the audio is both
         // the payload and the ADR-016 pending marker. A session that captured
         // nothing has nothing to transcribe and saves no meeting.
+        let endedAt = Date()
         let meetingID = await armFinalization(
             writer: writer,
             startedAt: startedAt,
-            endedAt: Date(),
+            endedAt: endedAt,
             captureScope: captureScope
+        )
+        // After adoption, so the counts are final and every straggler ingest
+        // task has had the round-trips above to land (or be turned away).
+        await recordRetentionAccounting(
+            writer: writer,
+            wallSeconds: endedAt.timeIntervalSince(startedAt),
+            systemTap: systemTapStats
         )
         lastSavedMeetingID = meetingID
         guard let meetingID else {
@@ -1233,8 +1294,11 @@ final class RecordingController {
         // Capture `state`/`pipeline`/`aecStage` directly (not `self`) so these
         // real-time audio callbacks don't race on the controller's `self`
         // reference.
-        let gapTracker = MicCaptureGapTracker()   // fresh per session: no stale episodes
+        let gapTracker = CaptureGapTracker()   // fresh per session: no stale episodes
         micGapTracker = gapTracker
+        systemGapTracker = CaptureGapTracker()
+        deliveredFrames = ChannelFrameCounter()   // fresh evidence per session
+        let delivered = deliveredFrames
         // Fresh input-health evidence per session, tagged with this
         // session's generation: no sustained-discard episode (or notice
         // bookkeeping) ever crosses a session boundary.
@@ -1255,6 +1319,7 @@ final class RecordingController {
                 batchDuration: Double(frames.count) / AudioConstants.sampleRate
             )
             let cleaned = aecStage.processMicSamples(frames)
+            delivered.add(cleaned.count, to: .microphone)
             // Gap and audio go to the pipeline in one task so the clock
             // realignment always lands immediately before the first post-gap
             // samples, never after them.
@@ -1276,6 +1341,8 @@ final class RecordingController {
     /// Also the shape a scoped start falls back to (ADR-027).
     private func wireGlobalSystemCallbacks(aecStage: any AECStage) {
         let writer = retainedWriter
+        let gapTracker = systemGapTracker
+        let delivered = deliveredFrames
         system.onLevel = { [state] level in
             Task { @MainActor in state.pushOutput(level) }
         }
@@ -1283,8 +1350,16 @@ final class RecordingController {
             // Read-only fan-out (ADR-002): the far end gets a value copy; the
             // Team ingest path below must stay byte-identical to today.
             aecStage.feedFarEnd(frames)
+            delivered.add(frames.count, to: .system)
+            // Inert unless a tap rebuild opened an episode, so a session that
+            // never changes output device behaves exactly as before.
+            let gap = gapTracker?.noteDelivery(
+                batchDuration: Double(frames.count) / AudioConstants.sampleRate
+            )
             Task {
+                if let gap { await monitor.noteCaptureGap(seconds: gap, on: .system) }
                 await monitor.ingest(frames, from: .system)
+                if let gap { await writer?.noteGap(seconds: gap, on: .system) }
                 await writer?.append(frames, to: .system)
             }
         }
@@ -1298,12 +1373,20 @@ final class RecordingController {
     /// its `onLevel` deliberately stays nil.
     private func wireScopedSystemCallbacks(aecStage: any AECStage, referenceTap: SystemAudioCapture) {
         let writer = retainedWriter
+        let gapTracker = systemGapTracker
+        let delivered = deliveredFrames
         system.onLevel = { [state] level in
             Task { @MainActor in state.pushOutput(level) }
         }
         system.onSamples = { [monitor] frames in
+            delivered.add(frames.count, to: .system)
+            let gap = gapTracker?.noteDelivery(
+                batchDuration: Double(frames.count) / AudioConstants.sampleRate
+            )
             Task {
+                if let gap { await monitor.noteCaptureGap(seconds: gap, on: .system) }
                 await monitor.ingest(frames, from: .system)
+                if let gap { await writer?.noteGap(seconds: gap, on: .system) }
                 await writer?.append(frames, to: .system)
             }
         }
@@ -1397,6 +1480,12 @@ final class RecordingController {
         routeMonitor.onRouteChange = { [weak self] route in
             self?.handleRouteChange(route)
         }
+        // Not echo handling, but the same monitor's other signal (BRN-006):
+        // the Team tap is anchored to the output device that was default when
+        // it was created, so a real device swap owes it a rebuild.
+        routeMonitor.onDefaultOutputDeviceChange = { [weak self] _ in
+            self?.scheduleSystemCaptureRestart()
+        }
         routeMonitor.start()
         return stage
     }
@@ -1404,6 +1493,7 @@ final class RecordingController {
     private func stopEchoHandling() {
         routeMonitor.stop()
         routeMonitor.onRouteChange = nil
+        routeMonitor.onDefaultOutputDeviceChange = nil
         switchingStage?.reset()
         switchingStage = nil
         echoMode = nil
@@ -1578,5 +1668,154 @@ final class RecordingController {
                 self.handleInputLifecycleEvent(.micCaptureFailed)
             }
         }
+    }
+
+    // MARK: - Output-device handling (BRN-006)
+
+    /// Rebuilds the Team capture on the new default output device.
+    ///
+    /// Necessary, not cosmetic: the tap runs inside an aggregate device built
+    /// around whichever output device was default at start
+    /// (`kAudioAggregateDeviceMainSubDeviceKey`), and that anchor — with its
+    /// sample rate — survives the user moving the sound elsewhere. Putting on
+    /// AirPods mid-meeting would otherwise leave the Team channel clocked by a
+    /// device nobody is listening to.
+    ///
+    /// Same shape as `scheduleMicRestart`: chained so device churn can never
+    /// interleave two rebuilds, generation-guarded, and the outage it opens is
+    /// declared to the pipeline so the Team clock stays wall-aligned.
+    private func scheduleSystemCaptureRestart() {
+        let generation = sessionGeneration
+        let previous = systemRestartTask
+        systemRestartTask = Task { @MainActor [weak self] in
+            _ = await previous?.value
+            // The effective scope doubles as the proof that system capture is
+            // actually up: it is set the moment `startSystemCapture` returns
+            // and cleared at stop, so a device change landing mid-start can
+            // never race the session's own first tap. And it is the session's
+            // *effective* scope, never the requested one — a session that fell
+            // back to global stays global, a scoped one is rebuilt scoped
+            // (ADR-027: a running session never silently widens, not even
+            // through a rebuild).
+            guard let self, !Task.isCancelled,
+                  self.sessionGeneration == generation,
+                  self.state.isRecording,
+                  let scope = self.state.captureScope
+            else { return }
+            // Teardown begins here, not at the device event: the old tap
+            // keeps delivering until this stop.
+            self.systemGapTracker?.beginEpisode()
+            self.system.stop()
+            self.referenceTap?.stop()
+            do {
+                // Scoped sessions run the ADR-025 dual topology: the far-end
+                // reference comes back first, exactly as at start, so the
+                // scoped tap never runs without it.
+                if let reference = self.referenceTap { try await reference.start() }
+                try await self.system.start(scope: scope)
+                // SP-001's discipline, for the change the mode machine can't
+                // see: swapping one unsupported route for another (a monitor
+                // for AirPods) keeps the mode but replaces the whole acoustic
+                // path, and the far-end feed just went through a hole.
+                self.switchingStage?.reset()
+                Self.log.info("Team capture rebuilt on the new default output device")
+            } catch {
+                // The You channel keeps recording and the session keeps its
+                // scope; the next output-device change retries against fresh
+                // truth. The open gap episode stays open, so whenever Team
+                // audio returns the whole outage is declared as one hole.
+                ErrorTrace.record(
+                    "Team capture rebuild after an output-device change failed",
+                    error: error,
+                    category: "RecordingController"
+                )
+            }
+        }
+    }
+
+    // MARK: - Retention accounting
+
+    /// Compares, per channel, the meeting's wall time against what capture
+    /// handed over and what the retained file actually holds — and traces the
+    /// gap when a channel comes out materially short.
+    ///
+    /// This exists because the Team channel's file is systematically shorter
+    /// than the meeting (4–8% on real recordings) and the audio itself ruled
+    /// out the two obvious explanations: the file carries no silence padding
+    /// at its head, so no start-up hole was declared, and the speed is right,
+    /// so nothing is being resampled wrong. Three numbers separate what is
+    /// left: audio that never reached the callback (`delivered` short of
+    /// wall), audio that reached it but never the file (`written` short of
+    /// `delivered`), and audio that arrived after the file was closed
+    /// (`rejected`) — the fire-and-forget ingest tasks the Team channel
+    /// spawns ~86 times a second, against the mic's 10.
+    ///
+    /// Written to the app's own trace log rather than `Logger`: this is read
+    /// after the meeting, and `notice` lines are not always retrievable.
+    private func recordRetentionAccounting(
+        writer: RetainedAudioWriter?,
+        wallSeconds: TimeInterval,
+        systemTap: SystemAudioCapture.DeliveryStats?
+    ) async {
+        // Short sessions are all edge (bring-up, encoder priming) and would
+        // trace noise rather than a defect.
+        guard let writer, wallSeconds > 10 else { return }
+        let accounting = await writer.currentAccounting()
+
+        func seconds(_ frames: Int?) -> TimeInterval {
+            Double(frames ?? 0) / AudioConstants.sampleRate
+        }
+        func text(_ value: TimeInterval) -> String { String(format: "%.2f", value) }
+
+        var metadata = ["wallSeconds": text(wallSeconds)]
+        var isShort = false
+        for channel in [AudioChannel.microphone, .system] {
+            let delivered = deliveredFrames.seconds(channel)
+            guard delivered > 0 else { continue }   // a channel that never ran
+            let written = seconds(accounting.writtenFrames[channel])
+            metadata["\(channel.rawValue)Delivered"] = text(delivered)
+            metadata["\(channel.rawValue)Written"] = text(written)
+            metadata["\(channel.rawValue)RejectedAfterClose"] = text(
+                seconds(accounting.rejectedFrames[channel])
+            )
+            // Padding declared for capture gaps counts as retained time, so
+            // the honest yardstick is the meeting itself.
+            if wallSeconds - written > wallSeconds * 0.02 { isShort = true }
+        }
+
+        // The tap's own side of the story: how many IO cycles ran, how many
+        // arrived empty, and how much audio the cycles account for. Coverage
+        // near uptime means the tap had nothing to give during the missing
+        // stretches; coverage well under uptime means cycles never ran.
+        if let systemTap {
+            metadata["systemTapUptime"] = text(systemTap.uptimeSeconds)
+            metadata["systemTapDelivered"] = text(systemTap.deliveredSeconds)
+            metadata["systemTapCycleCoverage"] = text(systemTap.cycleCoverageSeconds)
+            metadata["systemTapCycles"] = String(systemTap.cycles)
+            metadata["systemTapEmptyCycles"] = String(systemTap.emptyCycles)
+            metadata["systemTapSkips"] = String(systemTap.skips)
+            metadata["systemTapLostToSkips"] = text(systemTap.secondsLostToSkips)
+            metadata["systemTapLostToLongGaps"] = text(systemTap.secondsLostToLongGaps)
+            metadata["systemTapLongestGap"] = text(systemTap.longestGapSeconds)
+            metadata["rateGuardConclusions"] = String(systemTap.rateConclusions)
+            metadata["rateGuardMeasured"] = String(format: "%.0f", systemTap.measuredRate)
+            metadata["rateGuardDeclared"] = String(format: "%.0f", systemTap.declaredRate)
+        }
+
+        guard isShort else { return }
+        ErrorTrace.record(
+            "Retained audio is shorter than the meeting",
+            category: "RetentionAccounting",
+            metadata: metadata
+        )
+    }
+
+    /// Mirrors `stopInputDeviceHandling` for the output side: no route event
+    /// or in-flight rebuild may revive the Team tap once teardown begins.
+    private func stopOutputDeviceHandling() async {
+        routeMonitor.onDefaultOutputDeviceChange = nil
+        systemRestartTask?.cancel()
+        _ = await systemRestartTask?.value
+        systemRestartTask = nil
     }
 }

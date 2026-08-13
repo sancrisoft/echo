@@ -68,9 +68,6 @@ enum MeetingSortOrder: String, CaseIterable, Identifiable {
 
 struct DashboardView: View {
     @Environment(RecordingController.self) private var controller
-    #if DEBUG
-    @Environment(\.openSettings) private var openSettings
-    #endif
 
     /// The detail currently covering the list, if any. Lives on the shell so
     /// the window title bar can swap between the breadcrumb and the opened
@@ -130,19 +127,33 @@ struct DashboardView: View {
         // this window to PNG every 2 s so UI work can be inspected from the
         // CLI without screen-recording permission. Inert in normal runs.
         .task {
-            // ECHO_OPEN_SETTINGS=1 (+ ECHO_SETTINGS_PROBE=path): open the
-            // native settings window from the CLI, dump every window's
-            // identifier/title plus the activation policy, and quit — how the
-            // Settings-scene window identifier `ActivationPolicy.sync`
-            // matches was verified on this OS.
+            // ECHO_OPEN_SETTINGS=1 (+ ECHO_SETTINGS_PROBE=path): fire the app
+            // menu's own "Settings…" item from the CLI, then dump what it did
+            // — the item's shortcut, the section the library landed on, the
+            // window census, and the activation policy — and quit. It used to
+            // call `openSettings()` and check which window appeared; with the
+            // native Settings scene gone, Cmd-, must instead select the
+            // dashboard's Settings page and open no second window, and this
+            // exercises that whole chain rather than the destination alone.
             if ProcessInfo.processInfo.environment["ECHO_OPEN_SETTINGS"] == "1" {
                 try? await Task.sleep(for: .seconds(1))
-                openSettings()
+                var invoked: [String] = []
+                if let appMenu = NSApp.mainMenu?.items.first?.submenu,
+                   let index = appMenu.items.firstIndex(where: { $0.title.hasPrefix("Settings") }) {
+                    let item = appMenu.items[index]
+                    invoked.append("item=\"\(item.title)\" key=\"\(item.keyEquivalent)\" cmd=\(item.keyEquivalentModifierMask.contains(.command))")
+                    appMenu.performActionForItem(at: index)
+                } else {
+                    invoked.append("item=MISSING")
+                }
                 try? await Task.sleep(for: .seconds(2))
                 if let probePath = ProcessInfo.processInfo.environment["ECHO_SETTINGS_PROBE"] {
-                    let lines = NSApp.windows.map {
-                        "id=\($0.identifier?.rawValue ?? "nil") title=\($0.title) visible=\($0.isVisible) class=\(type(of: $0))"
-                    } + ["policy=\(NSApp.activationPolicy().rawValue)"]
+                    let lines = invoked
+                        + ["section=\(controller.library.section)"]
+                        + NSApp.windows.map {
+                            "id=\($0.identifier?.rawValue ?? "nil") title=\($0.title) visible=\($0.isVisible) class=\(type(of: $0))"
+                        }
+                        + ["policy=\(NSApp.activationPolicy().rawValue)"]
                     try? lines.joined(separator: "\n")
                         .write(toFile: probePath, atomically: true, encoding: .utf8)
                     NSApp.terminate(nil)
@@ -973,8 +984,9 @@ private struct TrashView: View {
 
 // MARK: - Settings (embedded host)
 
-/// The dashboard's Settings page: the same `SettingsView` the native scene
-/// hosts, under a header matching the Meetings/Trash panes.
+/// The dashboard's Settings page — since the native `Settings` scene was
+/// dropped, the only host of `SettingsView`, reached from the sidebar row and
+/// from Cmd-, . Header matches the Meetings/Trash panes.
 private struct SettingsPageView: View {
     var body: some View {
         VStack(spacing: 0) {
@@ -1085,7 +1097,7 @@ private struct MeetingRow: View {
                 Label("Export…", systemImage: "square.and.arrow.up")
             }
 
-            Button { copySummary() } label: { Label("Copy summary", systemImage: "doc.on.doc") }
+            Button { copySummary() } label: { Label("Copy summary as Markdown", systemImage: "doc.on.doc") }
                 .disabled(!meta.hasSummary)
             Button { reveal() } label: { Label("Reveal in Finder", systemImage: "folder") }
 
@@ -2064,10 +2076,19 @@ private struct LiveMeetingDetail: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
         case .streaming(let meetingSummary):
-            SummaryContentView(summary: meetingSummary, segments: controller.state.segments, isStreaming: true)
+            SummaryContentView(
+                summary: meetingSummary,
+                segments: controller.state.segments,
+                meta: activeMeta,
+                isStreaming: true
+            )
 
         case .ready(let meetingSummary):
-            SummaryContentView(summary: meetingSummary, segments: controller.state.segments)
+            SummaryContentView(
+                summary: meetingSummary,
+                segments: controller.state.segments,
+                meta: activeMeta
+            )
 
         case .unavailable(let message):
             ContentUnavailableView(
@@ -2088,6 +2109,13 @@ private struct LiveMeetingDetail: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// The just-stopped session's persisted meta, for the copied Markdown's
+    /// title and date line. A summary only ever exists after the stop-save, so
+    /// in practice this is present whenever the copy button is enabled.
+    private var activeMeta: MeetingMeta? {
+        controller.library.activeMeetingID.flatMap { controller.library.meta(for: $0) }
     }
 
     /// Honest idle copy (SP-005 S6): while the just-stopped meeting's final
@@ -2336,7 +2364,7 @@ private struct PastMeetingDetail: View {
     @ViewBuilder
     private func summary(for record: MeetingRecord) -> some View {
         if let summary = record.summary {
-            SummaryContentView(summary: summary, segments: record.segments)
+            SummaryContentView(summary: summary, segments: record.segments, meta: record.meta)
         } else if controller.backfillingMeetingID == id {
             SummaryGenerationProgressView(subject: "this meeting's transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2488,8 +2516,8 @@ private struct LiveTranscriptFooter: View {
             Divider()
             HStack(spacing: 14) {
                 DualWaveView(
-                    inputLevel: DualWaveView.amplitude(controller.state.inputLevels),
-                    outputLevel: DualWaveView.amplitude(controller.state.outputLevels)
+                    inputLevel: controller.state.inputAmplitude,
+                    outputLevel: controller.state.outputAmplitude
                 )
                 .frame(width: 130, height: 30)
 
@@ -2519,13 +2547,56 @@ private struct LiveTranscriptFooter: View {
 private struct SummaryContentView: View {
     let summary: MeetingSummary
     let segments: [TranscriptSegment]
+    /// Titles and dates the copied Markdown header — `nil` for a session that
+    /// hasn't persisted yet, which copies the summary body alone.
+    var meta: MeetingMeta?
     var isStreaming: Bool = false
+
+    /// Two-second "Copied" confirmation on the share button.
+    @State private var copied = false
 
     private var segmentByID: [String: TranscriptSegment] {
         Dictionary(uniqueKeysWithValues: segments.map { ($0.id.uuidString.lowercased(), $0) })
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            copyBar
+            scrollingSummary
+        }
+    }
+
+    /// The share affordance. Outside the scroll view on purpose: a summary long
+    /// enough to be worth sharing is long enough to scroll a floating button
+    /// out of reach.
+    private var copyBar: some View {
+        HStack {
+            Spacer()
+            Button {
+                MeetingActions.copySummary(summary, meta: meta)
+                copied = true
+            } label: {
+                Label(copied ? "Copied" : "Copy summary",
+                      systemImage: copied ? "checkmark" : "doc.on.doc")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(isStreaming)
+            .help(isStreaming
+                  ? "Available once the summary finishes"
+                  : "Copy this summary as Markdown, ready to paste and share")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .task(id: copied) {
+            guard copied else { return }
+            try? await Task.sleep(for: .seconds(2))
+            copied = false
+        }
+    }
+
+    private var scrollingSummary: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 if isStreaming {
@@ -2564,6 +2635,7 @@ private struct SummaryContentView: View {
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxHeight: .infinity)
     }
 
     private var decisionsSection: some View {

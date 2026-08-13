@@ -235,7 +235,7 @@ nonisolated struct FanOutGateDiagnosticsSink: GateDiagnosticsSink {
 /// the `GateDiagnosticsSink` contract: `record` arrives synchronously on the
 /// transcription pipeline's actor executor (≤ ~1/sec/channel) while device
 /// signals and session lifecycle arrive from the main actor, so state is
-/// lock-guarded — the same pattern as `MicCaptureGapTracker`, and the same
+/// lock-guarded — the same pattern as `CaptureGapTracker`, and the same
 /// uncontended-lock cost the sink contract's "fast, non-blocking" clause
 /// allows.
 ///

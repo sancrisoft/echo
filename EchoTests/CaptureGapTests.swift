@@ -238,7 +238,7 @@ struct CaptureGapTests {
         #expect(OSLogGateDiagnosticsSink.line(for: record).contains("t=1.70s"))
     }
 
-    // MARK: - Controller-side gap measurement (MicCaptureGapTracker)
+    // MARK: - Controller-side gap measurement (CaptureGapTracker)
 
     // The tracker is the honest no-hardware seam for RecordingController's
     // measurement: pure instant arithmetic, tested with injected
@@ -249,7 +249,7 @@ struct CaptureGapTests {
     /// zero-call guarantee that keeps sessions without device events
     /// byte-identical to today.
     @Test func trackerReportsNoGapDuringNormalDelivery() {
-        let tracker = MicCaptureGapTracker()
+        let tracker = CaptureGapTracker()
         let t0 = ContinuousClock.Instant.now
 
         #expect(tracker.noteDelivery(batchDuration: 0.1, now: t0) == nil)
@@ -264,7 +264,7 @@ struct CaptureGapTests {
     /// hole) to the start of the first post-gap batch (its delivery instant
     /// minus its own duration).
     @Test func trackerMeasuresTheHoleFromLastDeliveredAudioToFirstNewAudio() {
-        let tracker = MicCaptureGapTracker()
+        let tracker = CaptureGapTracker()
         let t0 = ContinuousClock.Instant.now
 
         _ = tracker.noteDelivery(batchDuration: 0.1, now: t0)
@@ -284,7 +284,7 @@ struct CaptureGapTests {
     /// episode's begin instant (the session's mic-silent start), so the mic
     /// clock realigns over the whole Team-only stretch.
     @Test func trackerFallsBackToTheEpisodeStartWhenTheMicNeverDelivered() {
-        let tracker = MicCaptureGapTracker()
+        let tracker = CaptureGapTracker()
         let t0 = ContinuousClock.Instant.now
 
         tracker.beginEpisode(now: t0)
@@ -299,7 +299,7 @@ struct CaptureGapTests {
     /// are one continuous outage: the episode keeps the earliest teardown
     /// instant, so the whole outage measures as a single honest gap.
     @Test func overlappingBeginsMergeIntoOneEpisodeFromTheEarliestTeardown() {
-        let tracker = MicCaptureGapTracker()
+        let tracker = CaptureGapTracker()
         let t0 = ContinuousClock.Instant.now
 
         tracker.beginEpisode(now: t0)
@@ -314,7 +314,7 @@ struct CaptureGapTests {
     /// it is steady state again — one gap declared per outage, never a
     /// trickle of re-declarations (which would over-advance the clock).
     @Test func episodeClosesOnceAndLaterDeliveriesReportNoGap() {
-        let tracker = MicCaptureGapTracker()
+        let tracker = CaptureGapTracker()
         let t0 = ContinuousClock.Instant.now
 
         _ = tracker.noteDelivery(batchDuration: 0.1, now: t0)
@@ -328,7 +328,7 @@ struct CaptureGapTests {
     /// positive hole — nothing worth declaring. The tracker suppresses it
     /// rather than handing the pipeline a zero/negative gap to reject.
     @Test func nonPositiveMeasuredGapsAreSuppressed() {
-        let tracker = MicCaptureGapTracker()
+        let tracker = CaptureGapTracker()
         let t0 = ContinuousClock.Instant.now
 
         _ = tracker.noteDelivery(batchDuration: 0.1, now: t0)
