@@ -14,12 +14,21 @@ import Testing
 @testable import Echo
 
 /// Scripted TextGenerating: each call to `stream` pops the next script (an
-/// array of raw chunks) and replays it. Thread-safe so the pipeline can call
-/// it from any isolation.
+/// array of raw chunks) and replays it, recording exactly what the pipeline
+/// asked for (system, user, params) so tests can assert on the real prompts
+/// and sampling in flight. Thread-safe so the pipeline can call it from any
+/// isolation.
 private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
+
+    struct RecordedCall {
+        let system: String
+        let user: String
+        let params: GenerationParams
+    }
+
     private let lock = NSLock()
     private var scripts: [[String]]
-    private(set) var callCount = 0
+    private var recorded: [RecordedCall] = []
 
     init(scripts: [[String]]) {
         self.scripts = scripts
@@ -29,7 +38,7 @@ private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
         -> AsyncThrowingStream<String, Error>
     {
         lock.lock()
-        callCount += 1
+        recorded.append(RecordedCall(system: system, user: user, params: params))
         let chunks = scripts.isEmpty ? [] : scripts.removeFirst()
         lock.unlock()
         return AsyncThrowingStream { continuation in
@@ -43,7 +52,13 @@ private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
     var calls: Int {
         lock.lock()
         defer { lock.unlock() }
-        return callCount
+        return recorded.count
+    }
+
+    var recordedCalls: [RecordedCall] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
     }
 }
 
@@ -51,6 +66,39 @@ private func segment(_ text: String, id: UUID = UUID(), at start: TimeInterval =
     TranscriptSegment(
         id: id, channel: .microphone, speaker: .me, text: text, start: start, end: start + 4
     )
+}
+
+// MARK: - Generation presets
+
+/// The markdown route needs different sampling than the NDJSON phases, and the
+/// two must never drift into each other: the preset carries the markdown
+/// tuning, the default init keeps the NDJSON tuning. Both are pinned by value
+/// so a "harmless" retune shows up as a failing test, not a mystery regression
+/// in summary quality.
+@Suite("GenerationParams presets")
+struct GenerationParamsPresetTests {
+
+    @Test("markdownSummary carries the markdown-prose tuning")
+    func markdownSummaryValues() {
+        let params = GenerationParams.markdownSummary
+        #expect(params.temperature == 0.4)
+        #expect(params.topP == 0.95)
+        #expect(params.maxTokens == 4096)
+        #expect(params.repetitionPenalty == 1.05)
+        #expect(params.frequencyPenalty == 0.0)
+        #expect(params.presencePenalty == 0.0)
+    }
+
+    @Test("the default init keeps the NDJSON tuning untouched")
+    func defaultsUnchanged() {
+        let params = GenerationParams()
+        #expect(params.temperature == 0.3)
+        #expect(params.topP == 0.9)
+        #expect(params.maxTokens == 3072)
+        #expect(params.repetitionPenalty == 1.1)
+        #expect(params.frequencyPenalty == 0.6)
+        #expect(params.presencePenalty == 0.3)
+    }
 }
 
 // MARK: - Markdown sanitizer (table)
@@ -133,6 +181,81 @@ struct PlainTranscriptTextTests {
     }
 }
 
+// MARK: - Caption source (markdown-stripped head)
+
+/// The library-row caption is written by a tiny generation that reads the head
+/// of the finished summary. A markdown document's head is markup-dense
+/// ("### Action Items", "- [ ]", "**bold**") — fed raw, the caption model
+/// parrots the markup. `captionSource` strips the syntax so the model reads
+/// prose, and caps the head so a long document never floods the prompt.
+@Suite("captionSource")
+struct CaptionSourceTests {
+
+    @Test("heading, checkbox, bullet, and emphasis markup is stripped")
+    func stripsMarkup() {
+        let markdown = """
+        ### Action Items
+        - [ ] Diego to ship the **hotfix**
+        - [x] Juan to test the `Echo` build
+
+        ### Release Review
+        - The team agreed the *build* is ready.
+        """
+
+        let source = SummarizationPipeline.captionSource(from: markdown)
+
+        #expect(source.contains("Action Items"))
+        #expect(source.contains("Diego to ship the hotfix"))
+        #expect(source.contains("Juan to test the Echo build"))
+        #expect(source.contains("The team agreed the build is ready."))
+        #expect(!source.contains("#"))
+        #expect(!source.contains("["))
+        #expect(!source.contains("*"))
+        #expect(!source.contains("`"))
+    }
+
+    @Test("table rows and horizontal rules are dropped")
+    func dropsTablesAndRules() {
+        let markdown = """
+        ### Options
+        | Option | Cost |
+        | --- | --- |
+        | A | low |
+
+        ---
+
+        Prose survives.
+        """
+
+        let source = SummarizationPipeline.captionSource(from: markdown)
+
+        #expect(source.contains("Options"))
+        #expect(source.contains("Prose survives."))
+        #expect(!source.contains("|"))
+        #expect(!source.contains("---"))
+    }
+
+    @Test("a plain paragraph passes through unchanged")
+    func plainParagraphPassesThrough() {
+        let prose = "A quick sync about shipping the release on Friday."
+        #expect(SummarizationPipeline.captionSource(from: prose) == prose)
+    }
+
+    @Test("the stripped head is capped, and the cap applies after stripping")
+    func capsAfterStripping() {
+        // Every line spends most of its characters on markup; stripping first
+        // means the cap budgets prose, not asterisks.
+        let line = "- [ ] **Someone** to do the `thing` again\n"
+        let markdown = String(repeating: line, count: 200)
+
+        let source = SummarizationPipeline.captionSource(from: markdown)
+
+        #expect(source.count <= 1200)
+        #expect(!source.contains("*"))
+        #expect(source.hasPrefix("Someone to do the thing again"))
+    }
+}
+
 @Suite("SummarizationPipeline streaming")
 struct SummarizationPipelineStreamTests {
 
@@ -189,6 +312,48 @@ struct SummarizationPipelineStreamTests {
             #expect(snapshot.markdown.count >= previousLength)
             previousLength = snapshot.markdown.count
         }
+    }
+
+    /// The markdown route must generate with the markdown tuning, not the
+    /// NDJSON default — the whole point of the preset. Every field is compared
+    /// so a partial hand-off (say, only maxTokens copied over) still fails.
+    @Test("the single-pass route streams with the markdownSummary preset")
+    func singlePassUsesMarkdownPreset() async throws {
+        let engine = ScriptedEngine(scripts: [["### Notes\nBody."]])
+        let pipeline = SummarizationPipeline()
+
+        for try await _ in await pipeline.generate(from: [segment("hi")], using: engine) {}
+
+        let call = try #require(engine.recordedCalls.first)
+        let expected = GenerationParams.markdownSummary
+        #expect(call.params.temperature == expected.temperature)
+        #expect(call.params.topP == expected.topP)
+        #expect(call.params.maxTokens == expected.maxTokens)
+        #expect(call.params.repetitionPenalty == expected.repetitionPenalty)
+        #expect(call.params.frequencyPenalty == expected.frequencyPenalty)
+        #expect(call.params.presencePenalty == expected.presencePenalty)
+    }
+
+    /// A cheap regression net over the adaptive ruleset — not a full-text
+    /// assert (wording may be tuned), but the load-bearing invariants must
+    /// survive any rewording: the Action Items anchor, the never-invent
+    /// grounding rule, the dominant-language rule, the no-code-fences output
+    /// contract, and the never-empty-section rule. Asserted on the system
+    /// prompt the engine actually receives, so a prompt/plumbing mismatch
+    /// fails too.
+    @Test("the system prompt encodes the adaptive ruleset's invariants")
+    func systemPromptInvariants() async throws {
+        let engine = ScriptedEngine(scripts: [["### Notes\nBody."]])
+        let pipeline = SummarizationPipeline()
+
+        for try await _ in await pipeline.generate(from: [segment("hi")], using: engine) {}
+
+        let system = try #require(engine.recordedCalls.first).system
+        #expect(system.contains("### Action Items"))
+        #expect(system.localizedCaseInsensitiveContains("never invent an owner or a due date"))
+        #expect(system.contains("dominant language of the transcript"))
+        #expect(system.localizedCaseInsensitiveContains("no code fences"))
+        #expect(system.localizedCaseInsensitiveContains("never write an empty section"))
     }
 
     @Test("a document streamed inside a code fence is unwrapped in the final snapshot")
@@ -255,6 +420,45 @@ struct SummarizationPipelineStreamTests {
 
         #expect(engine.calls == 1)
         #expect(caption == "A quick sync about shipping the release.")
+    }
+
+    /// The caption preference chain stays shortSummary → markdown →
+    /// detailedSummary, but the markdown leg must feed the STRIPPED head —
+    /// the caption model reads prose, not markup.
+    @Test("a markdown-only summary feeds the stripped head to the caption prompt")
+    func captionPromptGetsStrippedMarkdown() async throws {
+        let engine = ScriptedEngine(scripts: [["A sync about shipping the release."]])
+        let pipeline = SummarizationPipeline()
+        let summary = MeetingSummary(
+            markdown: "### Release Plan\n- [ ] Diego to ship **v1** on `Friday`",
+            shortSummary: "", detailedSummary: "",
+            decisions: [], actionItems: [], openQuestions: [], risks: [])
+
+        _ = await pipeline.oneLineDescription(for: summary, using: engine)
+
+        let user = try #require(engine.recordedCalls.first).user
+        #expect(user.contains("Release Plan"))
+        #expect(user.contains("Diego to ship v1 on Friday"))
+        #expect(!user.contains("###"))
+        #expect(!user.contains("- [ ]"))
+        #expect(!user.contains("**"))
+        #expect(!user.contains("`"))
+    }
+
+    @Test("a short summary still outranks the markdown document as caption source")
+    func captionPrefersShortSummary() async throws {
+        let engine = ScriptedEngine(scripts: [["A caption."]])
+        let pipeline = SummarizationPipeline()
+        let summary = MeetingSummary(
+            markdown: "### Markdown Notes\nShould not be used.",
+            shortSummary: "The short prose summary.", detailedSummary: "",
+            decisions: [], actionItems: [], openQuestions: [], risks: [])
+
+        _ = await pipeline.oneLineDescription(for: summary, using: engine)
+
+        let user = try #require(engine.recordedCalls.first).user
+        #expect(user.contains("The short prose summary."))
+        #expect(!user.contains("Markdown Notes"))
     }
 
     @Test("an entirely empty summary yields no caption and never calls the engine")

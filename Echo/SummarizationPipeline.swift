@@ -223,14 +223,14 @@ actor SummarizationPipeline {
     /// returns `nil` and the row simply shows no caption.
     func oneLineDescription(for summary: MeetingSummary, using engine: any TextGenerating) async -> String? {
         // Source preference mirrors the summary's own: the short prose when the
-        // legacy route wrote one, else the adaptive markdown document (capped —
-        // a headline needs the opening, not the whole notes), else the detailed
-        // prose. A full caption rework for markdown is a later slice.
+        // legacy route wrote one, else the adaptive markdown document — stripped
+        // of its markup and capped by `captionSource`, so the caption model
+        // reads the opening as prose — else the detailed prose.
         let source: String
         if !summary.shortSummary.isEmpty {
             source = summary.shortSummary
         } else if !summary.markdown.isEmpty {
-            source = String(summary.markdown.prefix(1200))
+            source = Self.captionSource(from: summary.markdown)
         } else {
             source = String(summary.detailedSummary.prefix(1200))
         }
@@ -275,6 +275,47 @@ actor SummarizationPipeline {
         """
     }
 
+    /// The head of a markdown document, stripped to prose for the caption
+    /// generation. The caption model reads the opening of the notes; fed raw
+    /// markdown it parrots the markup ("### Action Items - [ ] ..."), so this
+    /// removes heading markers, checkbox/bullet prefixes, and emphasis/code
+    /// delimiters, and drops the lines that carry no prose at all (table rows,
+    /// horizontal rules). Stripping happens BEFORE the ~1200-char cap so the
+    /// budget buys prose, not asterisks. Internal (not private) so the
+    /// stripping rules are table-tested.
+    static func captionSource(from markdown: String) -> String {
+        let lines = markdown.components(separatedBy: "\n").compactMap { rawLine -> String? in
+            var line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { return nil }
+
+            // Table rows (including separator rows) and horizontal rules carry
+            // no prose — drop the whole line.
+            if line.hasPrefix("|") { return nil }
+            if line.count >= 3, line.allSatisfy({ $0 == "-" || $0 == "*" || $0 == "_" }) { return nil }
+
+            // Heading markers, then the checkbox prefix (it embeds a bullet,
+            // so it goes first), then plain bullet prefixes.
+            while line.hasPrefix("#") { line.removeFirst() }
+            line = line.trimmingCharacters(in: .whitespaces)
+            for prefix in ["- [ ] ", "- [x] ", "- [X] "] where line.hasPrefix(prefix) {
+                line.removeFirst(prefix.count)
+            }
+            for prefix in ["- ", "* ", "+ "] where line.hasPrefix(prefix) {
+                line.removeFirst(prefix.count)
+            }
+
+            // Inline delimiters: bold before italic so "**" never survives as
+            // two orphaned "*" strips.
+            line = line.replacingOccurrences(of: "**", with: "")
+            line = line.replacingOccurrences(of: "*", with: "")
+            line = line.replacingOccurrences(of: "`", with: "")
+
+            line = line.trimmingCharacters(in: .whitespaces)
+            return line.isEmpty ? nil : line
+        }
+        return String(lines.joined(separator: "\n").prefix(1200))
+    }
+
     /// First sentence, unwrapped from any quotes/label the model prepends,
     /// trimmed and length-capped.
     private static func cleanCaption(_ raw: String) -> String? {
@@ -315,7 +356,10 @@ actor SummarizationPipeline {
             var accumulated = ""
             var visible = ""
             do {
-                for try await delta in engine.stream(system: system, user: user, params: GenerationParams()) {
+                // The markdown preset, not the NDJSON default: zeroed
+                // frequency/presence penalties (checkbox prefixes and entity
+                // names repeat legitimately here) and room for a dense document.
+                for try await delta in engine.stream(system: system, user: user, params: .markdownSummary) {
                     try Task.checkCancellation()
                     guard !delta.isEmpty else { continue }
                     accumulated += delta
@@ -476,42 +520,76 @@ actor SummarizationPipeline {
         )
     }
 
-    // MARK: - Prompts: single-pass (adaptive markdown, v1)
+    // MARK: - Prompts: single-pass (adaptive markdown, v2 — Notion ruleset)
 
-    /// The v1 ruleset — deliberately short. A later slice installs the full
-    /// Notion-style ruleset; what must hold from day one is the grounding
-    /// contract (nothing invented, owners/dates only when stated) and the
-    /// document shape (Action Items first, then topic-specific sections).
+    /// The full adaptive ruleset, distilled from five real Notion AI meeting
+    /// summaries (the product owner's calibration target). Ordered by
+    /// importance for a 4B model — role and output contract first, document
+    /// shape next, then content and formatting rules. Wording is short and
+    /// imperative on purpose: a small model follows rules it can quote, not
+    /// meta-discussion. Load-bearing phrases ("### Action Items",
+    /// "never invent an owner or a due date", "dominant language of the
+    /// transcript", "no code fences", "never write an empty section") are
+    /// pinned by SummarizationPipelineStreamTests — reword freely around them,
+    /// keep the invariants.
     private static let markdownSystemPrompt = """
-    You are a professional meeting note-taker for a local-first macOS app.
-    Write the notes for the meeting transcript the user provides.
+    You are an expert meeting note-taker. Write the notes a colleague who missed
+    the meeting would need. Output ONE Markdown document and nothing else — no
+    preamble, no closing remarks, no code fences.
 
-    Output: ONE Markdown document and nothing else — no code fences around it,
-    no preamble, no closing remarks.
+    Document shape:
+    - If real commitments were made, START the document with a "### Action Items"
+      section: a checkbox list with one "- [ ] Name to <verb> ..." item per
+      commitment actually made in the transcript. If a commitment has no clear
+      owner, write the item without a name. NEVER invent an owner or a due date;
+      include a due date only when someone said it. If no commitments were made,
+      do not write an Action Items section.
+    - After that, write one "###" section per distinct work topic actually
+      discussed. Make every title SPECIFIC to the content, like "Audio Bug:
+      Wireless Headphone Frequency Issue" — never a generic bucket like
+      "Discussion", "Updates", or "Miscellaneous". Use a generic category
+      section only when the meeting earns it: "Key Decisions" only if explicit
+      decisions were made; a context section only if outside events shaped the
+      meeting. NEVER write an empty section, a "(none)" placeholder, or a
+      section for a category with nothing in it.
 
-    Structure:
-    - Begin with a "### Action Items" section: a "- [ ] " checkbox list of the
-      real commitments people made in the meeting. If no commitments were made,
-      omit this section entirely. Never invent owners or due dates — name them
-      only when the transcript states them.
-    - Then write "###" sections whose titles name the specific topics that were
-      actually discussed. Never use generic titles like "Discussion", "Summary",
-      or "Notes".
+    Adapt the amount to the meeting:
+    - The number of sections and bullets follows the meeting's information
+      density. A short or thin meeting gets short notes; a dense meeting gets
+      many sections. Never pad. Never compress distinct topics into one line.
 
-    Rules:
-    - Ground every statement strictly in the transcript; if the transcript does
-      not support a claim, leave it out.
-    - Write in the dominant language of the transcript.
-    - "You" is the current user speaking on the microphone; "Team" are the
-      teammates heard through system audio.
+    Content:
+    - Preserve specifics exactly as discussed: numbers, quantities, thresholds,
+      versions, model and product names, amounts of money, and root-cause chains
+      (symptom, cause, fix). These details are the value of the notes.
+    - Omit social small talk, unless it affected the work — then summarize it
+      briefly in one contextual section.
+    - The transcript is machine-transcribed and may be garbled. When a passage
+      is unclear, hedge ("likely", "apparently", "unclear whether...") instead
+      of inventing details or silently dropping the topic.
+
+    Formatting:
+    - Bullets are full, informative sentences.
+    - Bold key terms sparingly, with **bold**.
+    - Nest sub-bullets only for real hierarchy.
+    - Use a table only when the content is truly tabular (a comparison, an
+      option matrix).
+    - "---" is allowed as a divider after a long Action Items list.
+
+    Language: write the notes in the dominant language of the transcript.
+
+    Speakers: "You" is the current user (microphone); "Team" are the other
+    participants (system audio). Use real names when the transcript makes them
+    clear; otherwise keep "You" and "the team".
     """
 
     private static func markdownUserPrompt(for segments: [TranscriptSegment]) -> String {
+        // Deliberately thin: the ruleset lives in the system prompt, and the
+        // transcript line format explains itself — one legend line is enough.
         """
-        Write the meeting notes for this transcript as one Markdown document.
+        Write the meeting notes for this transcript.
 
-        Each transcript line is formatted as:
-        [start-end] Speaker: text
+        Each transcript line is "[start-end] Speaker: text".
 
         Transcript:
         \(plainTranscriptText(from: segments))

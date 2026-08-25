@@ -33,4 +33,28 @@ nonisolated struct GenerationParams: Sendable {
     /// fall into (same values the HTTP body used to send).
     var frequencyPenalty: Float = 0.6
     var presencePenalty: Float = 0.3
+
+    /// Tuning for the adaptive markdown document (the single-pass summary).
+    ///
+    /// The defaults above were tuned for NDJSON: the 0.6 frequency / 0.3
+    /// presence penalties exist to break the degenerate repetition loops small
+    /// models fall into when emitting line-oriented JSON. On a free markdown
+    /// document those same penalties punish tokens that legitimately repeat —
+    /// every `- [ ] ` checkbox prefix, every recurrence of an entity name
+    /// ("WhatsApp Business") — so a long structured document degrades as the
+    /// penalties accumulate. Here they drop to zero and a mild 1.05 repetition
+    /// penalty carries loop protection alone. Temperature rises 0.3 → 0.4 for
+    /// structural variety (section shapes adapt per meeting) while staying
+    /// grounded, and maxTokens 3072 → 4096 gives dense meetings the room the
+    /// "summaries too concise" complaint said they lacked. The plain
+    /// `GenerationParams()` default stays untouched on purpose — the NDJSON
+    /// map phase and the row caption still depend on it.
+    static let markdownSummary = GenerationParams(
+        temperature: 0.4,
+        topP: 0.95,
+        maxTokens: 4096,
+        repetitionPenalty: 1.05,
+        frequencyPenalty: 0.0,
+        presencePenalty: 0.0
+    )
 }
