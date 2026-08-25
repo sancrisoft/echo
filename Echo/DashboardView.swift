@@ -2559,6 +2559,12 @@ private struct SummaryContentView: View {
         Dictionary(uniqueKeysWithValues: segments.map { ($0.id.uuidString.lowercased(), $0) })
     }
 
+    /// An adaptive markdown summary shows the document alone; the legacy fixed
+    /// blocks only render when the field is empty (pre-markdown summaries).
+    private var hasAdaptiveMarkdown: Bool {
+        !summary.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             copyBar
@@ -2609,28 +2615,38 @@ private struct SummaryContentView: View {
                     }
                 }
 
-                // While streaming, only reveal blocks once they have content so
-                // the layout fills in instead of flashing placeholders.
-                if !isStreaming || !summary.shortSummary.isEmpty {
-                    SummaryTextBlock(
-                        title: "Short summary",
-                        systemImage: "text.line.first.and.arrowtriangle.forward",
-                        text: summary.shortSummary
-                    )
-                }
+                if hasAdaptiveMarkdown {
+                    // The adaptive markdown document replaces the fixed blocks
+                    // wholesale. Plain text is a stopgap — the real renderer is
+                    // a later slice — but streaming already works: the text
+                    // simply grows as snapshots arrive.
+                    Text(summary.markdown)
+                        .font(.body)
+                        .textSelection(.enabled)
+                } else {
+                    // While streaming, only reveal blocks once they have content
+                    // so the layout fills in instead of flashing placeholders.
+                    if !isStreaming || !summary.shortSummary.isEmpty {
+                        SummaryTextBlock(
+                            title: "Short summary",
+                            systemImage: "text.line.first.and.arrowtriangle.forward",
+                            text: summary.shortSummary
+                        )
+                    }
 
-                if !isStreaming || !summary.detailedSummary.isEmpty {
-                    SummaryTextBlock(
-                        title: "Detailed summary",
-                        systemImage: "doc.text",
-                        text: summary.detailedSummary
-                    )
-                }
+                    if !isStreaming || !summary.detailedSummary.isEmpty {
+                        SummaryTextBlock(
+                            title: "Detailed summary",
+                            systemImage: "doc.text",
+                            text: summary.detailedSummary
+                        )
+                    }
 
-                if !isStreaming || !summary.decisions.isEmpty { decisionsSection }
-                if !isStreaming || !summary.actionItems.isEmpty { actionItemsSection }
-                if !isStreaming || !summary.openQuestions.isEmpty { openQuestionsSection }
-                if !isStreaming || !summary.risks.isEmpty { risksSection }
+                    if !isStreaming || !summary.decisions.isEmpty { decisionsSection }
+                    if !isStreaming || !summary.actionItems.isEmpty { actionItemsSection }
+                    if !isStreaming || !summary.openQuestions.isEmpty { openQuestionsSection }
+                    if !isStreaming || !summary.risks.isEmpty { risksSection }
+                }
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)

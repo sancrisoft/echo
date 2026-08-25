@@ -82,6 +82,7 @@ actor MeetingStore {
         }
         if let summary = record.summary {
             try await writeSummary(summary, to: directory.appending(path: Filename.summary))
+            try writeMarkdownSidecar(for: summary, in: directory)
         }
         // meta.json last: a reader that finds a meta also finds its transcript.
         try writeJSON(meta, to: directory.appending(path: Filename.meta))
@@ -108,6 +109,7 @@ actor MeetingStore {
         let metaURL = directory.appending(path: Filename.meta)
         var meta = try decode(MeetingMeta.self, from: metaURL)
         try await writeSummary(summary, to: directory.appending(path: Filename.summary))
+        try writeMarkdownSidecar(for: summary, in: directory)
         meta.hasSummary = true
         if let description { meta.oneLineDescription = description }
         if let modelName { meta.summaryModelName = modelName }
@@ -718,6 +720,17 @@ actor MeetingStore {
         try data.write(to: url, options: .atomic)
     }
 
+    /// Writes `summary.md` holding exactly the summary's adaptive markdown —
+    /// the human-readable twin of `summary.json`, and never the read path. A
+    /// legacy summary (no markdown) writes nothing; cleanup of a stale sidecar
+    /// is a later slice's job, so this deliberately never deletes.
+    private func writeMarkdownSidecar(for summary: MeetingSummary, in directory: URL) throws {
+        let markdown = summary.markdown
+        guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        try Data(markdown.utf8)
+            .write(to: directory.appending(path: Filename.summaryMarkdown), options: .atomic)
+    }
+
     private func readSummary(from url: URL) async throws -> MeetingSummary {
         let data = try Data(contentsOf: url)
         return try await Self.decodeSummary(data)
@@ -738,9 +751,13 @@ actor MeetingStore {
         return try decoder.decode(MeetingSummary.self, from: data)
     }
 
-    private enum Filename {
+    enum Filename {
         static let meta = "meta.json"
         static let transcript = "transcript.json"
         static let summary = "summary.json"
+        /// The adaptive markdown document, written beside `summary.json` as a
+        /// plain readable artifact (open it in any editor, sync it anywhere).
+        /// Derived, never read back — `summary.json` stays authoritative.
+        static let summaryMarkdown = "summary.md"
     }
 }

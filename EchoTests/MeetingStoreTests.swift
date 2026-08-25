@@ -170,6 +170,58 @@ struct MeetingStoreTests {
         }
     }
 
+    // MARK: - summary.md sidecar (adaptive markdown)
+
+    @Test("attachSummary with markdown also writes summary.md holding the exact document")
+    func attachSummaryWritesMarkdownSidecar() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            let document = "### Action Items\n- [ ] Follow up\n\n### Release Plan\nShip Friday."
+            let summary = MeetingSummary(
+                markdown: document,
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.attachSummary(summary, to: meta.id)
+
+            let sidecar = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            let written = try String(decoding: Data(contentsOf: sidecar), as: UTF8.self)
+            #expect(written == document)
+            // summary.json stays authoritative and round-trips the field too.
+            #expect(try await store.loadRecord(meta.id).summary?.markdown == document)
+        }
+    }
+
+    @Test("attachSummary with empty markdown writes no summary.md")
+    func attachSummaryWithoutMarkdownWritesNoSidecar() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            try await store.attachSummary(makeSummary(), to: meta.id)
+
+            let sidecar = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            #expect(!FileManager.default.fileExists(atPath: sidecar.path))
+        }
+    }
+
+    @Test("save with a markdown-bearing summary writes the sidecar too")
+    func saveWritesMarkdownSidecar() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            let summary = MeetingSummary(
+                markdown: "### Notes\nBody.",
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: summary))
+
+            let sidecar = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            let written = try String(decoding: Data(contentsOf: sidecar), as: UTF8.self)
+            #expect(written == "### Notes\nBody.")
+        }
+    }
+
     // MARK: - Provenance (SP-007, ADR-022)
 
     @Test("a meta written without provenance decodes with nil provenance fields")

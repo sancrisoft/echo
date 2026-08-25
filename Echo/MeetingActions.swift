@@ -96,9 +96,16 @@ enum MeetingActions {
             lines.append("_\(header(for: meta))_")
             lines.append("")
         }
-        // Top-level document, so its sections sit one rung higher than the
-        // export's (where they nest under "## Summary").
-        appendSummary(summary, headingLevel: 2, into: &lines)
+        // An adaptive markdown summary IS the document — the model already
+        // wrote it, so the copy carries it verbatim rather than reassembling
+        // fixed sections around it. Legacy summaries keep the built sections,
+        // top-level, so they sit one rung higher than the export's (where they
+        // nest under "## Summary").
+        if let document = adaptiveDocument(summary) {
+            lines.append(document)
+        } else {
+            appendSummary(summary, headingLevel: 2, into: &lines)
+        }
         // No trailing newline: this goes to the pasteboard, and one pasted into
         // a chat box is an empty line the sender has to delete.
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -122,7 +129,13 @@ enum MeetingActions {
         if let summary = record.summary {
             lines.append("## Summary")
             lines.append("")
-            appendSummary(summary, headingLevel: 3, into: &lines)
+            if let document = adaptiveDocument(summary) {
+                // The model's "###" sections nest naturally under "## Summary".
+                lines.append(document)
+                lines.append("")
+            } else {
+                appendSummary(summary, headingLevel: 3, into: &lines)
+            }
         }
 
         lines.append("## Transcript")
@@ -141,7 +154,9 @@ enum MeetingActions {
 
         if let summary = record.summary {
             lines.append("SUMMARY")
-            lines.append(summaryText(summary))
+            // Deliberately the raw markdown: a plain-text "rendering" would
+            // just strip structure a text file shows fine anyway.
+            lines.append(adaptiveDocument(summary) ?? summaryText(summary))
             lines.append("")
         }
 
@@ -153,6 +168,13 @@ enum MeetingActions {
     }
 
     // MARK: - Private helpers
+
+    /// The summary's adaptive markdown document, or nil when this is a legacy
+    /// fixed-schema summary — the one branch every share path takes.
+    private static func adaptiveDocument(_ summary: MeetingSummary) -> String? {
+        let document = summary.markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        return document.isEmpty ? nil : document
+    }
 
     private static func summaryText(_ summary: MeetingSummary) -> String {
         var lines: [String] = []

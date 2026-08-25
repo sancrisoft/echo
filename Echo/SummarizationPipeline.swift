@@ -4,23 +4,27 @@
 //
 //  Generates a grounded meeting summary from final transcript segments only.
 //  The local LLM runs in-process (MLX, behind the TextGenerating seam) and
-//  streams NDJSON (one JSON object per line) so the UI can fill in
-//  progressively. Every completed line passes NDJSONLineValidator before
-//  touching the accumulator — the structured-output guarantee the retired
-//  GBNF grammar used to provide at the sampler.
+//  streams so the UI can fill in progressively.
 //
-//  Two routes (SPEC-05):
-//  - Short transcripts take the original single-pass path unchanged: one
-//    generation streams the whole summary.
-//  - Long transcripts route through map-reduce: each SPEC-02 chunk is mapped to
-//    structured facts (NDJSON, evidence validated against real segment IDs),
-//    the facts merged deterministically in Swift (SummaryMerge), and a final
-//    grounded prose pass writes short/detailed. Memory stays bounded — one
-//    generation is ever in flight and the full transcript is never one prompt.
+//  Two routes:
+//  - Short transcripts take the single-pass path, which now writes an adaptive
+//    Markdown document (Notion-style notes, `MeetingSummary.markdown`): the
+//    model structures the notes freely instead of filling a fixed schema, and
+//    the only post-processing is `sanitizedMarkdown` (trim + unwrap one outer
+//    code fence).
+//  - Long transcripts still route through NDJSON map-reduce (SPEC-05): each
+//    SPEC-02 chunk is mapped to structured facts (validated by
+//    NDJSONLineValidator, evidence checked against real segment IDs), the facts
+//    merged deterministically in Swift (SummaryMerge), and a final grounded
+//    prose pass writes short/detailed. Memory stays bounded — one generation is
+//    ever in flight and the full transcript is never one prompt. Migrating this
+//    route to markdown is a later slice.
 //
-//  Grounding is executable, not just prompted (SPEC-05 §3): on BOTH routes every
-//  evidence ID is filtered against the real segment IDs in scope, and an item
-//  left with no valid evidence is dropped and logged.
+//  Grounding on the long route stays executable, not just prompted (SPEC-05
+//  §3): every evidence ID is filtered against the real segment IDs in scope,
+//  and an item left with no valid evidence is dropped and logged. The markdown
+//  route is grounded by prompt (and by the product rule that summaries never
+//  invent owners, dates, decisions, or risks).
 //
 
 import Foundation
@@ -97,20 +101,16 @@ actor SummarizationPipeline {
         }
     }
 
-    // MARK: - Single-pass route (parity with pre-SPEC-05 behavior)
+    // MARK: - Single-pass route (adaptive markdown)
 
     private func runSinglePass(
         from segments: [TranscriptSegment],
         using engine: any TextGenerating,
         into continuation: AsyncThrowingStream<MeetingSummary, Error>.Continuation
     ) async throws {
-        let validIDs = Self.evidenceIDs(of: segments)
-        _ = try await generateProse(
-            system: Self.systemPrompt,
-            user: Self.userPrompt(for: segments),
-            allowed: [.prose, .facts],
-            validEvidenceIDs: validIDs,
-            seed: nil,
+        _ = try await generateMarkdown(
+            system: Self.markdownSystemPrompt,
+            user: Self.markdownUserPrompt(for: segments),
             engine: engine,
             onSnapshot: { continuation.yield($0) }
         )
@@ -222,9 +222,18 @@ actor SummarizationPipeline {
     /// row, not a summary section. Best-effort: any failure (or an empty reply)
     /// returns `nil` and the row simply shows no caption.
     func oneLineDescription(for summary: MeetingSummary, using engine: any TextGenerating) async -> String? {
-        let source = summary.shortSummary.isEmpty
-            ? String(summary.detailedSummary.prefix(1200))
-            : summary.shortSummary
+        // Source preference mirrors the summary's own: the short prose when the
+        // legacy route wrote one, else the adaptive markdown document (capped —
+        // a headline needs the opening, not the whole notes), else the detailed
+        // prose. A full caption rework for markdown is a later slice.
+        let source: String
+        if !summary.shortSummary.isEmpty {
+            source = summary.shortSummary
+        } else if !summary.markdown.isEmpty {
+            source = String(summary.markdown.prefix(1200))
+        } else {
+            source = String(summary.detailedSummary.prefix(1200))
+        }
         guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
         var params = GenerationParams()
@@ -289,7 +298,53 @@ actor SummarizationPipeline {
 
     // MARK: - Generation primitives
 
-    /// One prose-bearing generation with the single-pass retry contract: up to
+    /// One markdown-document generation with the same retry contract as
+    /// `generateProse`: up to two attempts; success is a sanitized document
+    /// that is non-empty after trimming. The accumulated raw text is
+    /// re-sanitized on every delta and a snapshot streams whenever the visible
+    /// document changed — so the UI fills in as the model writes, and a
+    /// wrapping code fence disappears the moment its closing line lands.
+    /// Throws `emptyModelResponse` if both attempts stay empty.
+    private func generateMarkdown(
+        system: String,
+        user: String,
+        engine: any TextGenerating,
+        onSnapshot: @escaping (MeetingSummary) -> Void
+    ) async throws -> MeetingSummary {
+        for attempt in 0..<2 {
+            var accumulated = ""
+            var visible = ""
+            do {
+                for try await delta in engine.stream(system: system, user: user, params: GenerationParams()) {
+                    try Task.checkCancellation()
+                    guard !delta.isEmpty else { continue }
+                    accumulated += delta
+                    let sanitized = Self.sanitizedMarkdown(accumulated)
+                    if sanitized != visible {
+                        visible = sanitized
+                        onSnapshot(Self.markdownSnapshot(sanitized))
+                    }
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw SummarizationError.modelUnavailable(error.localizedDescription)
+            }
+
+            let document = Self.sanitizedMarkdown(accumulated)
+            if !document.isEmpty {
+                let snapshot = Self.markdownSnapshot(document)
+                onSnapshot(snapshot)
+                return snapshot
+            }
+            if attempt == 0 {
+                Self.log.warning("Markdown generation produced an empty document; retrying once")
+            }
+        }
+        throw SummarizationError.emptyModelResponse
+    }
+
+    /// One prose-bearing NDJSON generation (the map-reduce prose pass): up to
     /// two attempts (fresh accumulator, re-seeded each time); success is a
     /// short/detailed line, or — only after the retry — any grounded content
     /// (facts). Snapshots stream via `onSnapshot` throughout. Throws
@@ -369,7 +424,32 @@ actor SummarizationPipeline {
         if !tail.isEmpty { _ = accumulator.applyValidatedLine(tail) }
     }
 
-    // MARK: - Snapshot helper
+    // MARK: - Markdown sanitation (single-pass route)
+
+    /// The single cleanup the markdown route applies to raw model output: trim
+    /// surrounding whitespace, and unwrap ONE outer code fence — a small model's
+    /// favorite way to disobey "no code fences" is to wrap the whole document in
+    /// ``` or ```markdown. Only a true wrapper is unwrapped (first line opens a
+    /// fence AND the last line closes one); a document that merely starts with a
+    /// code block keeps its fences. Anything subtler — stray HTML, broken
+    /// tables — is the renderer's job (later slice), not sanitation's.
+    /// Internal (not private) so the table tests pin the behavior.
+    static func sanitizedMarkdown(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.hasPrefix("```") else { return text }
+
+        var lines = text.components(separatedBy: "\n")
+        guard lines.count >= 2,
+              lines.last?.trimmingCharacters(in: .whitespaces) == "```"
+        else { return text }
+
+        lines.removeFirst()
+        lines.removeLast()
+        text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text
+    }
+
+    // MARK: - Snapshot helpers
 
     private static func snapshot(facts: MergedFacts, short: String, detailed: String) -> MeetingSummary {
         MeetingSummary(
@@ -382,48 +462,59 @@ actor SummarizationPipeline {
         )
     }
 
-    // MARK: - Prompts: single-pass (unchanged for parity)
+    /// A markdown-route snapshot: the document is the whole summary, every
+    /// legacy field stays empty (consumers branch on `markdown` being present).
+    private static func markdownSnapshot(_ markdown: String) -> MeetingSummary {
+        MeetingSummary(
+            markdown: markdown,
+            shortSummary: "",
+            detailedSummary: "",
+            decisions: [],
+            actionItems: [],
+            openQuestions: [],
+            risks: []
+        )
+    }
 
-    private static let systemPrompt = """
-    You summarize meeting transcripts for a local-first macOS app.
-    Use only the transcript provided by the user.
-    Do not invent decisions, action item owners, due dates, risks, or blockers.
-    If an owner or due date is unclear, use null.
-    Do not infer calendar dates from relative wording.
-    Keep the summary in the dominant language of the transcript.
+    // MARK: - Prompts: single-pass (adaptive markdown, v1)
 
-    Output format: NDJSON. Emit ONE JSON object per line and nothing else —
-    no prose, no Markdown, no code fences. Each line is one complete JSON object.
+    /// The v1 ruleset — deliberately short. A later slice installs the full
+    /// Notion-style ruleset; what must hold from day one is the grounding
+    /// contract (nothing invented, owners/dates only when stated) and the
+    /// document shape (Action Items first, then topic-specific sections).
+    private static let markdownSystemPrompt = """
+    You are a professional meeting note-taker for a local-first macOS app.
+    Write the notes for the meeting transcript the user provides.
 
-    Allowed line shapes:
-    {"type":"short","text":"one or two sentences"}
-    {"type":"detailed","text":"a thorough paragraph"}
-    {"type":"decision","title":"...","details":"...","evidence":["segment-id"]}
-    {"type":"action","task":"...","owner":"... or null","due":"... or null","evidence":["segment-id"]}
-    {"type":"question","question":"...","context":"... or null","evidence":["segment-id"]}
-    {"type":"risk","risk":"...","details":"... or null","evidence":["segment-id"]}
+    Output: ONE Markdown document and nothing else — no code fences around it,
+    no preamble, no closing remarks.
+
+    Structure:
+    - Begin with a "### Action Items" section: a "- [ ] " checkbox list of the
+      real commitments people made in the meeting. If no commitments were made,
+      omit this section entirely. Never invent owners or due dates — name them
+      only when the transcript states them.
+    - Then write "###" sections whose titles name the specific topics that were
+      actually discussed. Never use generic titles like "Discussion", "Summary",
+      or "Notes".
 
     Rules:
-    - Emit exactly one "short" line, then one "detailed" line, first.
-    - Then emit zero or more decision, action, question, and risk lines.
-    - Every decision, action, question, and risk line must include at least one
-      evidence segment-id copied verbatim from the transcript.
-    - If a claim cannot be supported by a transcript segment, omit it.
-    - List each distinct decision, action item, question, and risk only once.
-      Never repeat or rephrase the same point across multiple lines.
-    - "You" means the current user; "Team" means teammates from system audio.
+    - Ground every statement strictly in the transcript; if the transcript does
+      not support a claim, leave it out.
+    - Write in the dominant language of the transcript.
+    - "You" is the current user speaking on the microphone; "Team" are the
+      teammates heard through system audio.
     """
 
-    private static func userPrompt(for segments: [TranscriptSegment]) -> String {
+    private static func markdownUserPrompt(for segments: [TranscriptSegment]) -> String {
         """
-        Summarize this final meeting transcript as NDJSON.
+        Write the meeting notes for this transcript as one Markdown document.
 
         Each transcript line is formatted as:
-        [start-end][speaker][channel][id=SEGMENT_ID]: text
-        Copy the SEGMENT_ID values into "evidence".
+        [start-end] Speaker: text
 
         Transcript:
-        \(transcriptText(from: segments))
+        \(plainTranscriptText(from: segments))
         """
     }
 
@@ -564,6 +655,21 @@ actor SummarizationPipeline {
                 let start = timestamp(utterance.start)
                 let end = timestamp(utterance.end)
                 return "[\(start)-\(end)][\(speakerName(utterance.speaker))][\(utterance.channel.rawValue)][id=\(utterance.id.uuidString)]: \(utterance.text)"
+            }
+            .joined(separator: "\n")
+    }
+
+    /// The markdown route's rendering: the same derived utterances as
+    /// `transcriptText` (so the two routes can never disagree about merging or
+    /// backchannel filtering), minus the channel tag and segment IDs — the
+    /// markdown prompt has no evidence protocol, and IDs only invite the model
+    /// to quote them into the notes. Internal so the format is table-tested.
+    static func plainTranscriptText(from segments: [TranscriptSegment]) -> String {
+        TranscriptUtterance.derive(from: segments)
+            .map { utterance in
+                let start = timestamp(utterance.start)
+                let end = timestamp(utterance.end)
+                return "[\(start)-\(end)] \(speakerName(utterance.speaker)): \(utterance.text)"
             }
             .joined(separator: "\n")
     }

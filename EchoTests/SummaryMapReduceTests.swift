@@ -211,11 +211,11 @@ struct ChunkMapResultCodableTests {
 @Suite("Map-reduce routing and streaming")
 struct MapReduceRoutingTests {
 
-    @Test("a short transcript takes the single-pass path (one generation)")
+    @Test("a short transcript takes the single-pass path (one markdown generation)")
     func shortRoutesSinglePass() async throws {
         let id = UUID()
         let engine = ScriptedEngine(scripts: [[
-            "{\"type\":\"short\",\"text\":\"S\"}\n{\"type\":\"detailed\",\"text\":\"D\"}\n"
+            "### Quick Sync\nA brief chat, nothing decided.\n"
         ]])
         let pipeline = SummarizationPipeline()
 
@@ -226,8 +226,8 @@ struct MapReduceRoutingTests {
         }
 
         #expect(engine.calls == 1)                    // single-pass: one call only
-        #expect(final?.shortSummary == "S")
-        #expect(final?.detailedSummary == "D")
+        #expect(final?.markdown == "### Quick Sync\nA brief chat, nothing decided.")
+        #expect(final?.shortSummary.isEmpty == true)  // markdown route fills no legacy fields
     }
 
     @Test("a long transcript maps each chunk then reduces prose")
