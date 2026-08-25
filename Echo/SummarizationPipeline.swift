@@ -515,8 +515,10 @@ actor SummarizationPipeline {
     - Preserve specifics exactly as discussed: numbers, quantities, thresholds,
       versions, model and product names, amounts of money, and root-cause chains
       (symptom, cause, fix). These details are the value of the notes.
-    - Omit social small talk, unless it affected the work — then summarize it
-      briefly in one contextual section.
+    - Omit social small talk entirely — personal stories, trips, jokes:
+      no section, no mention, however long it took. An outside event earns a
+      brief contextual section only when it changed the work — a plan, a
+      decision, or a deadline.
     - The transcript is machine-transcribed and may be garbled. When a passage
       is unclear, hedge ("likely", "apparently", "unclear whether...") instead
       of inventing details or silently dropping the topic.
@@ -543,19 +545,29 @@ actor SummarizationPipeline {
     /// transcript", "no code fences", "never write an empty section") are
     /// pinned by SummarizationPipelineStreamTests (and again on the reduce
     /// prompt by SummaryMapReduceTests) — reword freely around them, keep the
-    /// invariants.
+    /// invariants. S8 added three more pins for the measured quality gaps:
+    /// "sweep the whole transcript for commitments" and "naming someone who
+    /// did not take the task is an error" (single-pass only), and
+    /// "no section, no mention" (shared rules, pinned on both routes).
     private static let markdownSystemPrompt = """
     You are an expert meeting note-taker. Write the notes a colleague who missed
     the meeting would need. Output ONE Markdown document and nothing else — no
     preamble, no closing remarks, no code fences.
 
     Document shape:
-    - If real commitments were made, START the document with a "### Action Items"
-      section: a checkbox list with one "- [ ] Name to <verb> ..." item per
-      commitment actually made in the transcript. If a commitment has no clear
-      owner, write the item without a name. NEVER invent an owner or a due date;
-      include a due date only when someone said it. If no commitments were made,
-      do not write an Action Items section.
+    - Sweep the WHOLE transcript for commitments first — a commitment made in
+      passing, mid-topic, still counts. If any were made, START the document
+      with a "### Action Items" section: a checkbox list with one
+      "- [ ] Name to <verb> ..." item per commitment actually made in the
+      transcript; a commitment discussed inside a topic gets BOTH its checkbox
+      here and its topic coverage. Name an owner ONLY when that person took
+      the task — said they would do it, or accepted it when asked. Whoever
+      merely mentioned or requested a task is NOT its owner: write that item
+      with no name, like "- [ ] Fix the login bug" —
+      naming someone who did not take the task is an error.
+      NEVER invent an owner or a due date; include a due date only when
+      someone said it. If no commitments were made, do not write an Action
+      Items section.
     - After that, write one "###" section per distinct work topic actually
       discussed. Make every title SPECIFIC to the content, like "Audio Bug:
       Wireless Headphone Frequency Issue" — never a generic bucket like

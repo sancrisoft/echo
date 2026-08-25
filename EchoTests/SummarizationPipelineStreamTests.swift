@@ -354,6 +354,12 @@ struct SummarizationPipelineStreamTests {
         #expect(system.contains("dominant language of the transcript"))
         #expect(system.localizedCaseInsensitiveContains("no code fences"))
         #expect(system.localizedCaseInsensitiveContains("never write an empty section"))
+        // S8 measured-gap rules: the commitment sweep (mid-topic commitments
+        // still get a checkbox), the mention-is-not-ownership test (the
+        // owner-invention trap), and the hard small-talk omission.
+        #expect(system.localizedCaseInsensitiveContains("sweep the whole transcript for commitments"))
+        #expect(system.localizedCaseInsensitiveContains("naming someone who did not take the task is an error"))
+        #expect(system.localizedCaseInsensitiveContains("no section, no mention"))
     }
 
     @Test("a document streamed inside a code fence is unwrapped in the final snapshot")

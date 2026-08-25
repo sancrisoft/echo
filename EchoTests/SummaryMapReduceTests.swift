@@ -551,5 +551,8 @@ struct MapChunkTests {
         // The no-new-items grounding rule, re-anchored to the material.
         #expect(system.localizedCaseInsensitiveContains(
             "do not introduce any decision, action, owner, due date, question, or risk"))
+        // S8: the hard small-talk omission rides the shared block into the
+        // reduce prompt too.
+        #expect(system.localizedCaseInsensitiveContains("no section, no mention"))
     }
 }
