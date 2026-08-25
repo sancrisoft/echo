@@ -222,6 +222,78 @@ struct MeetingStoreTests {
         }
     }
 
+    @Test("overwriting a markdown summary with a legacy one removes the stale sidecar")
+    func overwritingWithLegacySummaryRemovesStaleSidecar() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let adaptive = MeetingSummary(
+                markdown: "### Notes\nOld document.",
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.attachSummary(adaptive, to: meta.id)
+            let sidecar = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            #expect(FileManager.default.fileExists(atPath: sidecar.path))
+
+            // A regenerated summary can still come off the legacy route (long
+            // meetings map-reduce without markdown today). The sidecar must
+            // mirror summary.json — a leftover summary.md would show the OLD
+            // notes beside the new summary.
+            try await store.attachSummary(makeSummary(), to: meta.id)
+
+            #expect(!FileManager.default.fileExists(atPath: sidecar.path))
+            #expect(try await store.loadRecord(meta.id).summary == makeSummary())
+        }
+    }
+
+    @Test("overwriting a markdown summary with a newer document updates the sidecar")
+    func overwritingWithNewerMarkdownUpdatesSidecar() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let first = MeetingSummary(
+                markdown: "### Notes\nFirst take.",
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.attachSummary(first, to: meta.id)
+
+            var second = first
+            second.markdown = "### Notes\nSecond take."
+            try await store.attachSummary(second, to: meta.id)
+
+            let sidecar = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            #expect(try String(decoding: Data(contentsOf: sidecar), as: UTF8.self) == "### Notes\nSecond take.")
+        }
+    }
+
+    @Test("removeSummaryArtifacts also deletes summary.md — and still clears the meta bits")
+    func removeSummaryArtifactsDeletesMarkdownSidecar() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let summary = MeetingSummary(
+                markdown: "### Notes\nBody.",
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.attachSummary(summary, description: "caption", modelName: "model", to: meta.id)
+            let sidecar = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            #expect(FileManager.default.fileExists(atPath: sidecar.path))
+
+            // Re-transcribe's cleanup: the new transcript invalidates the
+            // summary, so BOTH its representations must go — a surviving
+            // summary.md would misdescribe a meeting that has no summary.
+            try await store.removeSummaryArtifacts(for: meta.id)
+
+            #expect(!FileManager.default.fileExists(atPath: sidecar.path))
+            let directory = store.directory(for: meta.id)
+            #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "summary.json").path))
+            let reloaded = try #require(await store.listMetas().first { $0.id == meta.id })
+            #expect(!reloaded.hasSummary)
+            #expect(reloaded.oneLineDescription == nil)
+            #expect(reloaded.summaryModelName == nil)
+        }
+    }
+
     // MARK: - Provenance (SP-007, ADR-022)
 
     @Test("a meta written without provenance decodes with nil provenance fields")

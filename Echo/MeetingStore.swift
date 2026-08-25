@@ -581,18 +581,19 @@ actor MeetingStore {
         }
     }
 
-    /// Deletes the meeting's derived summary artifacts — `summary.json` and
-    /// any stale `rag_index.json` sidecar — and clears the meta bits that
-    /// describe them (named targets only, mirroring the store's delete
-    /// discipline). Re-transcribe calls this before arming its pass: the new
-    /// transcript invalidates both, and the cleared `hasSummary` is what
-    /// makes the post-pass backfill regenerate the summary. Throws if the
-    /// meeting folder / meta is missing.
+    /// Deletes the meeting's derived summary artifacts — `summary.json`, its
+    /// `summary.md` twin, and any stale `rag_index.json` sidecar — and clears
+    /// the meta bits that describe them (named targets only, mirroring the
+    /// store's delete discipline). Re-transcribe calls this before arming its
+    /// pass: the new transcript invalidates all of them, and the cleared
+    /// `hasSummary` is what makes the post-pass backfill regenerate the
+    /// summary. Throws if the meeting folder / meta is missing.
     func removeSummaryArtifacts(for id: UUID) throws {
         let directory = directory(for: id)
         let metaURL = directory.appending(path: Filename.meta)
         var meta = try decode(MeetingMeta.self, from: metaURL)
         try? FileManager.default.removeItem(at: directory.appending(path: Filename.summary))
+        try? FileManager.default.removeItem(at: directory.appending(path: Filename.summaryMarkdown))
         try? FileManager.default.removeItem(at: directory.appending(path: "rag_index.json"))
         meta.hasSummary = false
         meta.oneLineDescription = nil
@@ -720,15 +721,21 @@ actor MeetingStore {
         try data.write(to: url, options: .atomic)
     }
 
-    /// Writes `summary.md` holding exactly the summary's adaptive markdown —
-    /// the human-readable twin of `summary.json`, and never the read path. A
-    /// legacy summary (no markdown) writes nothing; cleanup of a stale sidecar
-    /// is a later slice's job, so this deliberately never deletes.
+    /// Mirrors `summary.md` to exactly the summary's adaptive markdown — the
+    /// human-readable twin of `summary.json`, and never the read path. Write
+    /// when non-empty, REMOVE when empty: a summary regenerated over an old
+    /// markdown one can still come off the legacy route (no markdown), and a
+    /// sidecar that survived it would show stale notes beside the new
+    /// `summary.json`. Removal is tolerant (`try?`), matching the store's
+    /// artifact-cleanup discipline — usually there is simply nothing to remove.
     private func writeMarkdownSidecar(for summary: MeetingSummary, in directory: URL) throws {
         let markdown = summary.markdown
-        guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        try Data(markdown.utf8)
-            .write(to: directory.appending(path: Filename.summaryMarkdown), options: .atomic)
+        let url = directory.appending(path: Filename.summaryMarkdown)
+        guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        try Data(markdown.utf8).write(to: url, options: .atomic)
     }
 
     private func readSummary(from url: URL) async throws -> MeetingSummary {

@@ -49,6 +49,58 @@ struct MeetingSummary: Codable, Hashable, Sendable {
         self.risks = risks
     }
 
+    /// The one string the summary UI renders for both eras: a markdown-bearing
+    /// summary IS its document (verbatim — the renderer owns presentation), and
+    /// a legacy fixed-schema summary resolves to a faithful markdown
+    /// serialization of the fields the fixed UI used to show. `nonisolated` so
+    /// the renderer and formatting code can read it from any context.
+    nonisolated var resolvedMarkdown: String {
+        if !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return markdown
+        }
+        return legacyMarkdown
+    }
+
+    /// The fixed fields as one markdown document — what the pre-adaptive UI
+    /// showed, serialized: the summary paragraphs, then a `###` section per
+    /// populated list. Empty sections are omitted (the adaptive principle:
+    /// never render a bare heading), and unknown owners/dates simply don't
+    /// appear (AGENTS.md — never invented). An entirely empty summary is "".
+    private nonisolated var legacyMarkdown: String {
+        var lines: [String] = []
+        if !shortSummary.isEmpty { lines.append(shortSummary); lines.append("") }
+        if !detailedSummary.isEmpty { lines.append(detailedSummary); lines.append("") }
+        appendSection("Decisions", decisions.map {
+            Self.dashed("**\($0.title)**", $0.details)
+        }, into: &lines)
+        appendSection("Action Items", actionItems.map { item in
+            var parts = [item.task]
+            if let owner = item.owner, !owner.isEmpty { parts.append("Owner: \(owner)") }
+            if let due = item.dueDate, !due.isEmpty { parts.append("Due: \(due)") }
+            return parts.joined(separator: " · ")
+        }, into: &lines)
+        appendSection("Open Questions", openQuestions.map {
+            Self.dashed($0.question, $0.context)
+        }, into: &lines)
+        appendSection("Risks or Blockers", risks.map {
+            Self.dashed($0.risk, $0.details)
+        }, into: &lines)
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private nonisolated func appendSection(_ title: String, _ items: [String], into lines: inout [String]) {
+        guard !items.isEmpty else { return }
+        lines.append("### \(title)")
+        lines.append("")
+        for item in items { lines.append("- \(item)") }
+        lines.append("")
+    }
+
+    private nonisolated static func dashed(_ lead: String, _ detail: String?) -> String {
+        if let detail, !detail.isEmpty { return "\(lead) — \(detail)" }
+        return lead
+    }
+
     // Hand-written Codable (ADR-023 pattern): the schema evolves additively, so
     // a `summary.json` written before `markdown` existed must keep decoding —
     // `decodeIfPresent` fills it with "". Encode stays symmetric (the key is
