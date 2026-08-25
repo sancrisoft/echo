@@ -2078,7 +2078,6 @@ private struct LiveMeetingDetail: View {
         case .streaming(let meetingSummary):
             SummaryContentView(
                 summary: meetingSummary,
-                segments: controller.state.segments,
                 meta: activeMeta,
                 isStreaming: true
             )
@@ -2086,7 +2085,6 @@ private struct LiveMeetingDetail: View {
         case .ready(let meetingSummary):
             SummaryContentView(
                 summary: meetingSummary,
-                segments: controller.state.segments,
                 meta: activeMeta
             )
 
@@ -2364,7 +2362,7 @@ private struct PastMeetingDetail: View {
     @ViewBuilder
     private func summary(for record: MeetingRecord) -> some View {
         if let summary = record.summary {
-            SummaryContentView(summary: summary, segments: record.segments, meta: record.meta)
+            SummaryContentView(summary: summary, meta: record.meta)
         } else if controller.backfillingMeetingID == id {
             SummaryGenerationProgressView(subject: "this meeting's transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2546,7 +2544,6 @@ private struct LiveTranscriptFooter: View {
 
 private struct SummaryContentView: View {
     let summary: MeetingSummary
-    let segments: [TranscriptSegment]
     /// Titles and dates the copied Markdown header — `nil` for a session that
     /// hasn't persisted yet, which copies the summary body alone.
     var meta: MeetingMeta?
@@ -2554,16 +2551,6 @@ private struct SummaryContentView: View {
 
     /// Two-second "Copied" confirmation on the share button.
     @State private var copied = false
-
-    private var segmentByID: [String: TranscriptSegment] {
-        Dictionary(uniqueKeysWithValues: segments.map { ($0.id.uuidString.lowercased(), $0) })
-    }
-
-    /// An adaptive markdown summary shows the document alone; the legacy fixed
-    /// blocks only render when the field is empty (pre-markdown summaries).
-    private var hasAdaptiveMarkdown: Bool {
-        !summary.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -2615,202 +2602,17 @@ private struct SummaryContentView: View {
                     }
                 }
 
-                if hasAdaptiveMarkdown {
-                    // The adaptive markdown document replaces the fixed blocks
-                    // wholesale. Plain text is a stopgap — the real renderer is
-                    // a later slice — but streaming already works: the text
-                    // simply grows as snapshots arrive.
-                    Text(summary.markdown)
-                        .font(.body)
-                        .textSelection(.enabled)
-                } else {
-                    // While streaming, only reveal blocks once they have content
-                    // so the layout fills in instead of flashing placeholders.
-                    if !isStreaming || !summary.shortSummary.isEmpty {
-                        SummaryTextBlock(
-                            title: "Short summary",
-                            systemImage: "text.line.first.and.arrowtriangle.forward",
-                            text: summary.shortSummary
-                        )
-                    }
-
-                    if !isStreaming || !summary.detailedSummary.isEmpty {
-                        SummaryTextBlock(
-                            title: "Detailed summary",
-                            systemImage: "doc.text",
-                            text: summary.detailedSummary
-                        )
-                    }
-
-                    if !isStreaming || !summary.decisions.isEmpty { decisionsSection }
-                    if !isStreaming || !summary.actionItems.isEmpty { actionItemsSection }
-                    if !isStreaming || !summary.openQuestions.isEmpty { openQuestionsSection }
-                    if !isStreaming || !summary.risks.isEmpty { risksSection }
-                }
+                // One render path for both eras: `resolvedMarkdown` is the
+                // model's document verbatim, or the legacy fixed fields
+                // serialized to the same grammar. While streaming, the
+                // document simply grows — MarkdownView re-parses per tick
+                // (microseconds by the parser's contract), so blocks take
+                // their real shape the moment their markdown lands.
+                MarkdownView(markdown: summary.resolvedMarkdown)
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxHeight: .infinity)
-    }
-
-    private var decisionsSection: some View {
-        SummarySection(title: "Decisions", systemImage: "checkmark.seal") {
-            if summary.decisions.isEmpty {
-                EmptySummaryRow(text: "No decisions captured.")
-            } else {
-                ForEach(summary.decisions.indices, id: \.self) { index in
-                    let decision = summary.decisions[index]
-                    SummaryItemRow(
-                        title: decision.title,
-                        detail: decision.details,
-                        metadata: evidenceText(decision.evidenceSegmentIDs)
-                    )
-                }
-            }
-        }
-    }
-
-    private var actionItemsSection: some View {
-        SummarySection(title: "Action items", systemImage: "checklist") {
-            if summary.actionItems.isEmpty {
-                EmptySummaryRow(text: "No action items captured.")
-            } else {
-                ForEach(summary.actionItems.indices, id: \.self) { index in
-                    let item = summary.actionItems[index]
-                    SummaryItemRow(
-                        title: item.task,
-                        detail: actionItemDetail(item),
-                        metadata: evidenceText(item.evidenceSegmentIDs)
-                    )
-                }
-            }
-        }
-    }
-
-    private var openQuestionsSection: some View {
-        SummarySection(title: "Open questions", systemImage: "questionmark.circle") {
-            if summary.openQuestions.isEmpty {
-                EmptySummaryRow(text: "No open questions captured.")
-            } else {
-                ForEach(summary.openQuestions.indices, id: \.self) { index in
-                    let question = summary.openQuestions[index]
-                    SummaryItemRow(
-                        title: question.question,
-                        detail: question.context,
-                        metadata: evidenceText(question.evidenceSegmentIDs)
-                    )
-                }
-            }
-        }
-    }
-
-    private var risksSection: some View {
-        SummarySection(title: "Risks or blockers", systemImage: "exclamationmark.triangle") {
-            if summary.risks.isEmpty {
-                EmptySummaryRow(text: "No risks or blockers captured.")
-            } else {
-                ForEach(summary.risks.indices, id: \.self) { index in
-                    let risk = summary.risks[index]
-                    SummaryItemRow(
-                        title: risk.risk,
-                        detail: risk.details,
-                        metadata: evidenceText(risk.evidenceSegmentIDs)
-                    )
-                }
-            }
-        }
-    }
-
-    private func actionItemDetail(_ item: SummaryActionItem) -> String? {
-        var parts: [String] = []
-        if let owner = item.owner, !owner.isEmpty {
-            parts.append("Owner: \(owner)")
-        }
-        if let dueDate = item.dueDate, !dueDate.isEmpty {
-            parts.append("Due: \(dueDate)")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    private func evidenceText(_ ids: [String]) -> String? {
-        let times = ids
-            .compactMap { segmentByID[$0.lowercased()]?.start }
-            .map(Self.timestamp)
-        guard !times.isEmpty else { return nil }
-        return "Evidence: " + times.joined(separator: ", ")
-    }
-
-    nonisolated private static func timestamp(_ value: TimeInterval) -> String {
-        let total = Int(value)
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-}
-
-private struct SummaryTextBlock: View {
-    let title: String
-    let systemImage: String
-    let text: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-            Text(text.isEmpty ? "Not available." : text)
-                .font(.body)
-                .textSelection(.enabled)
-        }
-    }
-}
-
-private struct SummarySection<Content: View>: View {
-    let title: String
-    let systemImage: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-            VStack(alignment: .leading, spacing: 10) {
-                content
-            }
-        }
-    }
-}
-
-private struct SummaryItemRow: View {
-    let title: String
-    let detail: String?
-    let metadata: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.body.weight(.medium))
-                .textSelection(.enabled)
-            if let detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            if let metadata {
-                Text(metadata)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.leading, 4)
-    }
-}
-
-private struct EmptySummaryRow: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.body)
-            .foregroundStyle(.secondary)
     }
 }
