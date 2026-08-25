@@ -523,6 +523,15 @@ struct MapChunkTests {
         #expect(!user.contains("Decisions:"))
         #expect(!user.contains("Risks:"))
         #expect(!user.contains("(none)"))
+
+        // S9 recency reinforcement: the material CLOSES with the work-notes
+        // reminder (chunk notes are the reduce's small-talk leak channel),
+        // which carries both probabilistic traps — small talk and ownership.
+        let reminder = try #require(user.range(of: "Reminder: these are WORK notes."))
+        #expect(second.lowerBound < reminder.lowerBound)
+        #expect(user.localizedCaseInsensitiveContains("leave out all social and personal conversation"))
+        #expect(user.localizedCaseInsensitiveContains("no section, no mention"))
+        #expect(user.hasSuffix("checkbox with NO name."))
     }
 
     /// The reduce writes the SAME kind of adaptive document as the single-pass

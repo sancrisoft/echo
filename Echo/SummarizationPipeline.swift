@@ -580,6 +580,22 @@ actor SummarizationPipeline {
     \(adaptiveSharedRules)
     """
 
+    /// S9 recency reinforcement: one closing reminder appended AFTER the
+    /// transcript (single-pass) and AFTER the material (reduce) — the very
+    /// end of the context, where a small model weighs instructions most. The
+    /// same omission rule sitting only in the far-away system prompt measured
+    /// 6/6 small-talk leaks (S8). The recency slot is zero-sum: the small-talk
+    /// line alone displaced the ownership rule (owner trap 4/4 -> 0/2
+    /// measured), so the reminder carries BOTH probabilistic traps. One
+    /// shared constant so the two routes' reminders can never drift apart.
+    /// Pinned (with the closing position) by SummarizationPipelineStreamTests
+    /// and SummaryMapReduceTests.
+    private static let workNotesReminder =
+        "Reminder: these are WORK notes. Leave out all social and personal "
+        + "conversation (stories, trips, history, jokes) — no section, no mention. "
+        + "Name an owner only on a task someone explicitly took; "
+        + "a task nobody took gets its checkbox with NO name."
+
     private static func markdownUserPrompt(for segments: [TranscriptSegment]) -> String {
         // Deliberately thin: the ruleset lives in the system prompt, and the
         // transcript line format explains itself — one legend line is enough.
@@ -590,6 +606,8 @@ actor SummarizationPipeline {
 
         Transcript:
         \(plainTranscriptText(from: segments))
+
+        \(workNotesReminder)
         """
     }
 
@@ -746,6 +764,12 @@ actor SummarizationPipeline {
             lines.append("Risks:")
             lines.append(contentsOf: facts.risks.map { "- \($0.risk)" })
         }
+
+        // S9: the reduce's leak channel is chunk notes carrying social
+        // content — close the material with the same reminder the
+        // single-pass user prompt ends on.
+        lines.append("")
+        lines.append(workNotesReminder)
 
         return lines.joined(separator: "\n")
     }

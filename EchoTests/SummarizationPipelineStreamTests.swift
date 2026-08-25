@@ -362,6 +362,29 @@ struct SummarizationPipelineStreamTests {
         #expect(system.localizedCaseInsensitiveContains("no section, no mention"))
     }
 
+    /// S9 recency reinforcement: the small-talk omission rule in the far-away
+    /// system prompt alone measured 6/6 leaks, so the USER prompt must CLOSE
+    /// with the work-notes reminder — after the transcript, at the end of the
+    /// context, where a small model weighs it most.
+    @Test("the user prompt closes with the work-notes reminder after the transcript")
+    func userPromptClosesWithWorkNotesReminder() async throws {
+        let engine = ScriptedEngine(scripts: [["### Notes\nBody."]])
+        let pipeline = SummarizationPipeline()
+
+        for try await _ in await pipeline.generate(from: [segment("hi")], using: engine) {}
+
+        let user = try #require(engine.recordedCalls.first).user
+        let transcript = try #require(user.range(of: "Transcript:"))
+        let reminder = try #require(user.range(of: "Reminder: these are WORK notes."))
+        #expect(transcript.upperBound <= reminder.lowerBound)
+        #expect(user.localizedCaseInsensitiveContains("leave out all social and personal conversation"))
+        #expect(user.localizedCaseInsensitiveContains("no section, no mention"))
+        // The reminder carries BOTH probabilistic traps: measured alone, the
+        // small-talk line at the end displaced the ownership rule (owner trap
+        // 4/4 -> 0/2), so the owner recap must close the context with it.
+        #expect(user.hasSuffix("checkbox with NO name."))
+    }
+
     @Test("a document streamed inside a code fence is unwrapped in the final snapshot")
     func fenceUnwrappedAtTheEnd() async throws {
         let chunks = ["```markdown\n### No", "tes\nBody.", "\n```"]
