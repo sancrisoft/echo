@@ -16,12 +16,21 @@ import Testing
 // MARK: - Fakes
 
 /// Scripted engine: each `stream` call pops the next script (an array of raw
-/// deltas) and replays it. Call order matches the pipeline's phase order — one
-/// map per chunk in chunk order, then one prose reduce.
+/// deltas) and replays it, recording what the pipeline asked for (system,
+/// user, params) so tests can assert on the real prompts in flight. Call
+/// order matches the pipeline's phase order — one map per chunk in chunk
+/// order, then one markdown reduce.
 private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
+
+    struct RecordedCall {
+        let system: String
+        let user: String
+        let params: GenerationParams
+    }
+
     private let lock = NSLock()
     private var scripts: [[String]]
-    private var count = 0
+    private var recorded: [RecordedCall] = []
 
     init(scripts: [[String]]) { self.scripts = scripts }
 
@@ -29,7 +38,7 @@ private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
         -> AsyncThrowingStream<String, Error>
     {
         lock.lock()
-        count += 1
+        recorded.append(RecordedCall(system: system, user: user, params: params))
         let chunks = scripts.isEmpty ? [] : scripts.removeFirst()
         lock.unlock()
         return AsyncThrowingStream { continuation in
@@ -38,7 +47,13 @@ private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
         }
     }
 
-    var calls: Int { lock.lock(); defer { lock.unlock() }; return count }
+    var calls: Int { lock.lock(); defer { lock.unlock() }; return recorded.count }
+
+    var recordedCalls: [RecordedCall] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
 }
 
 /// First `stream` call replays its script; every later call hangs (yields
@@ -103,10 +118,15 @@ private func decisionLine(_ title: String, evidence: String) -> String {
     "{\"type\":\"decision\",\"title\":\"\(title)\",\"details\":null,\"evidence\":[\"\(evidence)\"]}\n"
 }
 
-private func proseScript() -> [String] {
-    ["{\"type\":\"short\",\"text\":\"Overall summary.\"}\n"
-        + "{\"type\":\"detailed\",\"text\":\"A thorough paragraph.\"}\n"]
-}
+/// The reduce is a markdown generation now (same document contract as the
+/// single-pass route), so its script is one adaptive document, not NDJSON.
+private let reduceDocument = """
+### Action Items
+- [ ] You to ship the release
+
+### Release Review
+The team agreed the build is ready.
+"""
 
 // MARK: - Merge (pure, no engine)
 
@@ -230,19 +250,19 @@ struct MapReduceRoutingTests {
         #expect(final?.shortSummary.isEmpty == true)  // markdown route fills no legacy fields
     }
 
-    @Test("a long transcript maps each chunk then reduces prose")
+    @Test("a long transcript maps each chunk then reduces to one markdown document")
     func longRoutesMapReduce() async throws {
         let segments = longTranscript(segmentCount: 40)
         let chunks = TranscriptChunker.chunks(from: segments)
         #expect(chunks.count >= 2)   // fixture actually splits
 
         // One map script per chunk (each cites a real segment ID from that
-        // chunk, and contributes a distinct decision), then a prose reduce.
+        // chunk, and contributes a distinct decision), then a markdown reduce.
         var scripts: [[String]] = chunks.map { chunk in
             let realID = chunk.segments.first!.id.uuidString
             return [chunkNote("gist \(chunk.index)") + decisionLine("Decision \(chunk.index)", evidence: realID)]
         }
-        scripts.append(proseScript())
+        scripts.append([reduceDocument])
         let engine = ScriptedEngine(scripts: scripts)
         let pipeline = SummarizationPipeline()
 
@@ -253,21 +273,25 @@ struct MapReduceRoutingTests {
             final = snapshot
         }
 
-        // Route was map-reduce: N maps + 1 prose.
+        // Route was map-reduce: N maps + 1 markdown reduce.
         #expect(engine.calls == chunks.count + 1)
         // Progress surfaced per-part text and cleared at the end.
         #expect(phases.contains("Summarizing part 1/\(chunks.count)…"))
         #expect(phases.contains("Summarizing part \(chunks.count)/\(chunks.count)…"))
         #expect(phases.last == "")
 
+        // The final summary carries the document AND the merged facts together:
+        // the store's summary.md mirror reads the markdown, fact consumers
+        // (RAG, evidence UI) read the sections — neither may lose out.
         let summary = try #require(final)
-        #expect(summary.shortSummary == "Overall summary.")
-        #expect(summary.detailedSummary == "A thorough paragraph.")
-        // Each chunk contributed one distinct decision; all survive the merge.
+        #expect(summary.markdown == reduceDocument)
         #expect(summary.decisions.count == chunks.count)
+        // The legacy prose fields stay empty — the document replaced them.
+        #expect(summary.shortSummary.isEmpty)
+        #expect(summary.detailedSummary.isEmpty)
     }
 
-    @Test("streaming snapshots grow monotonically until the final prose")
+    @Test("snapshots carry growing facts during maps, then a growing document")
     func snapshotsGrowMonotonically() async throws {
         let segments = longTranscript(segmentCount: 40)
         let chunks = TranscriptChunker.chunks(from: segments)
@@ -275,7 +299,8 @@ struct MapReduceRoutingTests {
             let realID = chunk.segments.first!.id.uuidString
             return [chunkNote("g\(chunk.index)") + decisionLine("Decision \(chunk.index)", evidence: realID)]
         }
-        scripts.append(proseScript())
+        // The reduce streams in pieces so document growth is observable.
+        scripts.append(["### Notes\nFirst ", "half, ", "then the rest."])
         let engine = ScriptedEngine(scripts: scripts)
         let pipeline = SummarizationPipeline()
 
@@ -284,20 +309,62 @@ struct MapReduceRoutingTests {
             snapshots.append(snapshot)
         }
 
-        #expect(snapshots.count >= chunks.count)
-        // Decisions never shrink across the stream (sections only fill in).
-        var previous = 0
+        #expect(snapshots.count >= chunks.count + 2)
+        // Facts never shrink and the document never shrinks (sections and the
+        // document only fill in).
+        var previousDecisions = 0
+        var previousMarkdown = 0
         for snapshot in snapshots {
-            #expect(snapshot.decisions.count >= previous)
-            previous = snapshot.decisions.count
+            #expect(snapshot.decisions.count >= previousDecisions)
+            #expect(snapshot.markdown.count >= previousMarkdown)
+            previousDecisions = snapshot.decisions.count
+            previousMarkdown = snapshot.markdown.count
         }
-        // Prose only appears in (at least) the last snapshot; the merged facts
-        // are still present alongside it.
-        #expect(snapshots.last?.shortSummary == "Overall summary.")
-        #expect(snapshots.last?.decisions.count == chunks.count)
+        // Mid-map snapshots are facts-only (markdown stays "" — the UI's
+        // resolvedMarkdown shim renders the growing facts, by design)…
+        let firstWithDocument = try #require(
+            snapshots.firstIndex { !$0.markdown.isEmpty })
+        for snapshot in snapshots[..<firstWithDocument] {
+            #expect(snapshot.markdown.isEmpty)
+        }
+        // …and every reduce snapshot carries the full merged facts alongside
+        // the in-progress document.
+        for snapshot in snapshots[firstWithDocument...] {
+            #expect(snapshot.decisions.count == chunks.count)
+        }
+        #expect(snapshots.last?.markdown == "### Notes\nFirst half, then the rest.")
     }
 
-    @Test("cancelling mid-maps stops the pipeline before prose")
+    /// The long route's standing principle: grounded content beats an error.
+    /// If the markdown reduce comes back empty twice, the pipeline must not
+    /// throw away N successful map generations — it degrades to the facts-only
+    /// summary (markdown stays "", the resolvedMarkdown shim renders the facts).
+    @Test("an empty reduce degrades to the facts-only summary instead of erroring")
+    func emptyReduceDegradesToFacts() async throws {
+        let segments = longTranscript(segmentCount: 40)
+        let chunks = TranscriptChunker.chunks(from: segments)
+        var scripts: [[String]] = chunks.map { chunk in
+            let realID = chunk.segments.first!.id.uuidString
+            return [chunkNote("g\(chunk.index)") + decisionLine("Decision \(chunk.index)", evidence: realID)]
+        }
+        scripts.append(["   \n"])    // reduce attempt 1: whitespace only
+        scripts.append(["\t\n\n"])   // reduce attempt 2 (the retry): still nothing
+        let engine = ScriptedEngine(scripts: scripts)
+        let pipeline = SummarizationPipeline()
+
+        var final: MeetingSummary?
+        for try await snapshot in await pipeline.generate(from: segments, using: engine) {
+            final = snapshot
+        }
+
+        // Both reduce attempts ran (maps + 2), and nothing threw.
+        #expect(engine.calls == chunks.count + 2)
+        let summary = try #require(final)
+        #expect(summary.markdown.isEmpty)
+        #expect(summary.decisions.count == chunks.count)   // the grounded facts survive
+    }
+
+    @Test("cancelling mid-maps stops the pipeline before the reduce")
     func cancellationMidMaps() async throws {
         let segments = longTranscript(segmentCount: 40)
         let chunks = TranscriptChunker.chunks(from: segments)
@@ -318,16 +385,16 @@ struct MapReduceRoutingTests {
         try? await Task.sleep(nanoseconds: 200_000_000)
 
         #expect(snapshots.count == 1)
-        // No prose ever reached us, and the merged facts had only chunk 0.
-        #expect(snapshots.allSatisfy { $0.shortSummary.isEmpty && $0.detailedSummary.isEmpty })
-        // Prose is call `chunks.count + 1`; it must never have run.
+        // No document ever reached us, and the merged facts had only chunk 0.
+        #expect(snapshots.allSatisfy { $0.markdown.isEmpty })
+        // The reduce is call `chunks.count + 1`; it must never have run.
         #expect(engine.calls <= chunks.count)
     }
 }
 
-// MARK: - mapChunk grounding + reduceProse contract
+// MARK: - mapChunk grounding + reduceMarkdown contract
 
-@Suite("mapChunk and reduceProse")
+@Suite("mapChunk and reduceMarkdown")
 struct MapChunkTests {
 
     private func makeChunk(index: Int, segments: [TranscriptSegment], overlap: Set<UUID> = []) -> TranscriptChunk {
@@ -356,19 +423,133 @@ struct MapChunkTests {
         #expect(result.start == 0)
     }
 
-    @Test("reduceProse returns short/detailed from precomputed facts")
-    func reduceProseContract() async throws {
+    /// The reduce can only be as specific as the chunk notes — a thin "gist"
+    /// starves it of the numbers and names long meetings are judged on. The
+    /// invariants (not full text, wording may be tuned): the note is 4-8
+    /// sentences, names the topics, and demands the concrete specifics.
+    @Test("the map prompt demands a detailed, specific chunk note")
+    func mapPromptDemandsDetailedChunkNote() async throws {
+        let real = segment("real content", start: 0, end: 4)
+        let chunk = makeChunk(index: 0, segments: [real])
+        let engine = ScriptedEngine(scripts: [[chunkNote("a note")]])
+        let pipeline = SummarizationPipeline()
+
+        _ = try await pipeline.mapChunk(chunk, engine: engine)
+
+        let system = try #require(engine.recordedCalls.first).system
+        #expect(system.contains("4-8 sentences"))
+        #expect(system.localizedCaseInsensitiveContains("topics"))
+        #expect(system.localizedCaseInsensitiveContains("numbers"))
+        #expect(system.localizedCaseInsensitiveContains("root causes"))
+        #expect(!system.contains("2-4 sentence"))   // the thin gist contract is gone
+    }
+
+    /// The reduce is the same seam SPEC-07 will drive from its live cache:
+    /// precomputed facts + notes in, one adaptive markdown document out. It
+    /// writes markdown prose, so it must sample with the markdown preset —
+    /// the NDJSON default's penalties would degrade a checkbox-heavy document.
+    @Test("reduceMarkdown returns the document from precomputed facts")
+    func reduceMarkdownContract() async throws {
         let facts = MergedFacts(decisions: [
             SummaryDecision(title: "Ship it", details: "", evidenceSegmentIDs: ["A"])])
         let notes = [ChunkMapResult(
             chunkIndex: 0, decisions: facts.decisions, actionItems: [], openQuestions: [],
             risks: [], chunkNote: "we agreed to ship", start: 0, end: 60)]
-        let engine = ScriptedEngine(scripts: [proseScript()])
+        let engine = ScriptedEngine(scripts: [["### Notes\nWe agreed to ship."]])
         let pipeline = SummarizationPipeline()
 
-        let prose = try await pipeline.reduceProse(facts: facts, notes: notes, engine: engine)
-        #expect(prose.short == "Overall summary.")
-        #expect(prose.detailed == "A thorough paragraph.")
+        let document = try await pipeline.reduceMarkdown(facts: facts, notes: notes, engine: engine)
+        #expect(document == "### Notes\nWe agreed to ship.")
         #expect(engine.calls == 1)
+
+        let params = try #require(engine.recordedCalls.first).params
+        let expected = GenerationParams.markdownSummary
+        #expect(params.temperature == expected.temperature)
+        #expect(params.maxTokens == expected.maxTokens)
+        #expect(params.frequencyPenalty == expected.frequencyPenalty)
+        #expect(params.presencePenalty == expected.presencePenalty)
+    }
+
+    /// The reduce reads notes + facts, not the transcript — the user prompt is
+    /// all the grounding it has. Notes must arrive chronologically with their
+    /// time ranges; a fact section with nothing in it must be omitted ENTIRELY
+    /// (a "(none)" line would tempt the model into writing an empty section);
+    /// and owner/due decorations appear only when the merge actually has them.
+    @Test("the reduce user prompt carries time-ranged notes and only non-empty fact sections")
+    func reduceUserPromptShape() async throws {
+        let facts = MergedFacts(
+            decisions: [],
+            actionItems: [
+                SummaryActionItem(
+                    task: "Prepare release notes", owner: "You", dueDate: "Thursday",
+                    evidenceSegmentIDs: ["A"]),
+                SummaryActionItem(
+                    task: "Update the onboarding guide", owner: nil, dueDate: nil,
+                    evidenceSegmentIDs: ["B"]),
+            ],
+            openQuestions: [SummaryOpenQuestion(
+                question: "Which regions get the beta first?", context: nil,
+                evidenceSegmentIDs: ["C"])],
+            risks: [])
+        // Notes handed over out of order on purpose — the prompt must sort.
+        let notes = [
+            ChunkMapResult(
+                chunkIndex: 1, decisions: [], actionItems: [], openQuestions: [],
+                risks: [], chunkNote: "Second part note.", start: 60, end: 120),
+            ChunkMapResult(
+                chunkIndex: 0, decisions: [], actionItems: [], openQuestions: [],
+                risks: [], chunkNote: "First part note.", start: 0, end: 60),
+        ]
+        let engine = ScriptedEngine(scripts: [["### Notes\nBody."]])
+        let pipeline = SummarizationPipeline()
+
+        _ = try await pipeline.reduceMarkdown(facts: facts, notes: notes, engine: engine)
+        let user = try #require(engine.recordedCalls.first).user
+
+        // Chronological, time-ranged part notes.
+        let first = try #require(user.range(of: "[0:00-1:00] First part note."))
+        let second = try #require(user.range(of: "[1:00-2:00] Second part note."))
+        #expect(first.lowerBound < second.lowerBound)
+
+        // Owner/due only when present — never "unspecified" filler.
+        #expect(user.contains("Prepare release notes (owner: You, due: Thursday)"))
+        #expect(user.contains("- Update the onboarding guide"))
+        #expect(!user.contains("Update the onboarding guide ("))
+        #expect(!user.contains("unspecified"))
+
+        // Populated sections are present; empty ones are gone without a trace.
+        #expect(user.contains("Action items:"))
+        #expect(user.contains("Open questions:"))
+        #expect(!user.contains("Decisions:"))
+        #expect(!user.contains("Risks:"))
+        #expect(!user.contains("(none)"))
+    }
+
+    /// The reduce writes the SAME kind of adaptive document as the single-pass
+    /// route, so the five pinned ruleset phrases must survive in its system
+    /// prompt too — plus the re-anchored grounding rule: the material (notes +
+    /// merged facts) is the whole world, nothing new may be introduced.
+    @Test("the reduce system prompt keeps the adaptive ruleset and re-anchors grounding")
+    func reduceSystemPromptInvariants() async throws {
+        let facts = MergedFacts(decisions: [
+            SummaryDecision(title: "Ship it", details: "", evidenceSegmentIDs: ["A"])])
+        let notes = [ChunkMapResult(
+            chunkIndex: 0, decisions: facts.decisions, actionItems: [], openQuestions: [],
+            risks: [], chunkNote: "we agreed to ship", start: 0, end: 60)]
+        let engine = ScriptedEngine(scripts: [["### Notes\nBody."]])
+        let pipeline = SummarizationPipeline()
+
+        _ = try await pipeline.reduceMarkdown(facts: facts, notes: notes, engine: engine)
+        let system = try #require(engine.recordedCalls.first).system
+
+        // The five pinned adaptive-ruleset phrases (shared with single-pass).
+        #expect(system.contains("### Action Items"))
+        #expect(system.localizedCaseInsensitiveContains("never invent an owner or a due date"))
+        #expect(system.contains("dominant language of the transcript"))
+        #expect(system.localizedCaseInsensitiveContains("no code fences"))
+        #expect(system.localizedCaseInsensitiveContains("never write an empty section"))
+        // The no-new-items grounding rule, re-anchored to the material.
+        #expect(system.localizedCaseInsensitiveContains(
+            "do not introduce any decision, action, owner, due date, question, or risk"))
     }
 }

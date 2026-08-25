@@ -12,8 +12,9 @@
 //  262K context is full — and a 40K-token KV cache still costs a GB or more on
 //  top of the ~3.3 GB of weights (SP-004's summarizing budget: ≤ ~4.5 GB). So
 //  long transcripts are cut into bounded chunks (SPEC-02), each mapped to
-//  structured facts independently, the facts merged deterministically in Swift,
-//  and a final grounded prose pass writes the short/detailed summaries.
+//  structured facts plus a detailed chunk note independently, the facts merged
+//  deterministically in Swift, and a final grounded markdown pass writes the
+//  adaptive document from the notes + merged facts.
 //
 //  This file holds the *pure, engine-free* half of that pipeline: the value
 //  contracts and the deterministic merge. The LLM orchestration lives in
@@ -69,7 +70,10 @@ nonisolated struct ChunkMapResult: Codable, Hashable, Sendable {
     var actionItems: [SummaryActionItem]
     var openQuestions: [SummaryOpenQuestion]
     var risks: [SummaryRisk]
-    /// The "chunknote" gist ("" if the model omitted it).
+    /// The "chunknote" note — a detailed, specifics-preserving account of this
+    /// part ("" if the model omitted it). The markdown reduce can only be as
+    /// specific as these notes, so the map prompt demands the numbers, names,
+    /// and root causes, not just a gist.
     var chunkNote: String
     /// Chunk time range, for ordered prose context.
     let start: TimeInterval
@@ -97,7 +101,7 @@ nonisolated struct ChunkMapResult: Codable, Hashable, Sendable {
 }
 
 /// The de-duplicated union of every chunk's facts, capped per section. Feeds the
-/// final prose pass and the streaming snapshots.
+/// final markdown reduce and the streaming snapshots.
 nonisolated struct MergedFacts: Codable, Hashable, Sendable {
     var decisions: [SummaryDecision]
     var actionItems: [SummaryActionItem]
