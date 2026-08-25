@@ -104,7 +104,6 @@ struct SummarizationE2ETests {
         #expect(await manager.cachedModelExists())
 
         let transcript = Self.fixtureTranscript()
-        let validIDs = Set(transcript.map { $0.id.uuidString.lowercased() })
         let pipeline = SummarizationPipeline()
 
         var snapshots = 0
@@ -115,45 +114,41 @@ struct SummarizationE2ETests {
         }
 
         let summary = try #require(final)
-        print("[E2E] snapshots=\(snapshots) decisions=\(summary.decisions.count) actions=\(summary.actionItems.count) questions=\(summary.openQuestions.count) risks=\(summary.risks.count)")
-        print("[E2E] short=\(summary.shortSummary)")
+        print("[E2E] snapshots=\(snapshots) markdownChars=\(summary.markdown.count)")
+        print("[E2E] document:\n\(summary.markdown)\n[E2E] end of document")
 
         // Streaming actually streamed (many progressive snapshots, not one blob).
         #expect(snapshots > 1)
 
-        // Prose present.
-        #expect(!summary.shortSummary.isEmpty)
-        #expect(!summary.detailedSummary.isEmpty)
+        // The markdown contract: on the single-pass route the adaptive document
+        // IS the summary — non-empty, sectioned — and the legacy prose fields
+        // stay empty. Single-pass extracts no NDJSON facts either (the prompt
+        // has no evidence protocol), so the fact sections are empty by design.
+        #expect(!summary.markdown.isEmpty)
+        #expect(summary.markdown.contains("### "))
+        #expect(summary.shortSummary.isEmpty)
+        #expect(summary.detailedSummary.isEmpty)
+        #expect(summary.decisions.isEmpty)
+        #expect(summary.actionItems.isEmpty)
 
-        // At least one decision, and at least one decision's evidence points at
-        // real segment IDs copied verbatim from the transcript.
-        #expect(!summary.decisions.isEmpty)
-        let decisionWithRealEvidence = summary.decisions.contains { decision in
-            decision.evidenceSegmentIDs.contains { validIDs.contains($0.lowercased()) }
-        }
-        #expect(decisionWithRealEvidence)
+        // Grounding, translated to the document: the notes must carry the
+        // meeting's real substance (the Atlas-Friday ship and/or the Postgres
+        // migration), not generic filler.
+        let lowered = summary.markdown.lowercased()
+        #expect(["atlas", "postgres", "friday"].contains { lowered.contains($0) })
 
-        // Grounding: the onboarding-guide action has no owner in the
-        // transcript, so any action item about it must carry owner == nil.
-        // (If the model skipped that action entirely, the check is vacuous —
-        // that's fine; what's forbidden is inventing an owner.)
-        let onboardingActions = summary.actionItems.filter {
-            $0.task.lowercased().contains("onboarding")
-        }
-        #expect(onboardingActions.allSatisfy { $0.owner == nil })
-
-        // No hallucinated evidence anywhere: every evidence ID across all
-        // sections either matches a transcript segment or is dropped by the
-        // UI — but the model was told to copy verbatim, so require that at
-        // least half of all cited IDs are real to catch systematic drift.
-        let allEvidence = (summary.decisions.flatMap(\.evidenceSegmentIDs)
-            + summary.actionItems.flatMap(\.evidenceSegmentIDs)
-            + summary.openQuestions.flatMap(\.evidenceSegmentIDs)
-            + summary.risks.flatMap(\.evidenceSegmentIDs))
-        if !allEvidence.isEmpty {
-            let real = allEvidence.filter { validIDs.contains($0.lowercased()) }
-            #expect(real.count * 2 >= allEvidence.count)
-        }
+        // Grounding trap, translated to the document: the onboarding-guide
+        // task has no owner in the transcript, so no line about it may assign
+        // one ("You to ..." / "Team to ..."). (If the model skipped that task
+        // entirely, the check is vacuous — that's fine; what's forbidden is
+        // inventing an owner.)
+        let onboardingLines = summary.markdown
+            .components(separatedBy: "\n")
+            .filter { $0.lowercased().contains("onboarding") }
+        #expect(onboardingLines.allSatisfy { line in
+            let lowline = line.lowercased()
+            return !lowline.contains("you to ") && !lowline.contains("team to ")
+        })
     }
 
     /// A long meeting (>20K tokens) that forces the map-reduce route (SPEC-05
@@ -254,9 +249,14 @@ struct SummarizationE2ETests {
         #expect(phases.contains { $0.hasPrefix("Summarizing part 1/") })
         #expect(snapshots > 1)
 
-        // Prose present and grounded.
-        #expect(!summary.shortSummary.isEmpty)
-        #expect(!summary.detailedSummary.isEmpty)
+        // The markdown contract on the long route: the reduce wrote the
+        // adaptive document (a non-empty markdown means the route did NOT
+        // degrade to facts-only), the legacy prose fields stay empty, and the
+        // merged facts ride along with the document.
+        #expect(!summary.markdown.isEmpty)
+        #expect(summary.markdown.contains("### "))
+        #expect(summary.shortSummary.isEmpty)
+        #expect(summary.detailedSummary.isEmpty)
         #expect(!summary.decisions.isEmpty)
 
         // Every surviving evidence ID is real (executable grounding filters the

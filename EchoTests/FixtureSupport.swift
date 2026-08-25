@@ -76,6 +76,35 @@ nonisolated enum Fixtures {
         (mic: try loadWAV(at: micURL(scenario)), system: try loadWAV(at: systemURL(scenario)))
     }
 
+    // MARK: - Meeting transcript samples (summary parity suite)
+
+    /// Skip reason while the meeting-sample transcripts are not copied yet.
+    static let meetingSampleInstructions: Comment =
+        "Copy the meeting samples per Fixtures/README.md (meeting transcript samples section)"
+
+    /// A real meeting transcript as plain text (blank-line-separated
+    /// paragraphs) at `Fixtures/meeting-samples/<name>.txt` — the Notion
+    /// reference pairs' transcripts, local-only like every fixture.
+    static func meetingSampleURL(_ name: String) -> URL {
+        root.appendingPathComponent("meeting-samples", isDirectory: true)
+            .appendingPathComponent("\(name).txt")
+    }
+
+    static func meetingSampleAvailable(_ name: String) -> Bool {
+        FileManager.default.fileExists(atPath: meetingSampleURL(name).path)
+    }
+
+    static func loadMeetingSampleText(_ name: String) throws -> String {
+        try String(contentsOf: meetingSampleURL(name), encoding: .utf8)
+    }
+
+    /// Where the parity suite writes each generated document for human
+    /// side-by-side review against the Notion reference (overwritten per run).
+    static func meetingSampleOutputURL(_ name: String) -> URL {
+        root.appendingPathComponent("meeting-samples", isDirectory: true)
+            .appendingPathComponent("output-\(name).md")
+    }
+
     enum LoadError: Error {
         case unreadable(URL)
         case unsupportedFormat(URL)
