@@ -15,9 +15,9 @@
 //  final-only UX; the transcript is ready after the meeting ends).
 //
 
+import AppKit
 import SwiftUI
 #if DEBUG
-import AppKit
 import ScreenCaptureKit
 #endif
 
@@ -701,6 +701,7 @@ private struct AllMeetingsView: View {
     /// highlight is painted in one place — the row's own frame is inset from
     /// the card, and a `@State` inside the row would only track the content.
     @State private var hoveredID: UUID?
+    @State private var rightClicks = RowRightClickWatcher()
     @State private var renameTarget: MeetingMeta?
     @State private var renameText = ""
     @FocusState private var searchFocused: Bool
@@ -730,6 +731,11 @@ private struct AllMeetingsView: View {
             content
         }
         .navigationTitle("")
+        .onAppear {
+            rightClicks.onContextClick = { selection = $0 }
+            rightClicks.start()
+        }
+        .onDisappear { rightClicks.stop() }
         .alert("Rename meeting", isPresented: renamePresented) {
             TextField("Meeting name", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
@@ -886,10 +892,7 @@ private struct AllMeetingsView: View {
             .listRowBackground(
                 MeetingRowChrome(isSelected: selection == meta.id, isHovered: hoveredID == meta.id)
             )
-            .onHover { inside in
-                if inside { hoveredID = meta.id }
-                else if hoveredID == meta.id { hoveredID = nil }
-            }
+            .onHover { updateHover(meta.id, inside: $0) }
             // The double-click used to be a `simultaneousGesture`, which sat in
             // front of the table's own click handling and swallowed the first
             // click whole: nothing selected, nothing highlighted, and the list
@@ -910,6 +913,19 @@ private struct AllMeetingsView: View {
                     .onChanged { _ in select(meta.id) }
                     .onEnded { _ in select(meta.id) }
             )
+            // Right-click anywhere on the row, not only on the ⋯ button. Same
+            // items, one definition; `RowRightClickWatcher` moves the selection
+            // onto the row first, so the menu is visibly about that meeting.
+            .contextMenu {
+                MeetingQuickActions(
+                    meta: meta,
+                    onOpen: { tab in opened = OpenedDetail(target: .saved(meta.id), tab: tab) },
+                    onRename: {
+                        renameTarget = meta
+                        renameText = meta.title
+                    }
+                )
+            }
         }
     }
 
@@ -919,6 +935,15 @@ private struct AllMeetingsView: View {
     private func select(_ id: UUID) {
         guard selection != id else { return }
         selection = id
+    }
+
+    /// Keeps the hover state and the right-click watcher's idea of the hovered
+    /// row in step — they have to agree, because the watcher has no other way
+    /// to know which row a right-click landed on.
+    private func updateHover(_ id: UUID, inside: Bool) {
+        let next: UUID? = inside ? id : (hoveredID == id ? nil : hoveredID)
+        hoveredID = next
+        rightClicks.hoveredID = next
     }
 
     // MARK: Data
@@ -946,6 +971,7 @@ private struct TrashView: View {
 
     @State private var selection: UUID?
     @State private var hoveredID: UUID?
+    @State private var rightClicks = RowRightClickWatcher()
     @State private var confirmDelete: MeetingMeta?
     @State private var confirmEmpty = false
 
@@ -955,6 +981,11 @@ private struct TrashView: View {
             content
         }
         .navigationTitle("")
+        .onAppear {
+            rightClicks.onContextClick = { selection = $0 }
+            rightClicks.start()
+        }
+        .onDisappear { rightClicks.stop() }
         .confirmationDialog(
             "Delete permanently?",
             isPresented: deletePresented,
@@ -1025,16 +1056,20 @@ private struct TrashView: View {
                     .listRowBackground(
                         MeetingRowChrome(isSelected: selection == meta.id, isHovered: hoveredID == meta.id)
                     )
-                    .onHover { inside in
-                        if inside { hoveredID = meta.id }
-                        else if hoveredID == meta.id { hoveredID = nil }
-                    }
+                    .onHover { updateHover(meta.id, inside: $0) }
                     .onTapGesture(count: 2) { opened = OpenedDetail(target: .saved(meta.id)) }
                     .simultaneousGesture(
                         DragGesture(minimumDistance: 0)
                             .onChanged { _ in select(meta.id) }
                             .onEnded { _ in select(meta.id) }
                     )
+                    .contextMenu {
+                        TrashQuickActions(
+                            meta: meta,
+                            onRestore: { Task { await controller.library.restore(meta.id) } },
+                            onDelete: { confirmDelete = meta }
+                        )
+                    }
                 }
             }
             .listStyle(.plain)
@@ -1055,6 +1090,14 @@ private struct TrashView: View {
     private func select(_ id: UUID) {
         guard selection != id else { return }
         selection = id
+    }
+
+    /// See `AllMeetingsView.updateHover`: the watcher's hovered row has to
+    /// track this list's.
+    private func updateHover(_ id: UUID, inside: Bool) {
+        let next: UUID? = inside ? id : (hoveredID == id ? nil : hoveredID)
+        hoveredID = next
+        rightClicks.hoveredID = next
     }
 }
 
@@ -1079,6 +1122,49 @@ private struct SettingsPageView: View {
                 .frame(maxWidth: 720)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+    }
+}
+
+// MARK: - Right-click selection
+
+/// Makes a right-click select the row it is about to open a menu on, the way
+/// Finder does.
+///
+/// There is no SwiftUI hook for this: right-click is not a `TapGesture`, and
+/// `contextMenu` never says which row it is opening for or when. But the list
+/// already tracks the row under the pointer for its hover card, and a
+/// right-click can only land on the row the pointer is over — so a local event
+/// monitor watching for context clicks, plus that hovered id, is the whole
+/// mechanism. The event is returned untouched, so the menu still opens exactly
+/// as it would have.
+///
+/// The list owns one of these as plain state (deliberately not `@Observable`:
+/// nothing here should redraw a view) and keeps `hoveredID` current from the
+/// same place it updates its own hover state.
+@MainActor
+private final class RowRightClickWatcher {
+    var hoveredID: UUID?
+    var onContextClick: ((UUID) -> Void)?
+
+    private var monitor: Any?
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { [weak self] event in
+            MainActor.assumeIsolated {
+                // Control-click is the other way to raise a context menu, and
+                // it arrives as an ordinary left click.
+                let isContextClick = event.type == .rightMouseDown
+                    || event.modifierFlags.contains(.control)
+                if isContextClick, let self, let id = self.hoveredID { self.onContextClick?(id) }
+            }
+            return event
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
     }
 }
 
@@ -1193,24 +1279,7 @@ private struct MeetingRow: View {
 
     private var quickActions: some View {
         Menu {
-            Button { onOpen(.transcript) } label: { Label("Open meeting", systemImage: "arrow.up.forward.square") }
-            Button { onOpen(.transcript) } label: { Label("View transcript", systemImage: "doc.text") }
-            Button(action: onRename) { Label("Rename", systemImage: "pencil") }
-
-            Menu {
-                ForEach(MeetingExportFormat.allCases) { format in
-                    Button(format.menuTitle) { export(as: format) }
-                }
-            } label: {
-                Label("Export…", systemImage: "square.and.arrow.up")
-            }
-
-            Button { copySummary() } label: { Label("Copy summary as Markdown", systemImage: "doc.on.doc") }
-                .disabled(!meta.hasSummary)
-            Button { reveal() } label: { Label("Reveal in Finder", systemImage: "folder") }
-
-            Divider()
-            Button(role: .destructive) { trash() } label: { Label("Delete", systemImage: "trash") }
+            MeetingQuickActions(meta: meta, onOpen: onOpen, onRename: onRename)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.body.weight(.semibold))
@@ -1245,6 +1314,38 @@ private struct MeetingRow: View {
         }
     }
 
+}
+
+/// A meeting's quick actions, defined once and mounted twice: as the row's ⋯
+/// menu and as the right-click menu covering the whole row. Two copies of this
+/// list would drift the moment one of them gains an action.
+private struct MeetingQuickActions: View {
+    @Environment(RecordingController.self) private var controller
+    let meta: MeetingMeta
+    let onOpen: (DetailTab) -> Void
+    let onRename: () -> Void
+
+    var body: some View {
+        Button { onOpen(.transcript) } label: { Label("Open meeting", systemImage: "arrow.up.forward.square") }
+        Button { onOpen(.transcript) } label: { Label("View transcript", systemImage: "doc.text") }
+        Button(action: onRename) { Label("Rename", systemImage: "pencil") }
+
+        Menu {
+            ForEach(MeetingExportFormat.allCases) { format in
+                Button(format.menuTitle) { export(as: format) }
+            }
+        } label: {
+            Label("Export…", systemImage: "square.and.arrow.up")
+        }
+
+        Button { copySummary() } label: { Label("Copy summary as Markdown", systemImage: "doc.on.doc") }
+            .disabled(!meta.hasSummary)
+        Button { reveal() } label: { Label("Reveal in Finder", systemImage: "folder") }
+
+        Divider()
+        Button(role: .destructive) { trash() } label: { Label("Delete", systemImage: "trash") }
+    }
+
     private func export(as format: MeetingExportFormat) {
         Task {
             if let record = await controller.library.loadRecord(meta.id) {
@@ -1267,6 +1368,24 @@ private struct MeetingRow: View {
 
     private func trash() {
         Task { await controller.library.trash(meta.id) }
+    }
+}
+
+/// A trashed meeting's quick actions — same "define once, mount twice" split as
+/// `MeetingQuickActions`, for the ⋯ menu and the row's right-click menu.
+private struct TrashQuickActions: View {
+    @Environment(RecordingController.self) private var controller
+    let meta: MeetingMeta
+    let onRestore: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        Button(action: onRestore) { Label("Restore", systemImage: "arrow.uturn.backward") }
+        Button { MeetingActions.revealInFinder(controller.library.directory(for: meta.id)) } label: {
+            Label("Reveal in Finder", systemImage: "folder")
+        }
+        Divider()
+        Button(role: .destructive, action: onDelete) { Label("Delete Permanently", systemImage: "trash") }
     }
 }
 
@@ -1338,7 +1457,6 @@ private struct LiveMeetingRow: View {
 }
 
 private struct TrashRow: View {
-    @Environment(RecordingController.self) private var controller
     let meta: MeetingMeta
     let onOpen: () -> Void
     let onRestore: () -> Void
@@ -1366,12 +1484,7 @@ private struct TrashRow: View {
                 .controlSize(.small)
 
             Menu {
-                Button(action: onRestore) { Label("Restore", systemImage: "arrow.uturn.backward") }
-                Button { MeetingActions.revealInFinder(controller.library.directory(for: meta.id)) } label: {
-                    Label("Reveal in Finder", systemImage: "folder")
-                }
-                Divider()
-                Button(role: .destructive, action: onDelete) { Label("Delete Permanently", systemImage: "trash") }
+                TrashQuickActions(meta: meta, onRestore: onRestore, onDelete: onDelete)
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.body.weight(.semibold))
