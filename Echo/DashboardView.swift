@@ -705,6 +705,7 @@ private struct AllMeetingsView: View {
     @State private var renameTarget: MeetingMeta?
     @State private var renameText = ""
     @FocusState private var searchFocused: Bool
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -836,6 +837,10 @@ private struct AllMeetingsView: View {
     }
 
     private func meetingList(_ metas: [MeetingMeta]) -> some View {
+        // The visible, flattened order — what the arrow keys walk. Sections are
+        // a presentation detail: ↓ from the last row of "Today" lands on the
+        // first row of "Yesterday", not nowhere.
+        let ids = metas.map(\.id)
         // Plain style. The row insets stop 12pt short of the header's 20pt
         // padding and `MeetingRow` makes up the difference internally, so the
         // content still lines its ⋯ button up with the header's sort control
@@ -845,33 +850,75 @@ private struct AllMeetingsView: View {
         // full-bleed accent bar for a selected row, and this list wants the
         // sidebar's indigo card instead; with the binding in place both paint,
         // one on top of the other. `selection` is ours — see `MeetingRowChrome`.
-        List {
-            if sortOrder.groupsByDate {
-                ForEach(MeetingDateGroup.groups(for: metas)) { group in
-                    Section(group.title) { rows(for: group.metas) }
+        return ScrollViewReader { proxy in
+            List {
+                if sortOrder.groupsByDate {
+                    ForEach(MeetingDateGroup.groups(for: metas)) { group in
+                        Section(group.title) { rows(for: group.metas) }
+                    }
+                } else {
+                    rows(for: metas)
                 }
-            } else {
-                rows(for: metas)
+            }
+            .listStyle(.plain)
+            // The list has to be able to hold focus for any of the key handlers
+            // below to see a key at all; the selection card is the focus
+            // affordance, so the system ring would only add noise around the
+            // whole pane.
+            .focusable()
+            .focusEffectDisabled()
+            .focused($listFocused)
+            .onKeyPress(.upArrow) { move(.up, in: ids, using: proxy) }
+            .onKeyPress(.downArrow) { move(.down, in: ids, using: proxy) }
+            .onKeyPress(.home) { move(.first, in: ids, using: proxy) }
+            .onKeyPress(.end) { move(.last, in: ids, using: proxy) }
+            .onKeyPress(.return) { openSelected() }
+            .onDeleteCommand { trashSelected(in: ids) }
+            #if DEBUG
+            // Dev-only verification hook, alongside the window's
+            // ECHO_SNAPSHOT_PATH dump: a pointer and a keyboard can't be driven
+            // from the CLI, so this stages the two states worth looking at —
+            // the first row selected, the second hovered — on the run that gets
+            // captured. Inert otherwise.
+            .onAppear {
+                guard ProcessInfo.processInfo.environment["ECHO_PRESELECT_ROW"] == "1" else { return }
+                selection = metas.first?.id
+                hoveredID = metas.dropFirst().first?.id
+            }
+            #endif
+            // Arrive with the list ready for the keyboard, and take focus back
+            // when a detail closes — otherwise the arrows are dead until the
+            // user clicks a row.
+            .onAppear { listFocused = true }
+            .onChange(of: opened) { _, detail in if detail == nil { listFocused = true } }
+            // A search keystroke can filter the selected meeting away. Dropping
+            // the selection keeps the list from highlighting a row that is no
+            // longer there and gives the next arrow press a clean start.
+            .onChange(of: ids) { _, visible in
+                selection = MeetingListNavigation.reconcile(selection, with: visible)
             }
         }
-        .listStyle(.plain)
-        #if DEBUG
-        // Dev-only verification hook, alongside the window's ECHO_SNAPSHOT_PATH
-        // dump: a pointer and a keyboard can't be driven from the CLI, so this
-        // stages the two states worth looking at — the first row selected, the
-        // second hovered — on the run that gets captured. Inert otherwise.
-        .onAppear {
-            guard ProcessInfo.processInfo.environment["ECHO_PRESELECT_ROW"] == "1" else { return }
-            selection = metas.first?.id
-            hoveredID = metas.dropFirst().first?.id
-        }
-        #endif
-        .onDeleteCommand { trashSelected() }
-        .onKeyPress(.return) {
-            guard let selection else { return .ignored }
-            opened = OpenedDetail(target: .saved(selection))
-            return .handled
-        }
+    }
+
+    // MARK: Keyboard
+
+    /// Moves the selection and scrolls just far enough to show where it went.
+    /// Returns `.ignored` when there is nowhere to go, so the key falls through
+    /// to whatever would normally handle it (scrolling, say) instead of being
+    /// silently eaten.
+    private func move(_ direction: MeetingListMove, in ids: [UUID], using proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard opened == nil,
+              let destination = MeetingListNavigation.destination(from: selection, move: direction, in: ids)
+        else { return .ignored }
+        selection = destination
+        proxy.scrollTo(destination)
+        return .handled
+    }
+
+    private func openSelected() -> KeyPress.Result {
+        guard opened == nil, let selection else { return .ignored }
+        opened = OpenedDetail(target: .saved(selection))
+        return .handled
     }
 
     private func rows(for metas: [MeetingMeta]) -> some View {
@@ -932,7 +979,13 @@ private struct AllMeetingsView: View {
     /// Moves the selection onto a row. Idempotent: the press gesture reports
     /// more than once for a single click, and re-selecting the row that is
     /// already selected must not churn state.
+    ///
+    /// Clicking a row is also how you start driving the list from the keyboard,
+    /// so the press has to bring focus with it — including a press on the row
+    /// that is already selected, which is why the focus line sits outside the
+    /// early return.
     private func select(_ id: UUID) {
+        if !listFocused { listFocused = true }
         guard selection != id else { return }
         selection = id
     }
@@ -956,10 +1009,13 @@ private struct AllMeetingsView: View {
         Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
     }
 
-    private func trashSelected() {
-        guard let selection else { return }
-        self.selection = nil
-        Task { await controller.library.trash(selection) }
+    /// Trashes the selected meeting and hands the selection to the row that
+    /// slides up into the gap, so ⌫ can be pressed twice in a row without
+    /// reaching for the mouse in between.
+    private func trashSelected(in ids: [UUID]) {
+        guard opened == nil, let target = selection else { return }
+        selection = MeetingListNavigation.selectionAfterRemoving(target, from: ids)
+        Task { await controller.library.trash(target) }
     }
 }
 
@@ -974,6 +1030,7 @@ private struct TrashView: View {
     @State private var rightClicks = RowRightClickWatcher()
     @State private var confirmDelete: MeetingMeta?
     @State private var confirmEmpty = false
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1038,47 +1095,80 @@ private struct TrashView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            // Same treatment as the Meetings list, for the same reason: no
+            // Same treatment as the Meetings list, for the same reasons: no
             // `selection:` binding (the card below is the highlight), row
-            // insets that leave the card a gutter, and two ordinary taps in
-            // place of the double-click gesture that used to eat the first
-            // click.
-            List {
-                ForEach(trashed) { meta in
-                    TrashRow(
-                        meta: meta,
-                        onOpen: { opened = OpenedDetail(target: .saved(meta.id)) },
-                        onRestore: { Task { await controller.library.restore(meta.id) } },
-                        onDelete: { confirmDelete = meta }
-                    )
-                    .id(meta.id)
-                    .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
-                    .listRowBackground(
-                        MeetingRowChrome(isSelected: selection == meta.id, isHovered: hoveredID == meta.id)
-                    )
-                    .onHover { updateHover(meta.id, inside: $0) }
-                    .onTapGesture(count: 2) { opened = OpenedDetail(target: .saved(meta.id)) }
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { _ in select(meta.id) }
-                            .onEnded { _ in select(meta.id) }
-                    )
-                    .contextMenu {
-                        TrashQuickActions(
+            // insets that leave the card a gutter, a press gesture in place of
+            // the double-click gesture that used to eat the first click, and
+            // the same arrow / Return / ⌫ keys over the visible order.
+            let ids = trashed.map(\.id)
+            ScrollViewReader { proxy in
+                List {
+                    ForEach(trashed) { meta in
+                        TrashRow(
                             meta: meta,
+                            onOpen: { opened = OpenedDetail(target: .saved(meta.id)) },
                             onRestore: { Task { await controller.library.restore(meta.id) } },
                             onDelete: { confirmDelete = meta }
                         )
+                        .id(meta.id)
+                        .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
+                        .listRowBackground(
+                            MeetingRowChrome(isSelected: selection == meta.id, isHovered: hoveredID == meta.id)
+                        )
+                        .onHover { updateHover(meta.id, inside: $0) }
+                        .onTapGesture(count: 2) { opened = OpenedDetail(target: .saved(meta.id)) }
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { _ in select(meta.id) }
+                                .onEnded { _ in select(meta.id) }
+                        )
+                        .contextMenu {
+                            TrashQuickActions(
+                                meta: meta,
+                                onRestore: { Task { await controller.library.restore(meta.id) } },
+                                onDelete: { confirmDelete = meta }
+                            )
+                        }
                     }
                 }
-            }
-            .listStyle(.plain)
-            .onDeleteCommand {
-                if let selection, let meta = controller.library.meta(for: selection) {
-                    confirmDelete = meta
+                .listStyle(.plain)
+                .focusable()
+                .focusEffectDisabled()
+                .focused($listFocused)
+                .onKeyPress(.upArrow) { move(.up, in: ids, using: proxy) }
+                .onKeyPress(.downArrow) { move(.down, in: ids, using: proxy) }
+                .onKeyPress(.home) { move(.first, in: ids, using: proxy) }
+                .onKeyPress(.end) { move(.last, in: ids, using: proxy) }
+                .onKeyPress(.return) { openSelected() }
+                // ⌫ asks rather than deletes: from Trash the deletion is
+                // permanent, so the confirmation is the whole safety net.
+                .onDeleteCommand {
+                    if let selection, let meta = controller.library.meta(for: selection) {
+                        confirmDelete = meta
+                    }
+                }
+                .onAppear { listFocused = true }
+                .onChange(of: opened) { _, detail in if detail == nil { listFocused = true } }
+                .onChange(of: ids) { _, visible in
+                    selection = MeetingListNavigation.reconcile(selection, with: visible)
                 }
             }
         }
+    }
+
+    private func move(_ direction: MeetingListMove, in ids: [UUID], using proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard opened == nil,
+              let destination = MeetingListNavigation.destination(from: selection, move: direction, in: ids)
+        else { return .ignored }
+        selection = destination
+        proxy.scrollTo(destination)
+        return .handled
+    }
+
+    private func openSelected() -> KeyPress.Result {
+        guard opened == nil, let selection else { return .ignored }
+        opened = OpenedDetail(target: .saved(selection))
+        return .handled
     }
 
     private var deletePresented: Binding<Bool> {
@@ -1086,8 +1176,10 @@ private struct TrashView: View {
     }
 
     /// See `AllMeetingsView.select`: the press gesture reports more than once
-    /// per click, so this has to be idempotent.
+    /// per click, so this has to be idempotent, and the press is what hands the
+    /// list its keyboard focus.
     private func select(_ id: UUID) {
+        if !listFocused { listFocused = true }
         guard selection != id else { return }
         selection = id
     }
