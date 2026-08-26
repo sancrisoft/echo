@@ -28,6 +28,7 @@
 //
 
 import Foundation
+import NaturalLanguage
 import os
 
 actor SummarizationPipeline {
@@ -83,13 +84,58 @@ actor SummarizationPipeline {
     ) async throws {
         guard !segments.isEmpty else { throw SummarizationError.emptyTranscript }
 
+        // S10: detect the dominant language ONCE over the whole transcript;
+        // both routes thread the same answer (nil keeps generic prompts).
+        let language = Self.dominantLanguageName(of: segments)
+
         // Route on the transcript size alone, independent of prompt overhead, so
         // the boundary is stable and matches chunking.
         if Self.estimatedTokens(of: segments) <= Self.singlePassBudget {
-            try await runSinglePass(from: segments, using: engine, into: continuation)
+            try await runSinglePass(
+                from: segments, using: engine, language: language, into: continuation)
         } else {
-            try await runMapReduce(from: segments, using: engine, progress: progress, into: continuation)
+            try await runMapReduce(
+                from: segments, using: engine, language: language,
+                progress: progress, into: continuation)
         }
+    }
+
+    // MARK: - Dominant language (S10)
+
+    /// The transcript's dominant language as an ENGLISH language name
+    /// ("Spanish", "English", "Portuguese", …) for prompt injection, or nil
+    /// when the recognizer has no confident answer (the prompts then keep
+    /// their generic wording). Field bug S10: the prompt scaffolding is
+    /// English — rules, exemplars, and the closing reminder that we measured
+    /// dominates behavior — so a fully-Spanish transcript came out as an
+    /// ENGLISH summary; one generic "dominant language of the transcript"
+    /// line cannot outweigh that on a 4B model. Detection samples utterances
+    /// ACROSS the whole meeting (stride over the segments, ~3000 chars), not
+    /// just the head, so an English greeting cannot mislabel a Spanish
+    /// meeting. Pure and static (never actor-isolated) — unit-tested directly.
+    static func dominantLanguageName(of segments: [TranscriptSegment]) -> String? {
+        let texts = segments.map(\.text).filter { !$0.isEmpty }
+        guard !texts.isEmpty else { return nil }
+
+        let budget = 3000
+        // Sample up to ~60 segments spread across the meeting.
+        let stride = max(1, texts.count / 60)
+        var sample = ""
+        var index = 0
+        while index < texts.count && sample.count < budget {
+            sample += texts[index]
+            sample += "\n"
+            index += stride
+        }
+
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(sample)
+        guard let language = recognizer.dominantLanguage else { return nil }
+        // Confidence floor: a garbled or too-short sample must yield nil, not
+        // a coin-flip label that would steer the whole summary's language.
+        let confidence = recognizer.languageHypotheses(withMaximum: 1)[language] ?? 0
+        guard confidence >= 0.6 else { return nil }
+        return Locale(identifier: "en").localizedString(forLanguageCode: language.rawValue)
     }
 
     /// SPEC-02's heuristic (ceil(scalars/4), min 1 per non-empty segment),
@@ -107,11 +153,12 @@ actor SummarizationPipeline {
     private func runSinglePass(
         from segments: [TranscriptSegment],
         using engine: any TextGenerating,
+        language: String?,
         into continuation: AsyncThrowingStream<MeetingSummary, Error>.Continuation
     ) async throws {
         _ = try await generateMarkdown(
             system: Self.markdownSystemPrompt,
-            user: Self.markdownUserPrompt(for: segments),
+            user: Self.markdownUserPrompt(for: segments, language: language),
             engine: engine,
             onSnapshot: { continuation.yield($0) }
         )
@@ -122,6 +169,7 @@ actor SummarizationPipeline {
     private func runMapReduce(
         from segments: [TranscriptSegment],
         using engine: any TextGenerating,
+        language: String?,
         progress: (@Sendable (String) -> Void)?,
         into continuation: AsyncThrowingStream<MeetingSummary, Error>.Continuation
     ) async throws {
@@ -139,7 +187,7 @@ actor SummarizationPipeline {
         for chunk in chunks {
             try Task.checkCancellation()
             progress?("Summarizing part \(chunk.index + 1)/\(chunks.count)…")
-            let result = try await mapChunk(chunk, engine: engine)
+            let result = try await mapChunk(chunk, engine: engine, language: language)
             mapResults.append(result)
             let merged = mergeMapResults(mapResults)
             continuation.yield(Self.snapshot(facts: merged))
@@ -155,7 +203,10 @@ actor SummarizationPipeline {
         do {
             _ = try await generateMarkdown(
                 system: Self.reduceSystemPrompt,
-                user: Self.reduceUserPrompt(facts: merged, notes: mapResults.sorted { $0.chunkIndex < $1.chunkIndex }),
+                user: Self.reduceUserPrompt(
+                    facts: merged,
+                    notes: mapResults.sorted { $0.chunkIndex < $1.chunkIndex },
+                    language: language),
                 engine: engine,
                 seed: merged,
                 onSnapshot: { continuation.yield($0) }
@@ -177,13 +228,17 @@ actor SummarizationPipeline {
     /// is retained between calls, so SPEC-07 can call this live as chunks close
     /// and cache the results. Evidence is validated against this chunk's real
     /// segment IDs (overlap included, since a fact may legitimately span it).
-    func mapChunk(_ chunk: TranscriptChunk, engine: any TextGenerating) async throws -> ChunkMapResult {
+    func mapChunk(
+        _ chunk: TranscriptChunk,
+        engine: any TextGenerating,
+        language: String? = nil
+    ) async throws -> ChunkMapResult {
         let validIDs = Self.evidenceIDs(of: chunk.segments)
         var accumulator = SummaryAccumulator(
             allowed: [.facts, .chunkNote], validEvidenceIDs: validIDs)
         try await consume(
             system: Self.mapSystemPrompt,
-            user: Self.mapUserPrompt(for: chunk),
+            user: Self.mapUserPrompt(for: chunk, language: language),
             engine: engine,
             into: &accumulator
         )
@@ -213,11 +268,15 @@ actor SummarizationPipeline {
     func reduceMarkdown(
         facts: MergedFacts,
         notes: [ChunkMapResult],
-        engine: any TextGenerating
+        engine: any TextGenerating,
+        language: String? = nil
     ) async throws -> String {
         let summary = try await generateMarkdown(
             system: Self.reduceSystemPrompt,
-            user: Self.reduceUserPrompt(facts: facts, notes: notes.sorted { $0.chunkIndex < $1.chunkIndex }),
+            user: Self.reduceUserPrompt(
+                facts: facts,
+                notes: notes.sorted { $0.chunkIndex < $1.chunkIndex },
+                language: language),
             engine: engine,
             seed: facts,
             onSnapshot: { _ in }
@@ -586,28 +645,43 @@ actor SummarizationPipeline {
     /// same omission rule sitting only in the far-away system prompt measured
     /// 6/6 small-talk leaks (S8). The recency slot is zero-sum: the small-talk
     /// line alone displaced the ownership rule (owner trap 4/4 -> 0/2
-    /// measured), so the reminder carries BOTH probabilistic traps. One
-    /// shared constant so the two routes' reminders can never drift apart.
-    /// Pinned (with the closing position) by SummarizationPipelineStreamTests
-    /// and SummaryMapReduceTests.
-    private static let workNotesReminder =
-        "Reminder: these are WORK notes. Leave out all social and personal "
-        + "conversation (stories, trips, history, jokes) — no section, no mention. "
-        + "Name an owner only on a task someone explicitly took; "
-        + "a task nobody took gets its checkbox with NO name."
+    /// measured), so the reminder carries BOTH probabilistic traps — and S10's
+    /// language sentence is APPENDED after them, never replacing anything.
+    /// One shared function so the two routes' reminders can never drift
+    /// apart. Pinned (with the closing position, in both compositions) by
+    /// SummarizationPipelineStreamTests and SummaryMapReduceTests.
+    private static func workNotesReminder(language: String?) -> String {
+        var reminder =
+            "Reminder: these are WORK notes. Leave out all social and personal "
+            + "conversation (stories, trips, history, jokes) — no section, no mention. "
+            + "Name an owner only on a task someone explicitly took; "
+            + "a task nobody took gets its checkbox with NO name."
+        if let language {
+            reminder += " Write the notes in \(language)."
+        }
+        return reminder
+    }
 
-    private static func markdownUserPrompt(for segments: [TranscriptSegment]) -> String {
+    private static func markdownUserPrompt(
+        for segments: [TranscriptSegment], language: String?
+    ) -> String {
         // Deliberately thin: the ruleset lives in the system prompt, and the
         // transcript line format explains itself — one legend line is enough.
-        """
+        // S10: a detected language is stated EXPLICITLY, twice — as framing
+        // here and as the reminder's closing sentence — because the English
+        // scaffolding otherwise pulls the 4B model into English output (a
+        // fully-Spanish field meeting came out English; the generic system
+        // rule alone measured 2/2 failures).
+        let framing = language.map { "Write the notes in \($0).\n\n" } ?? ""
+        return """
         Write the meeting notes for this transcript.
 
-        Each transcript line is "[start-end] Speaker: text".
+        \(framing)Each transcript line is "[start-end] Speaker: text".
 
         Transcript:
         \(plainTranscriptText(from: segments))
 
-        \(workNotesReminder)
+        \(workNotesReminder(language: language))
         """
     }
 
@@ -651,9 +725,13 @@ actor SummarizationPipeline {
     - "You" means the current user; "Team" means teammates from system audio.
     """
 
-    private static func mapUserPrompt(for chunk: TranscriptChunk) -> String {
-        """
-        Extract structured facts from this PART of a meeting transcript as NDJSON.
+    private static func mapUserPrompt(for chunk: TranscriptChunk, language: String?) -> String {
+        // S10: on the long route the reduce writes from the chunk notes, so
+        // their language decides the final document's language — instruct it
+        // explicitly when detected.
+        let languageInstruction = language.map { " Write the chunknote in \($0)." } ?? ""
+        return """
+        Extract structured facts from this PART of a meeting transcript as NDJSON.\(languageInstruction)
 
         Each transcript line is formatted as:
         [start-end][speaker][channel][id=SEGMENT_ID]: text
@@ -714,11 +792,18 @@ actor SummarizationPipeline {
     /// the ruleset forbids. Owner/due decorate an action item only when the
     /// merge actually carries them (never "unspecified" filler, which reads
     /// like material to preserve).
-    private static func reduceUserPrompt(facts: MergedFacts, notes: [ChunkMapResult]) -> String {
+    private static func reduceUserPrompt(
+        facts: MergedFacts, notes: [ChunkMapResult], language: String?
+    ) -> String {
         var lines: [String] = [
             "Write the meeting notes from this material. Use ONLY the material",
             "below and add nothing new.",
         ]
+        // S10: state the output language explicitly when detected (the
+        // closing reminder repeats it as the final sentence).
+        if let language {
+            lines.append("Write the notes in \(language).")
+        }
 
         let partNotes = notes.compactMap { note -> String? in
             let gist = note.chunkNote.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -769,7 +854,7 @@ actor SummarizationPipeline {
         // content — close the material with the same reminder the
         // single-pass user prompt ends on.
         lines.append("")
-        lines.append(workNotesReminder)
+        lines.append(workNotesReminder(language: language))
 
         return lines.joined(separator: "\n")
     }

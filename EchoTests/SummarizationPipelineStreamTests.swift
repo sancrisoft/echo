@@ -181,6 +181,43 @@ struct PlainTranscriptTextTests {
     }
 }
 
+// MARK: - Dominant language (S10)
+
+/// Language detection that steers the prompts' language injection: an English
+/// name for a clearly dominant language, nil when there is no confident
+/// answer. A wrong label would steer the WHOLE summary's language, so for
+/// garbled or too-short text nil (generic prompts) is the only safe answer.
+@Suite("dominantLanguageName")
+struct DominantLanguageTests {
+
+    @Test("clearly Spanish segments detect as Spanish")
+    func spanishDetected() {
+        let segments = [
+            segment("Bueno, empecemos con la revisión del panel de métricas de esta semana."),
+            segment("Claro, las pruebas de regresión terminaron ayer y todo salió bien."),
+            segment("Entonces estamos de acuerdo: lanzamos la beta el viernes que viene."),
+        ]
+        #expect(SummarizationPipeline.dominantLanguageName(of: segments) == "Spanish")
+    }
+
+    @Test("clearly English segments detect as English")
+    func englishDetected() {
+        let segments = [
+            segment("Okay, let's review the dashboard launch and the regression pass."),
+            segment("QA finished everything yesterday and the results all came back green."),
+            segment("Then we are agreed: we ship the beta this coming Friday morning."),
+        ]
+        #expect(SummarizationPipeline.dominantLanguageName(of: segments) == "English")
+    }
+
+    @Test("empty, garbled, or too-short text yields nil, never a coin-flip label")
+    func unconfidentYieldsNil() {
+        #expect(SummarizationPipeline.dominantLanguageName(of: []) == nil)
+        #expect(SummarizationPipeline.dominantLanguageName(of: [segment("")]) == nil)
+        #expect(SummarizationPipeline.dominantLanguageName(of: [segment("zzxq vrrk 12 glmp 44")]) == nil)
+    }
+}
+
 // MARK: - Caption source (markdown-stripped head)
 
 /// The library-row caption is written by a tiny generation that reads the head
@@ -365,13 +402,17 @@ struct SummarizationPipelineStreamTests {
     /// S9 recency reinforcement: the small-talk omission rule in the far-away
     /// system prompt alone measured 6/6 leaks, so the USER prompt must CLOSE
     /// with the work-notes reminder — after the transcript, at the end of the
-    /// context, where a small model weighs it most.
+    /// context, where a small model weighs it most. The fixture text is
+    /// deliberately language-undetectable (S10): with no confident language,
+    /// the prompts keep their generic wording and the ownership recap stays
+    /// the closer.
     @Test("the user prompt closes with the work-notes reminder after the transcript")
     func userPromptClosesWithWorkNotesReminder() async throws {
         let engine = ScriptedEngine(scripts: [["### Notes\nBody."]])
         let pipeline = SummarizationPipeline()
 
-        for try await _ in await pipeline.generate(from: [segment("hi")], using: engine) {}
+        for try await _ in await pipeline.generate(
+            from: [segment("zzxq vrrk 12 glmp 44")], using: engine) {}
 
         let user = try #require(engine.recordedCalls.first).user
         let transcript = try #require(user.range(of: "Transcript:"))
@@ -379,10 +420,39 @@ struct SummarizationPipelineStreamTests {
         #expect(transcript.upperBound <= reminder.lowerBound)
         #expect(user.localizedCaseInsensitiveContains("leave out all social and personal conversation"))
         #expect(user.localizedCaseInsensitiveContains("no section, no mention"))
+        // S10: no confident language -> no explicit language sentence.
+        #expect(!user.contains("Write the notes in"))
         // The reminder carries BOTH probabilistic traps: measured alone, the
         // small-talk line at the end displaced the ownership rule (owner trap
         // 4/4 -> 0/2), so the owner recap must close the context with it.
         #expect(user.hasSuffix("checkbox with NO name."))
+    }
+
+    /// S10 field bug: a fully-Spanish transcript produced an ENGLISH summary —
+    /// the scaffolding is English and the closing slot dominates (measured in
+    /// S9). A detected language must therefore appear EXPLICITLY: as framing
+    /// before the transcript and as the reminder's final sentence. Zero-sum
+    /// guard: language is appended — the small-talk and ownership recaps must
+    /// survive alongside it.
+    @Test("a Spanish transcript injects the explicit language sentence, keeping both recaps")
+    func spanishTranscriptInjectsLanguageSentence() async throws {
+        let engine = ScriptedEngine(scripts: [["### Notas\nCuerpo."]])
+        let pipeline = SummarizationPipeline()
+        let segments = [
+            segment("Bueno, empecemos con la revisión del panel de métricas de esta semana."),
+            segment("Claro, las pruebas de regresión terminaron ayer y todo salió bien."),
+            segment("Entonces estamos de acuerdo: lanzamos la beta el viernes que viene."),
+        ]
+
+        for try await _ in await pipeline.generate(from: segments, using: engine) {}
+
+        let user = try #require(engine.recordedCalls.first).user
+        let sentence = try #require(user.range(of: "Write the notes in Spanish."))
+        let transcript = try #require(user.range(of: "Transcript:"))
+        #expect(sentence.upperBound <= transcript.lowerBound)
+        #expect(user.hasSuffix("Write the notes in Spanish."))
+        #expect(user.localizedCaseInsensitiveContains("no section, no mention"))
+        #expect(user.localizedCaseInsensitiveContains("checkbox with NO name"))
     }
 
     @Test("a document streamed inside a code fence is unwrapped in the final snapshot")

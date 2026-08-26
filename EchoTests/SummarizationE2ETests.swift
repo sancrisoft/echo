@@ -13,6 +13,7 @@ import Foundation
 // the target builds with MemberImportVisibility, so the transitive import
 // via Echo is not enough.
 import MLXLMCommon
+import NaturalLanguage
 import Testing
 @testable import Echo
 
@@ -148,6 +149,94 @@ struct SummarizationE2ETests {
         #expect(onboardingLines.allSatisfy { line in
             let lowline = line.lowercased()
             return !lowline.contains("you to ") && !lowline.contains("team to ")
+        })
+    }
+
+    // MARK: - S10: output language follows the transcript
+
+    /// A fully-Spanish product check-in (field bug S10: a Spanish transcript
+    /// produced an ENGLISH summary). Same shape as `fixtureTranscript`: one
+    /// unmistakable decision, one owned action, one ownerless action (the
+    /// grounding trap, in Spanish), an open question, and a risk.
+    private static func spanishFixtureTranscript() -> [TranscriptSegment] {
+        let lines: [(Speaker, String)] = [
+            (.teammates, "Bueno, empecemos con la revisión del panel de métricas."),
+            (.me, "Claro. QA terminó las pruebas de regresión ayer y todo salió en verde."),
+            (.teammates, "Perfecto. Entonces estamos de acuerdo: lanzamos la beta del panel este viernes."),
+            (.me, "De acuerdo, el viernes entonces."),
+            (.teammates, "Segundo tema: la base de datos. Seguir con SQLite ya no aguanta la carga."),
+            (.me, "Cierto. Decidámoslo aquí: migramos el backend a Postgres el próximo sprint."),
+            (.teammates, "Sí, decisión tomada, Postgres el próximo sprint."),
+            (.me, "Yo preparo las notas de la versión antes del jueves."),
+            (.teammates, "Gracias. También hay que actualizar la guía de configuración para la nueva barra lateral."),
+            (.me, "Sí, eso sigue pendiente. Todavía nadie ha tomado esa tarea."),
+            (.teammates, "Una cosa que no pude confirmar: ¿qué regiones reciben la beta primero?"),
+            (.me, "Ni idea todavía, marketing no ha respondido."),
+            (.teammates, "También señalo un riesgo: el contrato con el proveedor de analítica sigue sin firmar."),
+            (.me, "Sí, si legal no lo firma esta semana, las métricas de uso no van a estar listas."),
+            (.teammates, "Entendido. Es todo, nos vemos el viernes."),
+        ]
+        return lines.enumerated().map { index, line in
+            TranscriptSegment(
+                channel: line.0 == .me ? .microphone : .system,
+                speaker: line.0,
+                text: line.1,
+                start: TimeInterval(index * 6),
+                end: TimeInterval(index * 6 + 5)
+            )
+        }
+    }
+
+    /// S10: the notes must come out in the transcript's language. Detection
+    /// runs over the markdown stripped to prose (`captionSource`) — markup
+    /// tokens ("### Action Items", "- [ ]") are English-shaped and would
+    /// dilute the signal. The ownerless grounding trap holds in Spanish too:
+    /// a checkbox about the config-guide task (which nobody took) must not
+    /// OPEN with an owner token; reporting lines inside topic sections may
+    /// legitimately mention the team, so only checkbox lines are checked.
+    @Test("Spanish transcript yields a Spanish summary")
+    func spanishTranscriptYieldsSpanishSummary() async throws {
+        let manager = SummaryModelManager()
+        let engine = try await manager.ensureReady { phase, fraction in
+            print("[E2E] \(phase) \(Int(fraction * 100))%")
+        }
+
+        let pipeline = SummarizationPipeline()
+        var final: MeetingSummary?
+        for try await snapshot in await pipeline.generate(
+            from: Self.spanishFixtureTranscript(), using: engine) {
+            final = snapshot
+        }
+
+        let summary = try #require(final)
+        print("[E2E es] document:\n\(summary.markdown)\n[E2E es] end of document")
+        #expect(!summary.markdown.isEmpty)
+        #expect(summary.markdown.contains("### "))
+
+        let prose = SummarizationPipeline.captionSource(from: summary.markdown)
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(prose)
+        let detected = recognizer.dominantLanguage
+        print("[E2E es] detected output language: \(detected?.rawValue ?? "nil")")
+        #expect(detected == .spanish)
+
+        // Grounding trap, Spanish edition: nobody took the config-guide task,
+        // so no checkbox about it may start with an owner.
+        let ownerTokens = ["you", "team", "tú", "tu", "usted", "equipo", "el", "yo"]
+        let guideCheckboxes = summary.markdown
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { line in
+                let lowered = line.lowercased()
+                return line.hasPrefix("- [ ]")
+                    && (lowered.contains("guía") || lowered.contains("guia"))
+            }
+        #expect(guideCheckboxes.allSatisfy { line in
+            var body = line
+            body.removeFirst("- [ ]".count)
+            let first = body.trimmingCharacters(in: .whitespaces)
+                .components(separatedBy: " ").first?.lowercased() ?? ""
+            return !ownerTokens.contains(first)
         })
     }
 

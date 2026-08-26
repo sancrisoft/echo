@@ -444,6 +444,26 @@ struct MapChunkTests {
         #expect(!system.contains("2-4 sentence"))   // the thin gist contract is gone
     }
 
+    /// S10: on the long route the reduce writes from chunk notes, so the
+    /// notes' language decides the document's language. A detected transcript
+    /// language must reach the map USER prompt as an explicit chunknote
+    /// instruction; with no confident detection the prompt stays generic.
+    @Test("the map prompt carries the explicit chunknote language when detected")
+    func mapPromptCarriesExplicitLanguage() async throws {
+        let real = segment("contenido real", start: 0, end: 4)
+        let chunk = makeChunk(index: 0, segments: [real])
+        let engine = ScriptedEngine(scripts: [[chunkNote("una nota")], [chunkNote("a note")]])
+        let pipeline = SummarizationPipeline()
+
+        _ = try await pipeline.mapChunk(chunk, engine: engine, language: "Spanish")
+        _ = try await pipeline.mapChunk(chunk, engine: engine)
+
+        let withLanguage = try #require(engine.recordedCalls.first).user
+        #expect(withLanguage.contains("Write the chunknote in Spanish."))
+        let without = try #require(engine.recordedCalls.last).user
+        #expect(!without.contains("Write the chunknote in"))
+    }
+
     /// The reduce is the same seam SPEC-07 will drive from its live cache:
     /// precomputed facts + notes in, one adaptive markdown document out. It
     /// writes markdown prose, so it must sample with the markdown preset —
@@ -531,7 +551,34 @@ struct MapChunkTests {
         #expect(second.lowerBound < reminder.lowerBound)
         #expect(user.localizedCaseInsensitiveContains("leave out all social and personal conversation"))
         #expect(user.localizedCaseInsensitiveContains("no section, no mention"))
+        // S10: no language handed in -> generic prompts, ownership recap
+        // stays the closer.
+        #expect(!user.contains("Write the notes in"))
         #expect(user.hasSuffix("checkbox with NO name."))
+    }
+
+    /// S10: a detected language reaches the reduce user prompt explicitly —
+    /// as an opening instruction and as the reminder's final sentence (the
+    /// closing slot dominates, measured in S9). Zero-sum guard: the small-talk
+    /// and ownership recaps survive alongside the appended language sentence.
+    @Test("the reduce user prompt carries the explicit language when detected")
+    func reducePromptCarriesExplicitLanguage() async throws {
+        let facts = MergedFacts(decisions: [
+            SummaryDecision(title: "Lanzar", details: "", evidenceSegmentIDs: ["A"])])
+        let notes = [ChunkMapResult(
+            chunkIndex: 0, decisions: facts.decisions, actionItems: [], openQuestions: [],
+            risks: [], chunkNote: "acordamos lanzar", start: 0, end: 60)]
+        let engine = ScriptedEngine(scripts: [["### Notas\nCuerpo."]])
+        let pipeline = SummarizationPipeline()
+
+        _ = try await pipeline.reduceMarkdown(
+            facts: facts, notes: notes, engine: engine, language: "Spanish")
+        let user = try #require(engine.recordedCalls.first).user
+
+        #expect(user.contains("Write the notes in Spanish."))
+        #expect(user.hasSuffix("Write the notes in Spanish."))
+        #expect(user.localizedCaseInsensitiveContains("no section, no mention"))
+        #expect(user.localizedCaseInsensitiveContains("checkbox with NO name"))
     }
 
     /// The reduce writes the SAME kind of adaptive document as the single-pass
