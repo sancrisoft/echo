@@ -110,21 +110,36 @@ final class CallDetectionController {
     }
     #endif
 
-    /// The catalogued apps behind a set of mic clients: deduped, in catalog
-    /// order, so attribution is deterministic when several apps capture at
-    /// once. `disabledNames` drops apps the user excluded in Settings —
-    /// filtered HERE, the single matcher call site, so a disabled app is
-    /// invisible everywhere downstream (island, scope dropdown, auto-scope;
-    /// decision §2.6). Names, not prefixes: one displayName covers all of an
-    /// app's catalog prefixes, and a stale name (catalog renamed the app) is
+    /// The apps behind a set of mic clients: deduped, in catalog order, so
+    /// attribution is deterministic when several apps capture at once.
+    /// `disabledNames` drops apps the user excluded in Settings — filtered
+    /// HERE, the single matcher call site, so a disabled app is invisible
+    /// everywhere downstream (island, scope dropdown, auto-scope; decision
+    /// §2.6). Names, not prefixes: one displayName covers all of an app's
+    /// catalog prefixes, and a stale name (catalog renamed the app) is
     /// harmlessly ignored because nothing matches it.
+    ///
+    /// `browsers` is the installed-browser tier (`BrowserCatalog`), ordered
+    /// after the curated table so a Zoom call in front of an open browser tab
+    /// is still attributed to Zoom. A browser the curated table already names
+    /// resolves to the curated entry, so it can never appear twice.
     static func matchedApps(
         from clients: [MicActivityMonitor.Client],
-        disabledNames: Set<String> = []
+        disabledNames: Set<String> = [],
+        browsers: [CallApp] = []
     ) -> [CallApp] {
-        let matched = Set(clients.compactMap { CallAppCatalog.match(bundleID: $0.bundleID) })
-        return CallAppCatalog.apps.filter {
-            matched.contains($0) && !disabledNames.contains($0.displayName)
+        let matched = Set(clients.compactMap {
+            CallAppCatalog.match(
+                bundleID: $0.bundleID,
+                appBundleID: $0.appBundleID,
+                browsers: browsers
+            )
+        })
+        var seen = Set<CallApp>()
+        return (CallAppCatalog.apps + browsers).filter {
+            seen.insert($0).inserted
+                && matched.contains($0)
+                && !disabledNames.contains($0.displayName)
         }
     }
 
@@ -134,7 +149,8 @@ final class CallDetectionController {
     private func applyMatchedClients() {
         let apps = Self.matchedApps(
             from: latestClients,
-            disabledNames: Set(settings.disabledCallApps)
+            disabledNames: Set(settings.disabledCallApps),
+            browsers: BrowserCatalog.installed()
         )
         appsInCall = apps
         apply(machine.handle(.matchedAppsChanged(apps)))
