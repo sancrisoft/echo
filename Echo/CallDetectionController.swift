@@ -96,10 +96,14 @@ final class CallDetectionController {
 
     #if DEBUG
     private static func previewFace(named name: String) -> IslandFace? {
+        // ECHO_ISLAND_PREVIEW_APP renders the face with a chosen app name, so
+        // the widest catalog names ("Google Chrome", "Microsoft Teams") can be
+        // checked for wrapping without waiting for a call in that app.
+        let appName = ProcessInfo.processInfo.environment["ECHO_ISLAND_PREVIEW_APP"] ?? "Zoom"
         switch name {
-        case "startPrompt": return .startPrompt(appName: "Zoom", scoped: true)
+        case "startPrompt": return .startPrompt(appName: appName, scoped: true)
         case "compactPill": return .compactPill
-        case "endGrace": return .endGrace(appName: "Zoom")
+        case "endGrace": return .endGrace(appName: appName)
         case "saved": return .saved
         default: return nil
         }
