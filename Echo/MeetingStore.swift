@@ -2,10 +2,11 @@
 //  MeetingStore.swift
 //  Echo
 //
-//  The persistent meeting library: JSON files, one folder per meeting, under
-//  ~/Library/Application Support/Echo/Meetings (SPEC-03). An actor so the JSON
-//  encode/decode (a 3 h transcript is a few MB) runs off the main thread and
-//  concurrent saves/loads/deletes serialize.
+//  The persistent meeting library: one folder per meeting under
+//  ~/Library/Application Support/Echo/Meetings (SPEC-03) — JSON for the meta
+//  and transcript, plain markdown (`summary.md`) as the summary store (S11).
+//  An actor so the JSON encode/decode (a 3 h transcript is a few MB) runs off
+//  the main thread and concurrent saves/loads/deletes serialize.
 //
 //  Why plain JSON and not SwiftData/SQLite: volume is tiny (tens of meetings),
 //  reads are trivial, zero dependencies, human-inspectable, and the folder gives
@@ -15,8 +16,11 @@
 //
 
 import Foundation
+import os
 
 actor MeetingStore {
+
+    private static let log = Logger(subsystem: "com.sancrisoft.Echo", category: "MeetingStore")
 
     /// Root under which every meeting folder lives. `let` + `Sendable` so
     /// `directory(for:)` can read it from a `nonisolated` context (the sidecar
@@ -60,10 +64,10 @@ actor MeetingStore {
     // MARK: - Write
 
     /// Creates the meeting folder and writes `meta.json` (+ `transcript.json`
-    /// when the record carries segments, + `summary.json` when it carries a
+    /// when the record carries segments, + `summary.md` when it carries a
     /// summary). `meta` is normalized to the record it is saved with —
     /// `segmentCount` and `hasSummary` always reflect what actually landed on
-    /// disk.
+    /// disk (so a summary that resolves to no markdown claims nothing).
     ///
     /// A segment-less save is the normal stop path now: a just-stopped meeting
     /// has retained audio and no words yet, and writing an empty
@@ -75,22 +79,27 @@ actor MeetingStore {
 
         var meta = record.meta
         meta.segmentCount = record.segments.count
-        meta.hasSummary = record.summary != nil
 
         if !record.segments.isEmpty {
             try writeJSON(record.segments, to: directory.appending(path: Filename.transcript))
         }
         if let summary = record.summary {
-            try await writeSummary(summary, to: directory.appending(path: Filename.summary))
-            try writeMarkdownSidecar(for: summary, in: directory)
+            meta.hasSummary = try writeSummaryMarkdown(summary, in: directory)
+        } else {
+            meta.hasSummary = false
         }
         // meta.json last: a reader that finds a meta also finds its transcript.
         try writeJSON(meta, to: directory.appending(path: Filename.meta))
     }
 
-    /// Writes `summary.json` and flips `meta.hasSummary` to `true`. Called when
+    /// Writes `summary.md` and flips `meta.hasSummary` to `true`. Called when
     /// a summary lands after the meeting was already saved (SPEC-03 criterion
     /// 2). Throws if the meeting folder / meta is missing.
+    ///
+    /// A summary that resolves to no markdown at all is a total no-op past
+    /// that existence check: nothing lands on disk, so no meta bit —
+    /// `hasSummary`, the caption, the model name — may describe it. They all
+    /// describe the artifact, and the artifact doesn't exist.
     ///
     /// `description`, when provided, is stored on the meta as the row's
     /// one-line caption in the same write (it is generated alongside the
@@ -108,8 +117,7 @@ actor MeetingStore {
         let directory = directory(for: id)
         let metaURL = directory.appending(path: Filename.meta)
         var meta = try decode(MeetingMeta.self, from: metaURL)
-        try await writeSummary(summary, to: directory.appending(path: Filename.summary))
-        try writeMarkdownSidecar(for: summary, in: directory)
+        guard try writeSummaryMarkdown(summary, in: directory) else { return }
         meta.hasSummary = true
         if let description { meta.oneLineDescription = description }
         if let modelName { meta.summaryModelName = modelName }
@@ -178,11 +186,35 @@ actor MeetingStore {
         let segments = FileManager.default.fileExists(atPath: transcriptURL.path)
             ? try decode([TranscriptSegment].self, from: transcriptURL)
             : []
-        let summaryURL = directory.appending(path: Filename.summary)
-        let summary = FileManager.default.fileExists(atPath: summaryURL.path)
-            ? try await readSummary(from: summaryURL)
-            : nil
+        let summary = try await loadSummary(in: directory)
         return MeetingRecord(meta: meta, segments: segments, summary: summary)
+    }
+
+    /// The stored summary, md-first (S11): `summary.md` IS the store — its
+    /// contents load verbatim as the summary's document, legacy fields empty.
+    /// A folder that only has the legacy `summary.json` (the launch migration
+    /// hasn't reached it, or its conversion failed) still loads through the
+    /// decode fallback, exactly as it always did. When BOTH files exist — a
+    /// crash between the migration's md-write and its json-delete — the
+    /// markdown wins: it was derived from that very json, and it is the only
+    /// file the app writes now.
+    private func loadSummary(in directory: URL) async throws -> MeetingSummary? {
+        let markdownURL = directory.appending(path: Filename.summaryMarkdown)
+        if FileManager.default.fileExists(atPath: markdownURL.path) {
+            let contents = try String(decoding: Data(contentsOf: markdownURL), as: UTF8.self)
+            return MeetingSummary(
+                markdown: contents,
+                shortSummary: "",
+                detailedSummary: "",
+                decisions: [],
+                actionItems: [],
+                openQuestions: [],
+                risks: []
+            )
+        }
+        let jsonURL = directory.appending(path: Filename.summary)
+        guard FileManager.default.fileExists(atPath: jsonURL.path) else { return nil }
+        return try await readSummary(from: jsonURL)
     }
 
     // MARK: - Delete
@@ -581,8 +613,8 @@ actor MeetingStore {
         }
     }
 
-    /// Deletes the meeting's derived summary artifacts — `summary.json`, its
-    /// `summary.md` twin, and any stale `rag_index.json` sidecar — and clears
+    /// Deletes the meeting's derived summary artifacts — `summary.md`, any
+    /// legacy `summary.json`, and any stale `rag_index.json` sidecar — and clears
     /// the meta bits that describe them (named targets only, mirroring the
     /// store's delete discipline). Re-transcribe calls this before arming its
     /// pass: the new transcript invalidates all of them, and the cleared
@@ -599,6 +631,80 @@ actor MeetingStore {
         meta.oneLineDescription = nil
         meta.summaryModelName = nil
         try writeJSON(meta, to: metaURL)
+    }
+
+    // MARK: - Legacy summary store migration (S11)
+
+    /// Folds every legacy `summary.json` into the markdown store: decode the
+    /// json, write its `resolvedMarkdown` as `summary.md` (atomic), and ONLY
+    /// once the markdown is safely on disk delete the json — a crash between
+    /// the two steps leaves both files, which the read path (md wins) and
+    /// this run's next launch both absorb, so no summary is ever lost.
+    ///
+    /// RetiredModelCleanup's discipline (ADR-011), applied to data files:
+    /// runs at every launch with no persisted trigger state (an
+    /// already-migrated library is a silent no-op), each meeting's failure is
+    /// non-fatal — logged, json kept, scan continues — and deletions are
+    /// named targets, never a sweep. An actor method so it serializes with
+    /// every concurrent save/load instead of racing them.
+    func migrateLegacySummaries() async {
+        let fileManager = FileManager.default
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            // Root doesn't exist yet (no meeting ever saved) — nothing to do.
+            return
+        }
+
+        for entry in entries {
+            guard (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+            let jsonURL = entry.appending(path: Filename.summary)
+            guard fileManager.fileExists(atPath: jsonURL.path) else { continue }
+            let markdownURL = entry.appending(path: Filename.summaryMarkdown)
+
+            if !fileManager.fileExists(atPath: markdownURL.path) {
+                do {
+                    let summary = try await readSummary(from: jsonURL)
+                    let markdown = summary.resolvedMarkdown
+                    // An entirely empty legacy summary has no markdown to
+                    // carry over: an empty summary.md would claim notes that
+                    // don't exist, and deleting the json would erase the
+                    // meeting's only summary artifact. Leave both; the
+                    // fallback read serves it, honestly empty.
+                    guard !markdown.isEmpty else { continue }
+                    try Data(markdown.utf8).write(to: markdownURL, options: .atomic)
+                } catch {
+                    // Non-fatal by design: the json stays (the fallback read
+                    // keeps the meeting loading exactly as before), the rest
+                    // of the library still migrates, and the next launch is
+                    // the retry.
+                    ErrorTrace.record(
+                        "Legacy summary migration failed",
+                        error: error,
+                        category: "MeetingStore",
+                        metadata: ["folder": entry.lastPathComponent]
+                    )
+                    continue
+                }
+            }
+
+            // The markdown exists — just written, or left by a run that
+            // crashed before this delete. Either way the json is now a
+            // shadow of the real store and goes.
+            do {
+                try fileManager.removeItem(at: jsonURL)
+                Self.log.info("Migrated legacy summary.json for meeting \(entry.lastPathComponent, privacy: .public)")
+            } catch {
+                ErrorTrace.record(
+                    "Legacy summary.json cleanup failed",
+                    error: error,
+                    category: "MeetingStore",
+                    metadata: ["folder": entry.lastPathComponent]
+                )
+            }
+        }
     }
 
     /// Deletes every non-trashed meeting's preserved recording — the
@@ -708,47 +814,36 @@ actor MeetingStore {
         return try Self.decoder.decode(type, from: data)
     }
 
+    /// Writes `summary.md` — the summary store itself (S11), not a mirror:
+    /// exactly `resolvedMarkdown`, which is the verbatim adaptive document,
+    /// or the faithful `###` serialization of a facts-only summary (the long
+    /// route's degraded reduce), so both eras persist as one readable file.
+    /// A summary that resolves to NO markdown writes nothing and returns
+    /// `false` — a file (or a `hasSummary` bit; the callers key on the
+    /// return) claiming a summary with no content would promise notes that
+    /// don't exist.
+    @discardableResult
+    private func writeSummaryMarkdown(_ summary: MeetingSummary, in directory: URL) throws -> Bool {
+        let markdown = summary.resolvedMarkdown
+        guard !markdown.isEmpty else { return false }
+        try Data(markdown.utf8).write(
+            to: directory.appending(path: Filename.summaryMarkdown),
+            options: .atomic
+        )
+        return true
+    }
+
     // `MeetingSummary`'s `Codable` conformance is main-actor-isolated: its nested
-    // value types (`SummaryDecision` etc.) live in a file this spec must not
-    // modify and are not declared `nonisolated`, so the synthesized conformance
-    // is bound to the main actor. The summary is tiny (a few short strings and
-    // small arrays), so serializing it on the main actor costs microseconds —
-    // the byte-level file write still happens back here in the actor, and the
-    // large transcript never touches the main thread.
-
-    private func writeSummary(_ summary: MeetingSummary, to url: URL) async throws {
-        let data = try await Self.encodeSummary(summary)
-        try data.write(to: url, options: .atomic)
-    }
-
-    /// Mirrors `summary.md` to exactly the summary's adaptive markdown — the
-    /// human-readable twin of `summary.json`, and never the read path. Write
-    /// when non-empty, REMOVE when empty: a summary regenerated over an old
-    /// markdown one can still come off the legacy route (no markdown), and a
-    /// sidecar that survived it would show stale notes beside the new
-    /// `summary.json`. Removal is tolerant (`try?`), matching the store's
-    /// artifact-cleanup discipline — usually there is simply nothing to remove.
-    private func writeMarkdownSidecar(for summary: MeetingSummary, in directory: URL) throws {
-        let markdown = summary.markdown
-        let url = directory.appending(path: Filename.summaryMarkdown)
-        guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            try? FileManager.default.removeItem(at: url)
-            return
-        }
-        try Data(markdown.utf8).write(to: url, options: .atomic)
-    }
+    // value types (`SummaryDecision` etc.) are not declared `nonisolated`, so
+    // the conformance is bound to the main actor. Only the legacy DECODE
+    // survives S11 (the fallback read and the launch migration both need it —
+    // nothing encodes a summary to JSON any more); it is tiny, so the hop
+    // costs microseconds and the large transcript never touches the main
+    // thread.
 
     private func readSummary(from url: URL) async throws -> MeetingSummary {
         let data = try Data(contentsOf: url)
         return try await Self.decodeSummary(data)
-    }
-
-    @MainActor
-    private static func encodeSummary(_ summary: MeetingSummary) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-        encoder.dateEncodingStrategy = .iso8601
-        return try encoder.encode(summary)
     }
 
     @MainActor
@@ -761,10 +856,14 @@ actor MeetingStore {
     enum Filename {
         static let meta = "meta.json"
         static let transcript = "transcript.json"
+        /// The LEGACY summary store (pre-S11). Never written any more — kept
+        /// only as the read fallback for folders the launch migration hasn't
+        /// converted yet, and deleted by that migration once `summary.md`
+        /// safely exists.
         static let summary = "summary.json"
-        /// The adaptive markdown document, written beside `summary.json` as a
-        /// plain readable artifact (open it in any editor, sync it anywhere).
-        /// Derived, never read back — `summary.json` stays authoritative.
+        /// THE summary store (S11): the adaptive markdown document itself —
+        /// plain, readable, syncable (open it in any editor). The markdown
+        /// files ARE the database; `summary.json` is only their migrated past.
         static let summaryMarkdown = "summary.md"
     }
 }

@@ -195,8 +195,8 @@ actor SummarizationPipeline {
 
         // Reduce (markdown): one adaptive document over the merged facts +
         // part notes. Snapshots carry the merged facts alongside the growing
-        // document so the final summary keeps both — the store's summary.md
-        // mirror reads the markdown, fact consumers read the sections.
+        // document so the final summary keeps both — the summary.md store
+        // persists the resolved markdown, fact consumers read the sections.
         try Task.checkCancellation()
         progress?("Writing summary…")
         let merged = mergeMapResults(mapResults)

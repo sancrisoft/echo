@@ -66,6 +66,21 @@ struct EchoApp: App {
         if !TestHost.isActive {
             callDetection.start()
         }
+
+        // Fold any legacy summary.json into the summary.md store (S11) — the
+        // markdown files ARE the database now. Same slot and discipline as
+        // the model cleanup above (ADR-011): every launch, idempotent (an
+        // already-migrated library is a silent no-op, so no version flag is
+        // persisted), non-fatal per meeting, detached at utility priority so
+        // it never sits in front of recording readiness. Until it reaches a
+        // folder, the store's json fallback keeps that meeting loading.
+        if !TestHost.isActive {
+            let library = recording.library
+            Task.detached(priority: .utility) {
+                await library.migrateLegacySummaries()
+            }
+        }
+
         _controller = State(initialValue: recording)
         _settings = State(initialValue: settings)
         _callDetection = State(initialValue: callDetection)
