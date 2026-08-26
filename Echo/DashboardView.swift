@@ -15,9 +15,9 @@
 //  final-only UX; the transcript is ready after the meeting ends).
 //
 
+import AppKit
 import SwiftUI
 #if DEBUG
-import AppKit
 import ScreenCaptureKit
 #endif
 
@@ -697,9 +697,15 @@ private struct AllMeetingsView: View {
     @State private var searchText = ""
     @State private var sortOrder: MeetingSortOrder = .recent
     @State private var selection: UUID?
+    /// The row under the pointer, owned here rather than per-row so the
+    /// highlight is painted in one place — the row's own frame is inset from
+    /// the card, and a `@State` inside the row would only track the content.
+    @State private var hoveredID: UUID?
+    @State private var rightClicks = RowRightClickWatcher()
     @State private var renameTarget: MeetingMeta?
     @State private var renameText = ""
     @FocusState private var searchFocused: Bool
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -726,6 +732,11 @@ private struct AllMeetingsView: View {
             content
         }
         .navigationTitle("")
+        .onAppear {
+            rightClicks.onContextClick = { selection = $0 }
+            rightClicks.start()
+        }
+        .onDisappear { rightClicks.stop() }
         .alert("Rename meeting", isPresented: renamePresented) {
             TextField("Meeting name", text: $renameText)
             Button("Cancel", role: .cancel) { renameTarget = nil }
@@ -826,25 +837,88 @@ private struct AllMeetingsView: View {
     }
 
     private func meetingList(_ metas: [MeetingMeta]) -> some View {
-        // Plain style + explicit 20pt row insets: rows share the header's
-        // horizontal padding, so each row's ⋯ button lines up with the
-        // header's sort control.
-        List(selection: $selection) {
-            if sortOrder.groupsByDate {
-                ForEach(MeetingDateGroup.groups(for: metas)) { group in
-                    Section(group.title) { rows(for: group.metas) }
+        // The visible, flattened order — what the arrow keys walk. Sections are
+        // a presentation detail: ↓ from the last row of "Today" lands on the
+        // first row of "Yesterday", not nowhere.
+        let ids = metas.map(\.id)
+        // Plain style. The row insets stop 12pt short of the header's 20pt
+        // padding and `MeetingRow` makes up the difference internally, so the
+        // content still lines its ⋯ button up with the header's sort control
+        // while the selection/hover card has 12pt of gutter to sit in.
+        //
+        // Deliberately NO `selection:` binding. The table draws its own
+        // full-bleed accent bar for a selected row, and this list wants the
+        // sidebar's indigo card instead; with the binding in place both paint,
+        // one on top of the other. `selection` is ours — see `MeetingRowChrome`.
+        return ScrollViewReader { proxy in
+            List {
+                if sortOrder.groupsByDate {
+                    ForEach(MeetingDateGroup.groups(for: metas)) { group in
+                        Section(group.title) { rows(for: group.metas) }
+                    }
+                } else {
+                    rows(for: metas)
                 }
-            } else {
-                rows(for: metas)
+            }
+            .listStyle(.plain)
+            // The list has to be able to hold focus for any of the key handlers
+            // below to see a key at all; the selection card is the focus
+            // affordance, so the system ring would only add noise around the
+            // whole pane.
+            .focusable()
+            .focusEffectDisabled()
+            .focused($listFocused)
+            .onKeyPress(.upArrow) { move(.up, in: ids, using: proxy) }
+            .onKeyPress(.downArrow) { move(.down, in: ids, using: proxy) }
+            .onKeyPress(.home) { move(.first, in: ids, using: proxy) }
+            .onKeyPress(.end) { move(.last, in: ids, using: proxy) }
+            .onKeyPress(.return) { openSelected() }
+            .onDeleteCommand { trashSelected(in: ids) }
+            #if DEBUG
+            // Dev-only verification hook, alongside the window's
+            // ECHO_SNAPSHOT_PATH dump: a pointer and a keyboard can't be driven
+            // from the CLI, so this stages the two states worth looking at —
+            // the first row selected, the second hovered — on the run that gets
+            // captured. Inert otherwise.
+            .onAppear {
+                guard ProcessInfo.processInfo.environment["ECHO_PRESELECT_ROW"] == "1" else { return }
+                selection = metas.first?.id
+                hoveredID = metas.dropFirst().first?.id
+            }
+            #endif
+            // Arrive with the list ready for the keyboard, and take focus back
+            // when a detail closes — otherwise the arrows are dead until the
+            // user clicks a row.
+            .onAppear { listFocused = true }
+            .onChange(of: opened) { _, detail in if detail == nil { listFocused = true } }
+            // A search keystroke can filter the selected meeting away. Dropping
+            // the selection keeps the list from highlighting a row that is no
+            // longer there and gives the next arrow press a clean start.
+            .onChange(of: ids) { _, visible in
+                selection = MeetingListNavigation.reconcile(selection, with: visible)
             }
         }
-        .listStyle(.plain)
-        .onDeleteCommand { trashSelected() }
-        .onKeyPress(.return) {
-            guard let selection else { return .ignored }
-            opened = OpenedDetail(target: .saved(selection))
-            return .handled
-        }
+    }
+
+    // MARK: Keyboard
+
+    /// Moves the selection and scrolls just far enough to show where it went.
+    /// Returns `.ignored` when there is nowhere to go, so the key falls through
+    /// to whatever would normally handle it (scrolling, say) instead of being
+    /// silently eaten.
+    private func move(_ direction: MeetingListMove, in ids: [UUID], using proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard opened == nil,
+              let destination = MeetingListNavigation.destination(from: selection, move: direction, in: ids)
+        else { return .ignored }
+        selection = destination
+        proxy.scrollTo(destination)
+        return .handled
+    }
+
+    private func openSelected() -> KeyPress.Result {
+        guard opened == nil, let selection else { return .ignored }
+        opened = OpenedDetail(target: .saved(selection))
+        return .handled
     }
 
     private func rows(for metas: [MeetingMeta]) -> some View {
@@ -860,12 +934,69 @@ private struct AllMeetingsView: View {
                     renameText = meta.title
                 }
             )
-            .tag(meta.id)
-            .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-            .simultaneousGesture(TapGesture(count: 2).onEnded {
-                opened = OpenedDetail(target: .saved(meta.id))
-            })
+            .id(meta.id)
+            .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
+            .listRowBackground(
+                MeetingRowChrome(isSelected: selection == meta.id, isHovered: hoveredID == meta.id)
+            )
+            .onHover { updateHover(meta.id, inside: $0) }
+            // The double-click used to be a `simultaneousGesture`, which sat in
+            // front of the table's own click handling and swallowed the first
+            // click whole: nothing selected, nothing highlighted, and the list
+            // read as frozen until you double-clicked.
+            //
+            // Selection deliberately does NOT ride a second tap gesture. Two
+            // taps of different counts on one view force SwiftUI to wait out
+            // the system's double-click interval — half a second by default —
+            // before it can rule out a double, and that wait is felt as the
+            // highlight arriving late. A zero-distance drag takes no part in
+            // that disambiguation: it reports the press as it happens, which
+            // is also the moment Finder moves its own highlight. `onEnded` is
+            // there because a press that never moves is not guaranteed to
+            // produce a change on every path; `select` is idempotent.
+            .onTapGesture(count: 2) { opened = OpenedDetail(target: .saved(meta.id)) }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in select(meta.id) }
+                    .onEnded { _ in select(meta.id) }
+            )
+            // Right-click anywhere on the row, not only on the ⋯ button. Same
+            // items, one definition; `RowRightClickWatcher` moves the selection
+            // onto the row first, so the menu is visibly about that meeting.
+            .contextMenu {
+                MeetingQuickActions(
+                    meta: meta,
+                    onOpen: { tab in opened = OpenedDetail(target: .saved(meta.id), tab: tab) },
+                    onRename: {
+                        renameTarget = meta
+                        renameText = meta.title
+                    }
+                )
+            }
         }
+    }
+
+    /// Moves the selection onto a row. Idempotent: the press gesture reports
+    /// more than once for a single click, and re-selecting the row that is
+    /// already selected must not churn state.
+    ///
+    /// Clicking a row is also how you start driving the list from the keyboard,
+    /// so the press has to bring focus with it — including a press on the row
+    /// that is already selected, which is why the focus line sits outside the
+    /// early return.
+    private func select(_ id: UUID) {
+        if !listFocused { listFocused = true }
+        guard selection != id else { return }
+        selection = id
+    }
+
+    /// Keeps the hover state and the right-click watcher's idea of the hovered
+    /// row in step — they have to agree, because the watcher has no other way
+    /// to know which row a right-click landed on.
+    private func updateHover(_ id: UUID, inside: Bool) {
+        let next: UUID? = inside ? id : (hoveredID == id ? nil : hoveredID)
+        hoveredID = next
+        rightClicks.hoveredID = next
     }
 
     // MARK: Data
@@ -878,10 +1009,13 @@ private struct AllMeetingsView: View {
         Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
     }
 
-    private func trashSelected() {
-        guard let selection else { return }
-        self.selection = nil
-        Task { await controller.library.trash(selection) }
+    /// Trashes the selected meeting and hands the selection to the row that
+    /// slides up into the gap, so ⌫ can be pressed twice in a row without
+    /// reaching for the mouse in between.
+    private func trashSelected(in ids: [UUID]) {
+        guard opened == nil, let target = selection else { return }
+        selection = MeetingListNavigation.selectionAfterRemoving(target, from: ids)
+        Task { await controller.library.trash(target) }
     }
 }
 
@@ -892,8 +1026,11 @@ private struct TrashView: View {
     @Binding var opened: OpenedDetail?
 
     @State private var selection: UUID?
+    @State private var hoveredID: UUID?
+    @State private var rightClicks = RowRightClickWatcher()
     @State private var confirmDelete: MeetingMeta?
     @State private var confirmEmpty = false
+    @FocusState private var listFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -901,6 +1038,11 @@ private struct TrashView: View {
             content
         }
         .navigationTitle("")
+        .onAppear {
+            rightClicks.onContextClick = { selection = $0 }
+            rightClicks.start()
+        }
+        .onDisappear { rightClicks.stop() }
         .confirmationDialog(
             "Delete permanently?",
             isPresented: deletePresented,
@@ -953,32 +1095,101 @@ private struct TrashView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List(selection: $selection) {
-                ForEach(trashed) { meta in
-                    TrashRow(
-                        meta: meta,
-                        onOpen: { opened = OpenedDetail(target: .saved(meta.id)) },
-                        onRestore: { Task { await controller.library.restore(meta.id) } },
-                        onDelete: { confirmDelete = meta }
-                    )
-                    .tag(meta.id)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-                    .simultaneousGesture(TapGesture(count: 2).onEnded {
-                        opened = OpenedDetail(target: .saved(meta.id))
-                    })
+            // Same treatment as the Meetings list, for the same reasons: no
+            // `selection:` binding (the card below is the highlight), row
+            // insets that leave the card a gutter, a press gesture in place of
+            // the double-click gesture that used to eat the first click, and
+            // the same arrow / Return / ⌫ keys over the visible order.
+            let ids = trashed.map(\.id)
+            ScrollViewReader { proxy in
+                List {
+                    ForEach(trashed) { meta in
+                        TrashRow(
+                            meta: meta,
+                            onOpen: { opened = OpenedDetail(target: .saved(meta.id)) },
+                            onRestore: { Task { await controller.library.restore(meta.id) } },
+                            onDelete: { confirmDelete = meta }
+                        )
+                        .id(meta.id)
+                        .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
+                        .listRowBackground(
+                            MeetingRowChrome(isSelected: selection == meta.id, isHovered: hoveredID == meta.id)
+                        )
+                        .onHover { updateHover(meta.id, inside: $0) }
+                        .onTapGesture(count: 2) { opened = OpenedDetail(target: .saved(meta.id)) }
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { _ in select(meta.id) }
+                                .onEnded { _ in select(meta.id) }
+                        )
+                        .contextMenu {
+                            TrashQuickActions(
+                                meta: meta,
+                                onRestore: { Task { await controller.library.restore(meta.id) } },
+                                onDelete: { confirmDelete = meta }
+                            )
+                        }
+                    }
                 }
-            }
-            .listStyle(.plain)
-            .onDeleteCommand {
-                if let selection, let meta = controller.library.meta(for: selection) {
-                    confirmDelete = meta
+                .listStyle(.plain)
+                .focusable()
+                .focusEffectDisabled()
+                .focused($listFocused)
+                .onKeyPress(.upArrow) { move(.up, in: ids, using: proxy) }
+                .onKeyPress(.downArrow) { move(.down, in: ids, using: proxy) }
+                .onKeyPress(.home) { move(.first, in: ids, using: proxy) }
+                .onKeyPress(.end) { move(.last, in: ids, using: proxy) }
+                .onKeyPress(.return) { openSelected() }
+                // ⌫ asks rather than deletes: from Trash the deletion is
+                // permanent, so the confirmation is the whole safety net.
+                .onDeleteCommand {
+                    if let selection, let meta = controller.library.meta(for: selection) {
+                        confirmDelete = meta
+                    }
+                }
+                .onAppear { listFocused = true }
+                .onChange(of: opened) { _, detail in if detail == nil { listFocused = true } }
+                .onChange(of: ids) { _, visible in
+                    selection = MeetingListNavigation.reconcile(selection, with: visible)
                 }
             }
         }
     }
 
+    private func move(_ direction: MeetingListMove, in ids: [UUID], using proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard opened == nil,
+              let destination = MeetingListNavigation.destination(from: selection, move: direction, in: ids)
+        else { return .ignored }
+        selection = destination
+        proxy.scrollTo(destination)
+        return .handled
+    }
+
+    private func openSelected() -> KeyPress.Result {
+        guard opened == nil, let selection else { return .ignored }
+        opened = OpenedDetail(target: .saved(selection))
+        return .handled
+    }
+
     private var deletePresented: Binding<Bool> {
         Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })
+    }
+
+    /// See `AllMeetingsView.select`: the press gesture reports more than once
+    /// per click, so this has to be idempotent, and the press is what hands the
+    /// list its keyboard focus.
+    private func select(_ id: UUID) {
+        if !listFocused { listFocused = true }
+        guard selection != id else { return }
+        selection = id
+    }
+
+    /// See `AllMeetingsView.updateHover`: the watcher's hovered row has to
+    /// track this list's.
+    private func updateHover(_ id: UUID, inside: Bool) {
+        let next: UUID? = inside ? id : (hoveredID == id ? nil : hoveredID)
+        hoveredID = next
+        rightClicks.hoveredID = next
     }
 }
 
@@ -1006,7 +1217,78 @@ private struct SettingsPageView: View {
     }
 }
 
+// MARK: - Right-click selection
+
+/// Makes a right-click select the row it is about to open a menu on, the way
+/// Finder does.
+///
+/// There is no SwiftUI hook for this: right-click is not a `TapGesture`, and
+/// `contextMenu` never says which row it is opening for or when. But the list
+/// already tracks the row under the pointer for its hover card, and a
+/// right-click can only land on the row the pointer is over — so a local event
+/// monitor watching for context clicks, plus that hovered id, is the whole
+/// mechanism. The event is returned untouched, so the menu still opens exactly
+/// as it would have.
+///
+/// The list owns one of these as plain state (deliberately not `@Observable`:
+/// nothing here should redraw a view) and keeps `hoveredID` current from the
+/// same place it updates its own hover state.
+@MainActor
+private final class RowRightClickWatcher {
+    var hoveredID: UUID?
+    var onContextClick: ((UUID) -> Void)?
+
+    private var monitor: Any?
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { [weak self] event in
+            MainActor.assumeIsolated {
+                // Control-click is the other way to raise a context menu, and
+                // it arrives as an ordinary left click.
+                let isContextClick = event.type == .rightMouseDown
+                    || event.modifierFlags.contains(.control)
+                if isContextClick, let self, let id = self.hoveredID { self.onContextClick?(id) }
+            }
+            return event
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
+
 // MARK: - Rows
+
+/// A row's hover / selected card, shared by the Meetings and Trash lists and
+/// installed as the row's `listRowBackground` so it fills the full row height
+/// and sits behind the content.
+///
+/// Painted here rather than left to the table: a `List` with a `selection`
+/// binding draws its own full-bleed accent bar, which is not the look this
+/// window wants and which would show through underneath this card. The tint is
+/// the sidebar's selected-row tint, so the two selections in the window read as
+/// the same idea. `listRowBackground` covers the whole row regardless of
+/// `listRowInsets`, so the 12pt gutter has to come from this view's own
+/// padding.
+private struct MeetingRowChrome: View {
+    let isSelected: Bool
+    let isHovered: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        shape
+            .fill(
+                isSelected ? Color.echoIndigo.opacity(0.14)
+                    : isHovered ? Color.primary.opacity(0.06)
+                    : Color.clear
+            )
+            .overlay(shape.strokeBorder(isSelected ? Color.echoIndigo.opacity(0.35) : .clear))
+            .padding(.horizontal, 12)
+    }
+}
 
 /// The small indigo app mark used for meeting rows and the top bar.
 private struct MeetingGlyph: View {
@@ -1080,29 +1362,16 @@ private struct MeetingRow: View {
             quickActions
         }
         .padding(.vertical, 4)
+        // Restores the 20pt the list's row insets gave up so the hover /
+        // selected card can breathe: content stays where it was, the card is
+        // what moved.
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
     }
 
     private var quickActions: some View {
         Menu {
-            Button { onOpen(.transcript) } label: { Label("Open meeting", systemImage: "arrow.up.forward.square") }
-            Button { onOpen(.transcript) } label: { Label("View transcript", systemImage: "doc.text") }
-            Button(action: onRename) { Label("Rename", systemImage: "pencil") }
-
-            Menu {
-                ForEach(MeetingExportFormat.allCases) { format in
-                    Button(format.menuTitle) { export(as: format) }
-                }
-            } label: {
-                Label("Export…", systemImage: "square.and.arrow.up")
-            }
-
-            Button { copySummary() } label: { Label("Copy summary as Markdown", systemImage: "doc.on.doc") }
-                .disabled(!meta.hasSummary)
-            Button { reveal() } label: { Label("Reveal in Finder", systemImage: "folder") }
-
-            Divider()
-            Button(role: .destructive) { trash() } label: { Label("Delete", systemImage: "trash") }
+            MeetingQuickActions(meta: meta, onOpen: onOpen, onRename: onRename)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.body.weight(.semibold))
@@ -1137,6 +1406,38 @@ private struct MeetingRow: View {
         }
     }
 
+}
+
+/// A meeting's quick actions, defined once and mounted twice: as the row's ⋯
+/// menu and as the right-click menu covering the whole row. Two copies of this
+/// list would drift the moment one of them gains an action.
+private struct MeetingQuickActions: View {
+    @Environment(RecordingController.self) private var controller
+    let meta: MeetingMeta
+    let onOpen: (DetailTab) -> Void
+    let onRename: () -> Void
+
+    var body: some View {
+        Button { onOpen(.transcript) } label: { Label("Open meeting", systemImage: "arrow.up.forward.square") }
+        Button { onOpen(.transcript) } label: { Label("View transcript", systemImage: "doc.text") }
+        Button(action: onRename) { Label("Rename", systemImage: "pencil") }
+
+        Menu {
+            ForEach(MeetingExportFormat.allCases) { format in
+                Button(format.menuTitle) { export(as: format) }
+            }
+        } label: {
+            Label("Export…", systemImage: "square.and.arrow.up")
+        }
+
+        Button { copySummary() } label: { Label("Copy summary as Markdown", systemImage: "doc.on.doc") }
+            .disabled(!meta.hasSummary)
+        Button { reveal() } label: { Label("Reveal in Finder", systemImage: "folder") }
+
+        Divider()
+        Button(role: .destructive) { trash() } label: { Label("Delete", systemImage: "trash") }
+    }
+
     private func export(as format: MeetingExportFormat) {
         Task {
             if let record = await controller.library.loadRecord(meta.id) {
@@ -1159,6 +1460,24 @@ private struct MeetingRow: View {
 
     private func trash() {
         Task { await controller.library.trash(meta.id) }
+    }
+}
+
+/// A trashed meeting's quick actions — same "define once, mount twice" split as
+/// `MeetingQuickActions`, for the ⋯ menu and the row's right-click menu.
+private struct TrashQuickActions: View {
+    @Environment(RecordingController.self) private var controller
+    let meta: MeetingMeta
+    let onRestore: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        Button(action: onRestore) { Label("Restore", systemImage: "arrow.uturn.backward") }
+        Button { MeetingActions.revealInFinder(controller.library.directory(for: meta.id)) } label: {
+            Label("Reveal in Finder", systemImage: "folder")
+        }
+        Divider()
+        Button(role: .destructive, action: onDelete) { Label("Delete Permanently", systemImage: "trash") }
     }
 }
 
@@ -1230,7 +1549,6 @@ private struct LiveMeetingRow: View {
 }
 
 private struct TrashRow: View {
-    @Environment(RecordingController.self) private var controller
     let meta: MeetingMeta
     let onOpen: () -> Void
     let onRestore: () -> Void
@@ -1258,12 +1576,7 @@ private struct TrashRow: View {
                 .controlSize(.small)
 
             Menu {
-                Button(action: onRestore) { Label("Restore", systemImage: "arrow.uturn.backward") }
-                Button { MeetingActions.revealInFinder(controller.library.directory(for: meta.id)) } label: {
-                    Label("Reveal in Finder", systemImage: "folder")
-                }
-                Divider()
-                Button(role: .destructive, action: onDelete) { Label("Delete Permanently", systemImage: "trash") }
+                TrashQuickActions(meta: meta, onRestore: onRestore, onDelete: onDelete)
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.body.weight(.semibold))
@@ -1276,6 +1589,9 @@ private struct TrashRow: View {
             .fixedSize()
         }
         .padding(.vertical, 4)
+        // Matches `MeetingRow`: the 8pt the list's row insets gave up so the
+        // hover / selected card has a gutter.
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
     }
 
@@ -2078,7 +2394,6 @@ private struct LiveMeetingDetail: View {
         case .streaming(let meetingSummary):
             SummaryContentView(
                 summary: meetingSummary,
-                segments: controller.state.segments,
                 meta: activeMeta,
                 isStreaming: true
             )
@@ -2086,7 +2401,6 @@ private struct LiveMeetingDetail: View {
         case .ready(let meetingSummary):
             SummaryContentView(
                 summary: meetingSummary,
-                segments: controller.state.segments,
                 meta: activeMeta
             )
 
@@ -2364,7 +2678,7 @@ private struct PastMeetingDetail: View {
     @ViewBuilder
     private func summary(for record: MeetingRecord) -> some View {
         if let summary = record.summary {
-            SummaryContentView(summary: summary, segments: record.segments, meta: record.meta)
+            SummaryContentView(summary: summary, meta: record.meta)
         } else if controller.backfillingMeetingID == id {
             SummaryGenerationProgressView(subject: "this meeting's transcript")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2546,7 +2860,6 @@ private struct LiveTranscriptFooter: View {
 
 private struct SummaryContentView: View {
     let summary: MeetingSummary
-    let segments: [TranscriptSegment]
     /// Titles and dates the copied Markdown header — `nil` for a session that
     /// hasn't persisted yet, which copies the summary body alone.
     var meta: MeetingMeta?
@@ -2554,10 +2867,6 @@ private struct SummaryContentView: View {
 
     /// Two-second "Copied" confirmation on the share button.
     @State private var copied = false
-
-    private var segmentByID: [String: TranscriptSegment] {
-        Dictionary(uniqueKeysWithValues: segments.map { ($0.id.uuidString.lowercased(), $0) })
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -2609,192 +2918,17 @@ private struct SummaryContentView: View {
                     }
                 }
 
-                // While streaming, only reveal blocks once they have content so
-                // the layout fills in instead of flashing placeholders.
-                if !isStreaming || !summary.shortSummary.isEmpty {
-                    SummaryTextBlock(
-                        title: "Short summary",
-                        systemImage: "text.line.first.and.arrowtriangle.forward",
-                        text: summary.shortSummary
-                    )
-                }
-
-                if !isStreaming || !summary.detailedSummary.isEmpty {
-                    SummaryTextBlock(
-                        title: "Detailed summary",
-                        systemImage: "doc.text",
-                        text: summary.detailedSummary
-                    )
-                }
-
-                if !isStreaming || !summary.decisions.isEmpty { decisionsSection }
-                if !isStreaming || !summary.actionItems.isEmpty { actionItemsSection }
-                if !isStreaming || !summary.openQuestions.isEmpty { openQuestionsSection }
-                if !isStreaming || !summary.risks.isEmpty { risksSection }
+                // One render path for both eras: `resolvedMarkdown` is the
+                // model's document verbatim, or the legacy fixed fields
+                // serialized to the same grammar. While streaming, the
+                // document simply grows — MarkdownView re-parses per tick
+                // (microseconds by the parser's contract), so blocks take
+                // their real shape the moment their markdown lands.
+                MarkdownView(markdown: summary.resolvedMarkdown)
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxHeight: .infinity)
-    }
-
-    private var decisionsSection: some View {
-        SummarySection(title: "Decisions", systemImage: "checkmark.seal") {
-            if summary.decisions.isEmpty {
-                EmptySummaryRow(text: "No decisions captured.")
-            } else {
-                ForEach(summary.decisions.indices, id: \.self) { index in
-                    let decision = summary.decisions[index]
-                    SummaryItemRow(
-                        title: decision.title,
-                        detail: decision.details,
-                        metadata: evidenceText(decision.evidenceSegmentIDs)
-                    )
-                }
-            }
-        }
-    }
-
-    private var actionItemsSection: some View {
-        SummarySection(title: "Action items", systemImage: "checklist") {
-            if summary.actionItems.isEmpty {
-                EmptySummaryRow(text: "No action items captured.")
-            } else {
-                ForEach(summary.actionItems.indices, id: \.self) { index in
-                    let item = summary.actionItems[index]
-                    SummaryItemRow(
-                        title: item.task,
-                        detail: actionItemDetail(item),
-                        metadata: evidenceText(item.evidenceSegmentIDs)
-                    )
-                }
-            }
-        }
-    }
-
-    private var openQuestionsSection: some View {
-        SummarySection(title: "Open questions", systemImage: "questionmark.circle") {
-            if summary.openQuestions.isEmpty {
-                EmptySummaryRow(text: "No open questions captured.")
-            } else {
-                ForEach(summary.openQuestions.indices, id: \.self) { index in
-                    let question = summary.openQuestions[index]
-                    SummaryItemRow(
-                        title: question.question,
-                        detail: question.context,
-                        metadata: evidenceText(question.evidenceSegmentIDs)
-                    )
-                }
-            }
-        }
-    }
-
-    private var risksSection: some View {
-        SummarySection(title: "Risks or blockers", systemImage: "exclamationmark.triangle") {
-            if summary.risks.isEmpty {
-                EmptySummaryRow(text: "No risks or blockers captured.")
-            } else {
-                ForEach(summary.risks.indices, id: \.self) { index in
-                    let risk = summary.risks[index]
-                    SummaryItemRow(
-                        title: risk.risk,
-                        detail: risk.details,
-                        metadata: evidenceText(risk.evidenceSegmentIDs)
-                    )
-                }
-            }
-        }
-    }
-
-    private func actionItemDetail(_ item: SummaryActionItem) -> String? {
-        var parts: [String] = []
-        if let owner = item.owner, !owner.isEmpty {
-            parts.append("Owner: \(owner)")
-        }
-        if let dueDate = item.dueDate, !dueDate.isEmpty {
-            parts.append("Due: \(dueDate)")
-        }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    private func evidenceText(_ ids: [String]) -> String? {
-        let times = ids
-            .compactMap { segmentByID[$0.lowercased()]?.start }
-            .map(Self.timestamp)
-        guard !times.isEmpty else { return nil }
-        return "Evidence: " + times.joined(separator: ", ")
-    }
-
-    nonisolated private static func timestamp(_ value: TimeInterval) -> String {
-        let total = Int(value)
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-}
-
-private struct SummaryTextBlock: View {
-    let title: String
-    let systemImage: String
-    let text: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-            Text(text.isEmpty ? "Not available." : text)
-                .font(.body)
-                .textSelection(.enabled)
-        }
-    }
-}
-
-private struct SummarySection<Content: View>: View {
-    let title: String
-    let systemImage: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-            VStack(alignment: .leading, spacing: 10) {
-                content
-            }
-        }
-    }
-}
-
-private struct SummaryItemRow: View {
-    let title: String
-    let detail: String?
-    let metadata: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.body.weight(.medium))
-                .textSelection(.enabled)
-            if let detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            if let metadata {
-                Text(metadata)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.leading, 4)
-    }
-}
-
-private struct EmptySummaryRow: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.body)
-            .foregroundStyle(.secondary)
     }
 }

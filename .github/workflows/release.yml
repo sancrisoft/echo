@@ -16,6 +16,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # A hotfix ships INSIDE the version it fixes: `v0.0.10-hotfix.1` rebuilds
+      # 0.0.10 and replaces the zip in the existing v0.0.10 release, so that
+      # release stays the one users install (scripts/install.sh with no argument
+      # fetches the latest release) and no published tag is ever rewritten. The
+      # hotfix tag itself is the provenance: it points at the code the
+      # replacement artifact was built from. Only the suffix is stripped, so
+      # `-rc`/`-beta` style tags keep making their own releases.
+      - name: Resolve version
+        run: |
+          RELEASE_TAG="${GITHUB_REF_NAME%%-hotfix.*}"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+
       # Same Xcode build (17F113) as the local development machine.
       - name: Select Xcode 26.6
         run: sudo xcode-select -s /Applications/Xcode_26.6.app
@@ -27,9 +40,13 @@ jobs:
 
       # Ad-hoc signed (no Apple Developer account). arm64 only: the vendored
       # webrtc-apm static lib and MLX are arm64-only.
+      #
+      # The marketing version is the release's (0.0.10 for a hotfix of it, since
+      # CFBundleShortVersionString has to stay numeric); the build number is the
+      # run number, which is what makes a hotfix build distinguishable from the
+      # original one it replaces.
       - name: Build Echo.app (Release)
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           xcodebuild \
             -project Echo.xcodeproj \
             -scheme Echo \
@@ -47,23 +64,31 @@ jobs:
 
       - name: Package zip
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           APP="build/Build/Products/Release/Echo.app"
           codesign --verify --deep --strict "$APP"
           ditto -c -k --keepParent "$APP" "Echo-$VERSION.zip"
 
-      - name: Create GitHub release
+      # Publish: create the release on a normal version tag, or replace the
+      # asset in place when the release already exists (a hotfix, or a rebuild
+      # of a version). Idempotent on purpose — `gh release create` alone fails
+      # on an existing release, which is what used to make re-issuing a version
+      # impossible.
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          gh release create "$GITHUB_REF_NAME" "Echo-$VERSION.zip" \
-            --title "Echo $VERSION" \
-            --generate-notes \
-            --notes "Install or update with:
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG exists — replacing Echo-$VERSION.zip in place."
+            gh release upload "$RELEASE_TAG" "Echo-$VERSION.zip" --clobber
+          else
+            gh release create "$RELEASE_TAG" "Echo-$VERSION.zip" \
+              --title "Echo $VERSION" \
+              --generate-notes \
+              --notes "Install or update with:
 
           \`\`\`sh
           gh api -H \"Accept: application/vnd.github.raw\" repos/${GITHUB_REPOSITORY}/contents/scripts/install.sh | bash
           \`\`\`
 
           No \`gh\`? See the [install instructions](https://github.com/${GITHUB_REPOSITORY}#install) for a curl + token alternative."
+          fi

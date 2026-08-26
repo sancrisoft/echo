@@ -105,9 +105,11 @@ struct SettingsView: View {
             ))
 
             // One row per unique app name (a name owning several bundle
-            // prefixes appears once and covers all of them). Greyed out —
-            // not hidden — while the master is off.
-            ForEach(CallAppCatalog.uniqueDisplayNames, id: \.self) { name in
+            // prefixes appears once and covers all of them), followed by every
+            // browser installed on this Mac — the browser tier detection uses,
+            // so anything that can raise the island has a checkbox here.
+            // Greyed out — not hidden — while the master is off.
+            ForEach(detectableAppNames, id: \.self) { name in
                 Toggle(name, isOn: Binding(
                     get: { !settings.disabledCallApps.contains(name) },
                     set: { settings.setCallApp(name, enabled: $0) }
@@ -118,10 +120,18 @@ struct SettingsView: View {
         } header: {
             Text("Call Detection")
         } footer: {
-            Text("Echo watches these apps for microphone use and offers to record. Browsers are detected because calls like Google Meet run in them.")
+            Text("Echo watches these apps for microphone use and offers to record. Every browser you have installed is listed, because calls like Google Meet run in them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// Every app that can raise the island: the curated catalog plus the
+    /// installed browsers. Read through `BrowserCatalog`'s cache, so a
+    /// re-render costs nothing and a browser installed while Settings is open
+    /// appears on the next one.
+    private var detectableAppNames: [String] {
+        CallAppCatalog.detectableDisplayNames(browsers: BrowserCatalog.installed())
     }
 
     // MARK: - Recordings

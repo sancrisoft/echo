@@ -142,7 +142,7 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
     /// it describes (`replaceTranscript` / `recordTerminalProvenance`).
     var transcriptProvenance: TranscriptProvenance?
 
-    /// The real name of the summary model that wrote `summary.json` (SP-007,
+    /// The real name of the summary model that wrote `summary.md` (SP-007,
     /// ADR-022), recorded by `attachSummary` in its existing meta write. Same
     /// additive-optional discipline as `transcriptProvenance`.
     var summaryModelName: String?
@@ -218,7 +218,7 @@ nonisolated struct MeetingMeta: Codable, Hashable, Identifiable, Sendable {
 
 /// A whole meeting in memory: the header plus its transcript and (optional)
 /// summary. `MeetingStore` splits it across `meta.json` / `transcript.json` /
-/// `summary.json` on save and reassembles it on load.
+/// `summary.md` on save and reassembles it on load.
 nonisolated struct MeetingRecord: Sendable {
     var meta: MeetingMeta
     var segments: [TranscriptSegment]

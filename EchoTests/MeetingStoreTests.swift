@@ -102,14 +102,30 @@ struct MeetingStoreTests {
         }
     }
 
-    @Test("save with a summary sets hasSummary and round-trips it")
+    @Test("save with a summary persists it as summary.md only — no summary.json")
     func saveWithSummary() async throws {
         try await withTempStore { store, _ in
             let meta = makeMeta()
             try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: makeSummary()))
 
+            // summary.md IS the store (S11): a facts-only summary persists as
+            // its faithful markdown serialization, and no summary.json is
+            // written anywhere any more.
+            let directory = store.directory(for: meta.id)
+            #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "summary.json").path))
+            let written = try String(
+                decoding: Data(contentsOf: directory.appending(path: MeetingStore.Filename.summaryMarkdown)),
+                as: UTF8.self
+            )
+            #expect(written == makeSummary().resolvedMarkdown)
+
+            // The accepted S11 trade: the structured facts come back as their
+            // markdown serialization — the reloaded summary carries the
+            // document, the legacy fields stay empty.
             let loaded = try await store.loadRecord(meta.id)
-            #expect(loaded.summary == makeSummary())
+            #expect(loaded.summary?.markdown == makeSummary().resolvedMarkdown)
+            #expect(loaded.summary?.shortSummary == "")
+            #expect(loaded.summary?.decisions.isEmpty == true)
             #expect(loaded.meta.hasSummary == true)
             #expect(await store.listMetas().first?.hasSummary == true)
         }
@@ -117,7 +133,7 @@ struct MeetingStoreTests {
 
     // MARK: - attachSummary
 
-    @Test("attachSummary writes the summary and flips meta.hasSummary")
+    @Test("attachSummary writes summary.md and flips meta.hasSummary")
     func attachSummary() async throws {
         try await withTempStore { store, _ in
             let meta = makeMeta()
@@ -127,7 +143,7 @@ struct MeetingStoreTests {
             try await store.attachSummary(makeSummary(), to: meta.id)
 
             let loaded = try await store.loadRecord(meta.id)
-            #expect(loaded.summary == makeSummary())
+            #expect(loaded.summary?.markdown == makeSummary().resolvedMarkdown)
             #expect(loaded.meta.hasSummary == true)
             #expect(await store.listMetas().first?.hasSummary == true)
         }
@@ -167,6 +183,251 @@ struct MeetingStoreTests {
                 as: UTF8.self
             )
             #expect(!json.contains("summaryModelName"))
+        }
+    }
+
+    // MARK: - summary.md is the summary store (S11)
+
+    @Test("attachSummary persists a markdown summary as summary.md only, holding the exact document")
+    func attachSummaryWritesMarkdownStore() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            let document = "### Action Items\n- [ ] Follow up\n\n### Release Plan\nShip Friday."
+            let summary = MeetingSummary(
+                markdown: document,
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.attachSummary(summary, to: meta.id)
+
+            let directory = store.directory(for: meta.id)
+            let written = try String(
+                decoding: Data(contentsOf: directory.appending(path: MeetingStore.Filename.summaryMarkdown)),
+                as: UTF8.self
+            )
+            #expect(written == document)
+            // The markdown file is the store, not a mirror: no summary.json.
+            #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "summary.json").path))
+            #expect(try await store.loadRecord(meta.id).summary?.markdown == document)
+        }
+    }
+
+    @Test("attachSummary persists a facts-only summary as its markdown serialization")
+    func attachSummaryFactsOnlyPersistsSerialization() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            // The long route's degraded reduce still ends in a facts-only
+            // summary (markdown empty). It persists as `resolvedMarkdown` —
+            // the same faithful `###` serialization the UI renders for it.
+            try await store.attachSummary(makeSummary(), to: meta.id)
+
+            let file = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            let written = try String(decoding: Data(contentsOf: file), as: UTF8.self)
+            #expect(written == makeSummary().resolvedMarkdown)
+        }
+    }
+
+    @Test("save with a markdown-bearing summary writes summary.md")
+    func saveWritesMarkdownStore() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            let summary = MeetingSummary(
+                markdown: "### Notes\nBody.",
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: summary))
+
+            let file = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            let written = try String(decoding: Data(contentsOf: file), as: UTF8.self)
+            #expect(written == "### Notes\nBody.")
+        }
+    }
+
+    @Test("overwriting a markdown summary with a facts-only one rewrites summary.md with the new serialization")
+    func overwritingWithFactsOnlySummaryRewritesStore() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let adaptive = MeetingSummary(
+                markdown: "### Notes\nOld document.",
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.attachSummary(adaptive, to: meta.id)
+
+            // A regenerated summary can still come off the degraded long
+            // route (facts, no document). The store file must hold the NEW
+            // summary's serialization — never the old notes.
+            try await store.attachSummary(makeSummary(), to: meta.id)
+
+            let file = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            #expect(try String(decoding: Data(contentsOf: file), as: UTF8.self) == makeSummary().resolvedMarkdown)
+            #expect(try await store.loadRecord(meta.id).summary?.markdown == makeSummary().resolvedMarkdown)
+        }
+    }
+
+    @Test("overwriting a markdown summary with a newer document updates summary.md")
+    func overwritingWithNewerMarkdownUpdatesStore() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let first = MeetingSummary(
+                markdown: "### Notes\nFirst take.",
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.attachSummary(first, to: meta.id)
+
+            var second = first
+            second.markdown = "### Notes\nSecond take."
+            try await store.attachSummary(second, to: meta.id)
+
+            let file = store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            #expect(try String(decoding: Data(contentsOf: file), as: UTF8.self) == "### Notes\nSecond take.")
+        }
+    }
+
+    @Test("attachSummary with an entirely empty summary writes nothing and flips nothing")
+    func attachEmptySummaryIsANoOp() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+
+            // An entirely empty summary resolves to no markdown at all.
+            // Nothing lands on disk, so no meta bit may describe it — a
+            // `hasSummary` (or caption, or model name) with no artifact
+            // behind it would promise notes that don't exist.
+            let empty = MeetingSummary(
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.attachSummary(empty, description: "caption", modelName: "model", to: meta.id)
+
+            let directory = store.directory(for: meta.id)
+            #expect(!FileManager.default.fileExists(
+                atPath: directory.appending(path: MeetingStore.Filename.summaryMarkdown).path
+            ))
+            #expect(!FileManager.default.fileExists(atPath: directory.appending(path: "summary.json").path))
+            let reloaded = try #require(await store.listMetas().first { $0.id == meta.id })
+            #expect(!reloaded.hasSummary)
+            #expect(reloaded.oneLineDescription == nil)
+            #expect(reloaded.summaryModelName == nil)
+            #expect(try await store.loadRecord(meta.id).summary == nil)
+        }
+    }
+
+    @Test("removeSummaryArtifacts deletes summary.md and any leftover legacy summary.json")
+    func removeSummaryArtifactsDeletesBothStores() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let summary = MeetingSummary(
+                markdown: "### Notes\nBody.",
+                shortSummary: "", detailedSummary: "",
+                decisions: [], actionItems: [], openQuestions: [], risks: [])
+            try await store.attachSummary(summary, description: "caption", modelName: "model", to: meta.id)
+            let directory = store.directory(for: meta.id)
+            let markdownFile = directory.appending(path: MeetingStore.Filename.summaryMarkdown)
+            #expect(FileManager.default.fileExists(atPath: markdownFile.path))
+            // A legacy json a crashed migration left behind must go too.
+            let legacyJSON = directory.appending(path: "summary.json")
+            try Data("{}".utf8).write(to: legacyJSON)
+
+            // Re-transcribe's cleanup: the new transcript invalidates the
+            // summary, so EVERY representation of it must go.
+            try await store.removeSummaryArtifacts(for: meta.id)
+
+            #expect(!FileManager.default.fileExists(atPath: markdownFile.path))
+            #expect(!FileManager.default.fileExists(atPath: legacyJSON.path))
+            let reloaded = try #require(await store.listMetas().first { $0.id == meta.id })
+            #expect(!reloaded.hasSummary)
+            #expect(reloaded.oneLineDescription == nil)
+            #expect(reloaded.summaryModelName == nil)
+        }
+    }
+
+    // MARK: - Summary read path: md-first, legacy json fallback (S11)
+
+    /// The canonical pre-S11 `summary.json` bytes — the fixed schema with no
+    /// `markdown` key, exactly what older builds wrote. Decodes to
+    /// `makeSummary()`.
+    private var legacySummaryJSON: String {
+        """
+        {
+          "actionItems" : [
+            {
+              "evidenceSegmentIDs" : [],
+              "task" : "Follow up"
+            }
+          ],
+          "decisions" : [
+            {
+              "details" : "Approved",
+              "evidenceSegmentIDs" : [],
+              "title" : "Ship it"
+            }
+          ],
+          "detailedSummary" : "Detailed",
+          "openQuestions" : [],
+          "risks" : [],
+          "shortSummary" : "Short"
+        }
+        """
+    }
+
+    @Test("loadRecord reads summary.md verbatim as the summary's document")
+    func loadRecordReadsMarkdownStore() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let document = "### Notes\nPlanted by hand."
+            try Data(document.utf8).write(
+                to: store.directory(for: meta.id).appending(path: MeetingStore.Filename.summaryMarkdown)
+            )
+
+            let loaded = try await store.loadRecord(meta.id)
+            let summary = try #require(loaded.summary)
+            #expect(summary.markdown == document)
+            // A markdown-era summary carries only its document.
+            #expect(summary.shortSummary == "")
+            #expect(summary.detailedSummary == "")
+            #expect(summary.decisions.isEmpty)
+            #expect(summary.actionItems.isEmpty)
+        }
+    }
+
+    @Test("a json-only folder (not yet migrated) still loads through the legacy decode")
+    func loadRecordFallsBackToLegacyJSON() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            try Data(legacySummaryJSON.utf8).write(
+                to: store.directory(for: meta.id).appending(path: "summary.json")
+            )
+
+            // A meeting the launch migration hasn't reached must open exactly
+            // as it always did — the legacy fields populated, markdown empty.
+            let summary = try #require(await store.loadRecord(meta.id).summary)
+            #expect(summary == makeSummary())
+            #expect(summary.markdown == "")
+        }
+    }
+
+    @Test("when both summary.md and summary.json exist, the markdown wins")
+    func loadRecordPrefersMarkdownWhenBothExist() async throws {
+        try await withTempStore { store, _ in
+            let meta = makeMeta()
+            try await store.save(MeetingRecord(meta: meta, segments: makeSegments(), summary: nil))
+            let directory = store.directory(for: meta.id)
+            let document = "### Notes\nThe migrated document."
+            try Data(document.utf8).write(to: directory.appending(path: MeetingStore.Filename.summaryMarkdown))
+            try Data(legacySummaryJSON.utf8).write(to: directory.appending(path: "summary.json"))
+
+            // The crash-between-md-write-and-json-delete shape: the markdown
+            // was derived from that very json, so it is the fresher truth.
+            let summary = try #require(await store.loadRecord(meta.id).summary)
+            #expect(summary.markdown == document)
+            #expect(summary.shortSummary == "")
         }
     }
 

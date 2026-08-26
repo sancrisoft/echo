@@ -24,7 +24,10 @@ struct CallIslandView: View {
         ZStack {
             if let face = controller.face {
                 content(for: face)
-                    .frame(width: Self.width(for: face))
+                    .frame(
+                        minWidth: Self.widthBand(for: face).lowerBound,
+                        maxWidth: Self.widthBand(for: face).upperBound
+                    )
                     .background(
                         RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
                             .fill(Color.black.opacity(0.92))
@@ -42,14 +45,22 @@ struct CallIslandView: View {
         .animation(.spring(response: 0.38, dampingFraction: 0.86), value: controller.face)
     }
 
-    /// Sized per face so nothing wraps: the countdown carries two buttons, the
-    /// confirmation only one, and the pill is a glance.
-    private static func width(for face: IslandFace) -> CGFloat {
+    /// A width *band* per face, not a fixed size.
+    ///
+    /// The floor keeps the island's familiar shape when the copy is short; the
+    /// face sizes to its own content above it, so long copy widens the island
+    /// instead of squeezing what is inside it — a flat 380pt start prompt left
+    /// no room for a long app name and broke the button label onto two lines.
+    /// The ceiling is the backstop for a name longer than any in the catalog:
+    /// past it the *title* truncates, never the button (button labels are
+    /// fixed-size, `IslandButtonStyle`).
+    private static func widthBand(for face: IslandFace) -> ClosedRange<CGFloat> {
         switch face {
-        case .startPrompt: return 380
-        case .compactPill: return 120
-        case .endGrace: return 430
-        case .saved: return 300
+        case .startPrompt: return 380...560
+        // A glance, deliberately one size whatever is behind it.
+        case .compactPill: return 120...120
+        case .endGrace: return 430...620
+        case .saved: return 300...420
         }
     }
 
@@ -112,12 +123,16 @@ struct CallIslandView: View {
         appName.isEmpty ? "Call detected" : "\(appName) call detected"
     }
 
-    /// The island's explicit promise (SP-008): "Record Zoom" when the tap will
-    /// scope the session to the named app; the plain "Start recording" when it
-    /// will run as Everything (an unscopeable app, or no attributable name) —
-    /// the button never names an app the capture won't be narrowed to.
+    /// The island's explicit promise (SP-008), minus the redundancy: the title
+    /// one line up already names the detected app, so the scoped button is a
+    /// bare "Record" rather than a second copy of the name.
+    ///
+    /// The unscoped answer stays the longer "Start recording": there the title
+    /// names an app the capture will *not* be narrowed to (an unscopeable app,
+    /// or no attributable name), so the button has to keep visibly declining to
+    /// promise that scope — it is the only place that distinction survives.
     private static func recordButtonTitle(appName: String, scoped: Bool) -> String {
-        scoped && !appName.isEmpty ? "Record \(appName)" : "Start recording"
+        scoped && !appName.isEmpty ? "Record" : "Start recording"
     }
 
     // MARK: - Compact pill
@@ -227,6 +242,12 @@ private struct IslandButtonStyle: ButtonStyle {
         configuration.label
             .font(.caption.weight(.semibold))
             .foregroundStyle(.white)
+            // A button is an answer, not a paragraph. Keeping the label at its
+            // own width makes it inflexible in the face's HStack: it is served
+            // first, the surrounding copy gives way, and the label can never
+            // wrap inside its capsule however long the app name is.
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background {

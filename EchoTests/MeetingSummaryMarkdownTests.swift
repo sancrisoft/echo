@@ -97,6 +97,71 @@ struct MeetingSummaryMarkdownTests {
         #expect(markdown == "Quick standup.")
     }
 
+    // MARK: - Adaptive markdown summaries
+
+    private var adaptiveDocument: String {
+        "### Action Items\n- [ ] Cut the release branch\n\n### Release Plan\nShip Friday once QA signs off."
+    }
+
+    private func makeMarkdownSummary() -> MeetingSummary {
+        MeetingSummary(
+            markdown: adaptiveDocument,
+            shortSummary: "", detailedSummary: "",
+            decisions: [], actionItems: [], openQuestions: [], risks: [])
+    }
+
+    /// A markdown-bearing summary IS the share body: the model already wrote
+    /// the document, so the copy carries it verbatim after the title/meta
+    /// header instead of reassembling fixed sections.
+    @Test func copiedMarkdownSummaryIsTheDocumentItself() {
+        let markdown = MeetingActions.summaryMarkdown(makeMarkdownSummary(), meta: makeMeta())
+        let lines = markdown.components(separatedBy: "\n")
+
+        #expect(lines.first == "# Weekly sync")
+        #expect(lines[2].hasPrefix("_") && lines[2].hasSuffix("_"))
+        #expect(markdown.hasSuffix(adaptiveDocument))
+        // None of the legacy fixed sections are reassembled around it.
+        #expect(!markdown.contains("## Decisions"))
+        #expect(!markdown.contains("## Open Questions"))
+    }
+
+    @Test func copiedMarkdownSummaryWithoutMetaIsTheBareDocument() {
+        let markdown = MeetingActions.summaryMarkdown(makeMarkdownSummary(), meta: nil)
+        #expect(markdown == adaptiveDocument)
+    }
+
+    @Test func exportEmbedsTheMarkdownDocumentUnderSummary() {
+        let record = MeetingRecord(
+            meta: makeMeta(),
+            segments: [
+                TranscriptSegment(channel: .microphone, speaker: .me, text: "Morning.", start: 12, end: 15)
+            ],
+            summary: makeMarkdownSummary()
+        )
+        let markdown = MeetingActions.markdown(for: record)
+
+        #expect(markdown.contains("\n## Summary\n"))
+        #expect(markdown.contains(adaptiveDocument))
+        #expect(markdown.contains("\n## Transcript\n"))
+        // The legacy fixed sections never appear alongside the document.
+        #expect(!markdown.contains("### Decisions"))
+    }
+
+    @Test func plainTextExportCarriesTheRawMarkdown() {
+        let record = MeetingRecord(
+            meta: makeMeta(),
+            segments: [
+                TranscriptSegment(channel: .microphone, speaker: .me, text: "Morning.", start: 12, end: 15)
+            ],
+            summary: makeMarkdownSummary()
+        )
+        let text = MeetingActions.plainText(for: record)
+
+        #expect(text.contains("SUMMARY"))
+        #expect(text.contains(adaptiveDocument))
+        #expect(text.contains("TRANSCRIPT"))
+    }
+
     /// The copy button reuses the export's builder; the export's own nesting
     /// ("### " under "## Summary") must not have moved with it.
     @Test func exportKeepsItsNestedHeadingDepth() {

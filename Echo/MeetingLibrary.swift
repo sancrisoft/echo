@@ -350,9 +350,10 @@ final class MeetingLibrary {
         await store.cloneAudioForRetranscription(for: id)
     }
 
-    /// Deletes the meeting's summary artifacts (summary.json + stale RAG
-    /// sidecar) and clears their meta bits, then refreshes so the list drops
-    /// the caption and pill immediately. Returns whether the write landed.
+    /// Deletes the meeting's summary artifacts (summary.md + any legacy
+    /// summary.json + stale RAG sidecar) and clears their meta bits, then
+    /// refreshes so the list drops the caption and pill immediately. Returns
+    /// whether the write landed.
     @discardableResult
     func removeSummaryArtifacts(for id: UUID) async -> Bool {
         do {
@@ -395,6 +396,16 @@ final class MeetingLibrary {
     /// design — never adopted, so no meeting references it).
     func sweepRetentionStaging() async {
         await store.sweepRetentionStaging()
+    }
+
+    /// Folds any legacy `summary.json` into the `summary.md` store (S11) —
+    /// every launch, idempotent, non-fatal per meeting. `nonisolated` so the
+    /// fire-and-forget launch task (EchoApp's cleanup slot) calls straight
+    /// through to the store actor without ever touching the main actor: the
+    /// migration must never sit in front of launch UI work, and the read
+    /// fallback keeps unmigrated meetings loading in the meantime.
+    nonisolated func migrateLegacySummaries() async {
+        await store.migrateLegacySummaries()
     }
 
     // MARK: - Mutations

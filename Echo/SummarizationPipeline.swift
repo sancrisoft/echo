@@ -4,26 +4,31 @@
 //
 //  Generates a grounded meeting summary from final transcript segments only.
 //  The local LLM runs in-process (MLX, behind the TextGenerating seam) and
-//  streams NDJSON (one JSON object per line) so the UI can fill in
-//  progressively. Every completed line passes NDJSONLineValidator before
-//  touching the accumulator — the structured-output guarantee the retired
-//  GBNF grammar used to provide at the sampler.
+//  streams so the UI can fill in progressively.
 //
-//  Two routes (SPEC-05):
-//  - Short transcripts take the original single-pass path unchanged: one
-//    generation streams the whole summary.
-//  - Long transcripts route through map-reduce: each SPEC-02 chunk is mapped to
-//    structured facts (NDJSON, evidence validated against real segment IDs),
+//  Two routes, one output: an adaptive Markdown document (Notion-style notes,
+//  `MeetingSummary.markdown`) — the model structures the notes freely instead
+//  of filling a fixed schema, and the only post-processing is
+//  `sanitizedMarkdown` (trim + unwrap one outer code fence).
+//  - Short transcripts take the single-pass path: one markdown generation over
+//    the whole transcript.
+//  - Long transcripts route through NDJSON map-reduce (SPEC-05): each SPEC-02
+//    chunk is mapped to structured facts (validated by NDJSONLineValidator,
+//    evidence checked against real segment IDs) plus a detailed chunk note,
 //    the facts merged deterministically in Swift (SummaryMerge), and a final
-//    grounded prose pass writes short/detailed. Memory stays bounded — one
-//    generation is ever in flight and the full transcript is never one prompt.
+//    markdown reduce writes the same kind of adaptive document, grounded in
+//    the part notes + merged facts. Memory stays bounded — one generation is
+//    ever in flight and the full transcript is never one prompt.
 //
-//  Grounding is executable, not just prompted (SPEC-05 §3): on BOTH routes every
-//  evidence ID is filtered against the real segment IDs in scope, and an item
-//  left with no valid evidence is dropped and logged.
+//  Grounding on the long route stays executable, not just prompted (SPEC-05
+//  §3): every evidence ID is filtered against the real segment IDs in scope,
+//  and an item left with no valid evidence is dropped and logged. The markdown
+//  documents are grounded by prompt (and by the product rule that summaries
+//  never invent owners, dates, decisions, or risks).
 //
 
 import Foundation
+import NaturalLanguage
 import os
 
 actor SummarizationPipeline {
@@ -41,8 +46,9 @@ actor SummarizationPipeline {
     /// Uses SPEC-02's heuristic estimator (a real tokenizer is a later seam).
     nonisolated static let singlePassBudget = 8_000
 
-    /// Streams progressively-more-complete summaries as the model emits NDJSON
-    /// lines. Each element is a snapshot of everything parsed so far; the final
+    /// Streams progressively-more-complete summaries as the model writes.
+    /// Each element is a snapshot of everything produced so far (facts during
+    /// the long route's maps, then the growing markdown document); the final
     /// element is the complete summary. Throws on engine/protocol failures.
     ///
     /// The engine is injected per call so tests can drive the full streaming
@@ -78,13 +84,58 @@ actor SummarizationPipeline {
     ) async throws {
         guard !segments.isEmpty else { throw SummarizationError.emptyTranscript }
 
+        // S10: detect the dominant language ONCE over the whole transcript;
+        // both routes thread the same answer (nil keeps generic prompts).
+        let language = Self.dominantLanguageName(of: segments)
+
         // Route on the transcript size alone, independent of prompt overhead, so
         // the boundary is stable and matches chunking.
         if Self.estimatedTokens(of: segments) <= Self.singlePassBudget {
-            try await runSinglePass(from: segments, using: engine, into: continuation)
+            try await runSinglePass(
+                from: segments, using: engine, language: language, into: continuation)
         } else {
-            try await runMapReduce(from: segments, using: engine, progress: progress, into: continuation)
+            try await runMapReduce(
+                from: segments, using: engine, language: language,
+                progress: progress, into: continuation)
         }
+    }
+
+    // MARK: - Dominant language (S10)
+
+    /// The transcript's dominant language as an ENGLISH language name
+    /// ("Spanish", "English", "Portuguese", …) for prompt injection, or nil
+    /// when the recognizer has no confident answer (the prompts then keep
+    /// their generic wording). Field bug S10: the prompt scaffolding is
+    /// English — rules, exemplars, and the closing reminder that we measured
+    /// dominates behavior — so a fully-Spanish transcript came out as an
+    /// ENGLISH summary; one generic "dominant language of the transcript"
+    /// line cannot outweigh that on a 4B model. Detection samples utterances
+    /// ACROSS the whole meeting (stride over the segments, ~3000 chars), not
+    /// just the head, so an English greeting cannot mislabel a Spanish
+    /// meeting. Pure and static (never actor-isolated) — unit-tested directly.
+    static func dominantLanguageName(of segments: [TranscriptSegment]) -> String? {
+        let texts = segments.map(\.text).filter { !$0.isEmpty }
+        guard !texts.isEmpty else { return nil }
+
+        let budget = 3000
+        // Sample up to ~60 segments spread across the meeting.
+        let stride = max(1, texts.count / 60)
+        var sample = ""
+        var index = 0
+        while index < texts.count && sample.count < budget {
+            sample += texts[index]
+            sample += "\n"
+            index += stride
+        }
+
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(sample)
+        guard let language = recognizer.dominantLanguage else { return nil }
+        // Confidence floor: a garbled or too-short sample must yield nil, not
+        // a coin-flip label that would steer the whole summary's language.
+        let confidence = recognizer.languageHypotheses(withMaximum: 1)[language] ?? 0
+        guard confidence >= 0.6 else { return nil }
+        return Locale(identifier: "en").localizedString(forLanguageCode: language.rawValue)
     }
 
     /// SPEC-02's heuristic (ceil(scalars/4), min 1 per non-empty segment),
@@ -97,20 +148,17 @@ actor SummarizationPipeline {
         }
     }
 
-    // MARK: - Single-pass route (parity with pre-SPEC-05 behavior)
+    // MARK: - Single-pass route (adaptive markdown)
 
     private func runSinglePass(
         from segments: [TranscriptSegment],
         using engine: any TextGenerating,
+        language: String?,
         into continuation: AsyncThrowingStream<MeetingSummary, Error>.Continuation
     ) async throws {
-        let validIDs = Self.evidenceIDs(of: segments)
-        _ = try await generateProse(
-            system: Self.systemPrompt,
-            user: Self.userPrompt(for: segments),
-            allowed: [.prose, .facts],
-            validEvidenceIDs: validIDs,
-            seed: nil,
+        _ = try await generateMarkdown(
+            system: Self.markdownSystemPrompt,
+            user: Self.markdownUserPrompt(for: segments, language: language),
             engine: engine,
             onSnapshot: { continuation.yield($0) }
         )
@@ -121,6 +169,7 @@ actor SummarizationPipeline {
     private func runMapReduce(
         from segments: [TranscriptSegment],
         using engine: any TextGenerating,
+        language: String?,
         progress: (@Sendable (String) -> Void)?,
         into continuation: AsyncThrowingStream<MeetingSummary, Error>.Continuation
     ) async throws {
@@ -131,30 +180,45 @@ actor SummarizationPipeline {
         guard !chunks.isEmpty else { throw SummarizationError.emptyTranscript }
 
         // Map: one generation per chunk, in series (one engine, bounded memory).
-        // Snapshots grow as each chunk's facts are merged in.
+        // Snapshots grow as each chunk's facts are merged in; markdown stays ""
+        // until the reduce — the UI's `resolvedMarkdown` shim renders the
+        // growing facts in the meantime, by design.
         var mapResults: [ChunkMapResult] = []
         for chunk in chunks {
             try Task.checkCancellation()
             progress?("Summarizing part \(chunk.index + 1)/\(chunks.count)…")
-            let result = try await mapChunk(chunk, engine: engine)
+            let result = try await mapChunk(chunk, engine: engine, language: language)
             mapResults.append(result)
             let merged = mergeMapResults(mapResults)
-            continuation.yield(Self.snapshot(facts: merged, short: "", detailed: ""))
+            continuation.yield(Self.snapshot(facts: merged))
         }
 
-        // Reduce (prose): one grounded generation over the merged facts + notes.
+        // Reduce (markdown): one adaptive document over the merged facts +
+        // part notes. Snapshots carry the merged facts alongside the growing
+        // document so the final summary keeps both — the summary.md store
+        // persists the resolved markdown, fact consumers read the sections.
         try Task.checkCancellation()
         progress?("Writing summary…")
         let merged = mergeMapResults(mapResults)
-        _ = try await generateProse(
-            system: Self.proseSystemPrompt,
-            user: Self.proseUserPrompt(facts: merged, notes: mapResults.sorted { $0.chunkIndex < $1.chunkIndex }),
-            allowed: [.prose],
-            validEvidenceIDs: [],
-            seed: merged,
-            engine: engine,
-            onSnapshot: { continuation.yield($0) }
-        )
+        do {
+            _ = try await generateMarkdown(
+                system: Self.reduceSystemPrompt,
+                user: Self.reduceUserPrompt(
+                    facts: merged,
+                    notes: mapResults.sorted { $0.chunkIndex < $1.chunkIndex },
+                    language: language),
+                engine: engine,
+                seed: merged,
+                onSnapshot: { continuation.yield($0) }
+            )
+        } catch SummarizationError.emptyModelResponse {
+            // Both reduce attempts came back empty. The maps already earned
+            // their grounded facts, and grounded content beats an error (the
+            // long route's standing principle) — finish with the facts-only
+            // summary rather than throwing the whole meeting away.
+            Self.log.warning("Markdown reduce empty after retry; keeping the facts-only summary")
+            continuation.yield(Self.snapshot(facts: merged))
+        }
         progress?("")
     }
 
@@ -164,16 +228,19 @@ actor SummarizationPipeline {
     /// is retained between calls, so SPEC-07 can call this live as chunks close
     /// and cache the results. Evidence is validated against this chunk's real
     /// segment IDs (overlap included, since a fact may legitimately span it).
-    func mapChunk(_ chunk: TranscriptChunk, engine: any TextGenerating) async throws -> ChunkMapResult {
+    func mapChunk(
+        _ chunk: TranscriptChunk,
+        engine: any TextGenerating,
+        language: String? = nil
+    ) async throws -> ChunkMapResult {
         let validIDs = Self.evidenceIDs(of: chunk.segments)
         var accumulator = SummaryAccumulator(
-            allowed: [.facts, .chunkNote], validEvidenceIDs: validIDs, seed: nil)
+            allowed: [.facts, .chunkNote], validEvidenceIDs: validIDs)
         try await consume(
             system: Self.mapSystemPrompt,
-            user: Self.mapUserPrompt(for: chunk),
+            user: Self.mapUserPrompt(for: chunk, language: language),
             engine: engine,
-            into: &accumulator,
-            onProgress: nil
+            into: &accumulator
         )
         let snapshot = accumulator.snapshot
         return ChunkMapResult(
@@ -194,23 +261,27 @@ actor SummarizationPipeline {
         SummaryMerge.merge(results)
     }
 
-    /// The final grounded prose pass over already-merged facts. Accepts
-    /// precomputed results so SPEC-07 can drive it from its live cache.
-    func reduceProse(
+    /// The final grounded markdown pass over already-merged facts: the same
+    /// adaptive document the single-pass route writes, grounded in the part
+    /// notes + merged facts instead of the transcript. Accepts precomputed
+    /// results so SPEC-07 can drive it from its live cache.
+    func reduceMarkdown(
         facts: MergedFacts,
         notes: [ChunkMapResult],
-        engine: any TextGenerating
-    ) async throws -> (short: String, detailed: String) {
-        let summary = try await generateProse(
-            system: Self.proseSystemPrompt,
-            user: Self.proseUserPrompt(facts: facts, notes: notes.sorted { $0.chunkIndex < $1.chunkIndex }),
-            allowed: [.prose],
-            validEvidenceIDs: [],
-            seed: facts,
+        engine: any TextGenerating,
+        language: String? = nil
+    ) async throws -> String {
+        let summary = try await generateMarkdown(
+            system: Self.reduceSystemPrompt,
+            user: Self.reduceUserPrompt(
+                facts: facts,
+                notes: notes.sorted { $0.chunkIndex < $1.chunkIndex },
+                language: language),
             engine: engine,
+            seed: facts,
             onSnapshot: { _ in }
         )
-        return (summary.shortSummary, summary.detailedSummary)
+        return summary.markdown
     }
 
     // MARK: - Row caption (library one-liner)
@@ -222,9 +293,18 @@ actor SummarizationPipeline {
     /// row, not a summary section. Best-effort: any failure (or an empty reply)
     /// returns `nil` and the row simply shows no caption.
     func oneLineDescription(for summary: MeetingSummary, using engine: any TextGenerating) async -> String? {
-        let source = summary.shortSummary.isEmpty
-            ? String(summary.detailedSummary.prefix(1200))
-            : summary.shortSummary
+        // Source preference mirrors the summary's own: the short prose when the
+        // legacy route wrote one, else the adaptive markdown document — stripped
+        // of its markup and capped by `captionSource`, so the caption model
+        // reads the opening as prose — else the detailed prose.
+        let source: String
+        if !summary.shortSummary.isEmpty {
+            source = summary.shortSummary
+        } else if !summary.markdown.isEmpty {
+            source = Self.captionSource(from: summary.markdown)
+        } else {
+            source = String(summary.detailedSummary.prefix(1200))
+        }
         guard !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
         var params = GenerationParams()
@@ -266,6 +346,47 @@ actor SummarizationPipeline {
         """
     }
 
+    /// The head of a markdown document, stripped to prose for the caption
+    /// generation. The caption model reads the opening of the notes; fed raw
+    /// markdown it parrots the markup ("### Action Items - [ ] ..."), so this
+    /// removes heading markers, checkbox/bullet prefixes, and emphasis/code
+    /// delimiters, and drops the lines that carry no prose at all (table rows,
+    /// horizontal rules). Stripping happens BEFORE the ~1200-char cap so the
+    /// budget buys prose, not asterisks. Internal (not private) so the
+    /// stripping rules are table-tested.
+    static func captionSource(from markdown: String) -> String {
+        let lines = markdown.components(separatedBy: "\n").compactMap { rawLine -> String? in
+            var line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { return nil }
+
+            // Table rows (including separator rows) and horizontal rules carry
+            // no prose — drop the whole line.
+            if line.hasPrefix("|") { return nil }
+            if line.count >= 3, line.allSatisfy({ $0 == "-" || $0 == "*" || $0 == "_" }) { return nil }
+
+            // Heading markers, then the checkbox prefix (it embeds a bullet,
+            // so it goes first), then plain bullet prefixes.
+            while line.hasPrefix("#") { line.removeFirst() }
+            line = line.trimmingCharacters(in: .whitespaces)
+            for prefix in ["- [ ] ", "- [x] ", "- [X] "] where line.hasPrefix(prefix) {
+                line.removeFirst(prefix.count)
+            }
+            for prefix in ["- ", "* ", "+ "] where line.hasPrefix(prefix) {
+                line.removeFirst(prefix.count)
+            }
+
+            // Inline delimiters: bold before italic so "**" never survives as
+            // two orphaned "*" strips.
+            line = line.replacingOccurrences(of: "**", with: "")
+            line = line.replacingOccurrences(of: "*", with: "")
+            line = line.replacingOccurrences(of: "`", with: "")
+
+            line = line.trimmingCharacters(in: .whitespaces)
+            return line.isEmpty ? nil : line
+        }
+        return String(lines.joined(separator: "\n").prefix(1200))
+    }
+
     /// First sentence, unwrapped from any quotes/label the model prepends,
     /// trimmed and length-capped.
     private static func cleanCaption(_ raw: String) -> String? {
@@ -289,54 +410,65 @@ actor SummarizationPipeline {
 
     // MARK: - Generation primitives
 
-    /// One prose-bearing generation with the single-pass retry contract: up to
-    /// two attempts (fresh accumulator, re-seeded each time); success is a
-    /// short/detailed line, or — only after the retry — any grounded content
-    /// (facts). Snapshots stream via `onSnapshot` throughout. Throws
-    /// `emptyModelResponse` if both attempts yield nothing usable.
-    private func generateProse(
+    /// One markdown-document generation: up to two attempts; success is a
+    /// sanitized document that is non-empty after trimming. The accumulated
+    /// raw text is re-sanitized on every delta and a snapshot streams whenever
+    /// the visible document changed — so the UI fills in as the model writes,
+    /// and a wrapping code fence disappears the moment its closing line lands.
+    /// `seed` (the long route) puts the merged facts into every snapshot, so
+    /// the document and the facts travel together into the final summary.
+    /// Throws `emptyModelResponse` if both attempts stay empty.
+    private func generateMarkdown(
         system: String,
         user: String,
-        allowed: AllowedShapes,
-        validEvidenceIDs: Set<String>,
-        seed: MergedFacts?,
         engine: any TextGenerating,
+        seed: MergedFacts? = nil,
         onSnapshot: @escaping (MeetingSummary) -> Void
     ) async throws -> MeetingSummary {
         for attempt in 0..<2 {
-            var accumulator = SummaryAccumulator(
-                allowed: allowed, validEvidenceIDs: validEvidenceIDs, seed: seed)
-            try await consume(
-                system: system, user: user, engine: engine,
-                into: &accumulator, onProgress: onSnapshot)
+            var accumulated = ""
+            var visible = ""
+            do {
+                // The markdown preset, not the NDJSON default: zeroed
+                // frequency/presence penalties (checkbox prefixes and entity
+                // names repeat legitimately here) and room for a dense document.
+                for try await delta in engine.stream(system: system, user: user, params: .markdownSummary) {
+                    try Task.checkCancellation()
+                    guard !delta.isEmpty else { continue }
+                    accumulated += delta
+                    let sanitized = Self.sanitizedMarkdown(accumulated)
+                    if sanitized != visible {
+                        visible = sanitized
+                        onSnapshot(Self.markdownSnapshot(sanitized, facts: seed))
+                    }
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw SummarizationError.modelUnavailable(error.localizedDescription)
+            }
 
-            let snapshot = accumulator.snapshot
-            if !snapshot.shortSummary.isEmpty || !snapshot.detailedSummary.isEmpty {
+            let document = Self.sanitizedMarkdown(accumulated)
+            if !document.isEmpty {
+                let snapshot = Self.markdownSnapshot(document, facts: seed)
                 onSnapshot(snapshot)
                 return snapshot
             }
             if attempt == 0 {
-                Self.log.warning("Generation produced no valid short/detailed line; retrying once")
-            } else if accumulator.hasContent {
-                // Items without prose after the retry: unusual, but grounded
-                // content beats an error (also the map-reduce facts-only path).
-                onSnapshot(snapshot)
-                return snapshot
+                Self.log.warning("Markdown generation produced an empty document; retrying once")
             }
         }
         throw SummarizationError.emptyModelResponse
     }
 
-    /// Stream one generation: split the engine's deltas into NDJSON lines,
-    /// validate + apply each into `accumulator`, and preview the in-progress
-    /// prose line char-by-char. Calls `onProgress` after any delta that changed
-    /// the visible summary. A single attempt — retry/routing is the caller's job.
+    /// Stream one NDJSON generation (the map phase): split the engine's deltas
+    /// into lines and validate + apply each into `accumulator`. A single
+    /// attempt — retry/routing is the caller's job.
     private func consume(
         system: String,
         user: String,
         engine: any TextGenerating,
-        into accumulator: inout SummaryAccumulator,
-        onProgress: ((MeetingSummary) -> Void)?
+        into accumulator: inout SummaryAccumulator
     ) async throws {
         var buffer = ""
         do {
@@ -345,17 +477,11 @@ actor SummarizationPipeline {
                 guard !delta.isEmpty else { continue }
 
                 buffer += delta
-
-                var changed = false
                 while let newline = buffer.firstIndex(of: "\n") {
                     let line = String(buffer[buffer.startIndex..<newline])
                     buffer.removeSubrange(buffer.startIndex...newline)
-                    if accumulator.applyValidatedLine(line) { changed = true }
+                    _ = accumulator.applyValidatedLine(line)
                 }
-                // Preview the in-progress prose line (short/detailed) char-by-char.
-                if accumulator.applyPartialProse(buffer) { changed = true }
-
-                if changed { onProgress?(accumulator.snapshot) }
             }
         } catch is CancellationError {
             throw CancellationError()
@@ -369,12 +495,41 @@ actor SummarizationPipeline {
         if !tail.isEmpty { _ = accumulator.applyValidatedLine(tail) }
     }
 
-    // MARK: - Snapshot helper
+    // MARK: - Markdown sanitation (single-pass route)
 
-    private static func snapshot(facts: MergedFacts, short: String, detailed: String) -> MeetingSummary {
+    /// The single cleanup the markdown route applies to raw model output: trim
+    /// surrounding whitespace, and unwrap ONE outer code fence — a small model's
+    /// favorite way to disobey "no code fences" is to wrap the whole document in
+    /// ``` or ```markdown. Only a true wrapper is unwrapped (first line opens a
+    /// fence AND the last line closes one); a document that merely starts with a
+    /// code block keeps its fences. Anything subtler — stray HTML, broken
+    /// tables — is the renderer's job (later slice), not sanitation's.
+    /// Internal (not private) so the table tests pin the behavior.
+    static func sanitizedMarkdown(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.hasPrefix("```") else { return text }
+
+        var lines = text.components(separatedBy: "\n")
+        guard lines.count >= 2,
+              lines.last?.trimmingCharacters(in: .whitespaces) == "```"
+        else { return text }
+
+        lines.removeFirst()
+        lines.removeLast()
+        text = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text
+    }
+
+    // MARK: - Snapshot helpers
+
+    /// A facts-only snapshot (mid-map progress, and the degraded final when
+    /// the reduce comes back empty): markdown stays "" so the UI's
+    /// `resolvedMarkdown` shim renders the growing facts as a fixed-schema
+    /// document until the reduce writes the real one.
+    private static func snapshot(facts: MergedFacts) -> MeetingSummary {
         MeetingSummary(
-            shortSummary: short,
-            detailedSummary: detailed,
+            shortSummary: "",
+            detailedSummary: "",
             decisions: facts.decisions,
             actionItems: facts.actionItems,
             openQuestions: facts.openQuestions,
@@ -382,48 +537,151 @@ actor SummarizationPipeline {
         )
     }
 
-    // MARK: - Prompts: single-pass (unchanged for parity)
+    /// A markdown snapshot: the document is the summary. The legacy prose
+    /// fields stay empty on both routes; the long route also carries its
+    /// merged `facts` so the document and the sections that ground it land in
+    /// the final `MeetingSummary` together (nil on the single-pass route,
+    /// which extracts no facts).
+    private static func markdownSnapshot(_ markdown: String, facts: MergedFacts?) -> MeetingSummary {
+        MeetingSummary(
+            markdown: markdown,
+            shortSummary: "",
+            detailedSummary: "",
+            decisions: facts?.decisions ?? [],
+            actionItems: facts?.actionItems ?? [],
+            openQuestions: facts?.openQuestions ?? [],
+            risks: facts?.risks ?? []
+        )
+    }
 
-    private static let systemPrompt = """
-    You summarize meeting transcripts for a local-first macOS app.
-    Use only the transcript provided by the user.
-    Do not invent decisions, action item owners, due dates, risks, or blockers.
-    If an owner or due date is unclear, use null.
-    Do not infer calendar dates from relative wording.
-    Keep the summary in the dominant language of the transcript.
+    // MARK: - Prompts: the adaptive document (Notion ruleset, shared blocks)
 
-    Output format: NDJSON. Emit ONE JSON object per line and nothing else —
-    no prose, no Markdown, no code fences. Each line is one complete JSON object.
+    /// The route-independent half of the adaptive ruleset (distilled from five
+    /// real Notion AI meeting summaries, the product owner's calibration
+    /// target): adaptivity, content specificity, hedging, formatting,
+    /// language, and speaker naming. Shared VERBATIM by the single-pass prompt
+    /// and the map-reduce reduce prompt — one constant, so the two routes'
+    /// documents can never drift apart in these rules. Wording is short and
+    /// imperative on purpose: a small model follows rules it can quote, not
+    /// meta-discussion.
+    private static let adaptiveSharedRules = """
+    Adapt the amount to the meeting:
+    - The number of sections and bullets follows the meeting's information
+      density. A short or thin meeting gets short notes; a dense meeting gets
+      many sections. Never pad. Never compress distinct topics into one line.
 
-    Allowed line shapes:
-    {"type":"short","text":"one or two sentences"}
-    {"type":"detailed","text":"a thorough paragraph"}
-    {"type":"decision","title":"...","details":"...","evidence":["segment-id"]}
-    {"type":"action","task":"...","owner":"... or null","due":"... or null","evidence":["segment-id"]}
-    {"type":"question","question":"...","context":"... or null","evidence":["segment-id"]}
-    {"type":"risk","risk":"...","details":"... or null","evidence":["segment-id"]}
+    Content:
+    - Preserve specifics exactly as discussed: numbers, quantities, thresholds,
+      versions, model and product names, amounts of money, and root-cause chains
+      (symptom, cause, fix). These details are the value of the notes.
+    - Omit social small talk entirely — personal stories, trips, jokes:
+      no section, no mention, however long it took. An outside event earns a
+      brief contextual section only when it changed the work — a plan, a
+      decision, or a deadline.
+    - The transcript is machine-transcribed and may be garbled. When a passage
+      is unclear, hedge ("likely", "apparently", "unclear whether...") instead
+      of inventing details or silently dropping the topic.
 
-    Rules:
-    - Emit exactly one "short" line, then one "detailed" line, first.
-    - Then emit zero or more decision, action, question, and risk lines.
-    - Every decision, action, question, and risk line must include at least one
-      evidence segment-id copied verbatim from the transcript.
-    - If a claim cannot be supported by a transcript segment, omit it.
-    - List each distinct decision, action item, question, and risk only once.
-      Never repeat or rephrase the same point across multiple lines.
-    - "You" means the current user; "Team" means teammates from system audio.
+    Formatting:
+    - Bullets are full, informative sentences.
+    - Bold key terms sparingly, with **bold**.
+    - Nest sub-bullets only for real hierarchy.
+    - Use a table only when the content is truly tabular (a comparison, an
+      option matrix).
+    - "---" is allowed as a divider after a long Action Items list.
+
+    Language: write the notes in the dominant language of the transcript.
+
+    Speakers: "You" is the current user (microphone); "Team" are the other
+    participants (system audio). Use real names when the transcript makes them
+    clear; otherwise keep "You" and "the team".
     """
 
-    private static func userPrompt(for segments: [TranscriptSegment]) -> String {
-        """
-        Summarize this final meeting transcript as NDJSON.
+    /// The single-pass prompt: role + output contract first, document shape
+    /// next (both anchored to the transcript), then the shared blocks above.
+    /// Load-bearing phrases ("### Action Items",
+    /// "never invent an owner or a due date", "dominant language of the
+    /// transcript", "no code fences", "never write an empty section") are
+    /// pinned by SummarizationPipelineStreamTests (and again on the reduce
+    /// prompt by SummaryMapReduceTests) — reword freely around them, keep the
+    /// invariants. S8 added three more pins for the measured quality gaps:
+    /// "sweep the whole transcript for commitments" and "naming someone who
+    /// did not take the task is an error" (single-pass only), and
+    /// "no section, no mention" (shared rules, pinned on both routes).
+    private static let markdownSystemPrompt = """
+    You are an expert meeting note-taker. Write the notes a colleague who missed
+    the meeting would need. Output ONE Markdown document and nothing else — no
+    preamble, no closing remarks, no code fences.
 
-        Each transcript line is formatted as:
-        [start-end][speaker][channel][id=SEGMENT_ID]: text
-        Copy the SEGMENT_ID values into "evidence".
+    Document shape:
+    - Sweep the WHOLE transcript for commitments first — a commitment made in
+      passing, mid-topic, still counts. If any were made, START the document
+      with a "### Action Items" section: a checkbox list with one
+      "- [ ] Name to <verb> ..." item per commitment actually made in the
+      transcript; a commitment discussed inside a topic gets BOTH its checkbox
+      here and its topic coverage. Name an owner ONLY when that person took
+      the task — said they would do it, or accepted it when asked. Whoever
+      merely mentioned or requested a task is NOT its owner: write that item
+      with no name, like "- [ ] Fix the login bug" —
+      naming someone who did not take the task is an error.
+      NEVER invent an owner or a due date; include a due date only when
+      someone said it. If no commitments were made, do not write an Action
+      Items section.
+    - After that, write one "###" section per distinct work topic actually
+      discussed. Make every title SPECIFIC to the content, like "Audio Bug:
+      Wireless Headphone Frequency Issue" — never a generic bucket like
+      "Discussion", "Updates", or "Miscellaneous". Use a generic category
+      section only when the meeting earns it: "Key Decisions" only if explicit
+      decisions were made; a context section only if outside events shaped the
+      meeting. NEVER write an empty section, a "(none)" placeholder, or a
+      section for a category with nothing in it.
+
+    \(adaptiveSharedRules)
+    """
+
+    /// S9 recency reinforcement: one closing reminder appended AFTER the
+    /// transcript (single-pass) and AFTER the material (reduce) — the very
+    /// end of the context, where a small model weighs instructions most. The
+    /// same omission rule sitting only in the far-away system prompt measured
+    /// 6/6 small-talk leaks (S8). The recency slot is zero-sum: the small-talk
+    /// line alone displaced the ownership rule (owner trap 4/4 -> 0/2
+    /// measured), so the reminder carries BOTH probabilistic traps — and S10's
+    /// language sentence is APPENDED after them, never replacing anything.
+    /// One shared function so the two routes' reminders can never drift
+    /// apart. Pinned (with the closing position, in both compositions) by
+    /// SummarizationPipelineStreamTests and SummaryMapReduceTests.
+    private static func workNotesReminder(language: String?) -> String {
+        var reminder =
+            "Reminder: these are WORK notes. Leave out all social and personal "
+            + "conversation (stories, trips, history, jokes) — no section, no mention. "
+            + "Name an owner only on a task someone explicitly took; "
+            + "a task nobody took gets its checkbox with NO name."
+        if let language {
+            reminder += " Write the notes in \(language)."
+        }
+        return reminder
+    }
+
+    private static func markdownUserPrompt(
+        for segments: [TranscriptSegment], language: String?
+    ) -> String {
+        // Deliberately thin: the ruleset lives in the system prompt, and the
+        // transcript line format explains itself — one legend line is enough.
+        // S10: a detected language is stated EXPLICITLY, twice — as framing
+        // here and as the reminder's closing sentence — because the English
+        // scaffolding otherwise pulls the 4B model into English output (a
+        // fully-Spanish field meeting came out English; the generic system
+        // rule alone measured 2/2 failures).
+        let framing = language.map { "Write the notes in \($0).\n\n" } ?? ""
+        return """
+        Write the meeting notes for this transcript.
+
+        \(framing)Each transcript line is "[start-end] Speaker: text".
 
         Transcript:
-        \(transcriptText(from: segments))
+        \(plainTranscriptText(from: segments))
+
+        \(workNotesReminder(language: language))
         """
     }
 
@@ -442,15 +700,18 @@ actor SummarizationPipeline {
     no prose, no Markdown, no code fences. Each line is one complete JSON object.
 
     Allowed line shapes:
-    {"type":"chunknote","text":"a 2-4 sentence gist of what this part covered"}
+    {"type":"chunknote","text":"a detailed 4-8 sentence note on this part"}
     {"type":"decision","title":"...","details":"...","evidence":["segment-id"]}
     {"type":"action","task":"...","owner":"... or null","due":"... or null","evidence":["segment-id"]}
     {"type":"question","question":"...","context":"... or null","evidence":["segment-id"]}
     {"type":"risk","risk":"...","details":"... or null","evidence":["segment-id"]}
 
     Rules:
-    - Emit exactly one "chunknote" line first. Write the gist (2-4 sentences) in
-      the dominant language of the transcript.
+    - Emit exactly one "chunknote" line first. Write a detailed note of 4-8 sentences
+      in the dominant language of the transcript: name the topics discussed in
+      this part AND the concrete specifics mentioned — numbers, amounts, names,
+      versions, thresholds, root causes. The final summary is written from
+      these notes, so it can only be as specific as they are.
     - Then emit zero or more decision, action, question, and risk lines. A part
       may contain none — that is fine; still emit the chunknote.
     - Every decision, action, question, and risk line must include at least one
@@ -464,9 +725,13 @@ actor SummarizationPipeline {
     - "You" means the current user; "Team" means teammates from system audio.
     """
 
-    private static func mapUserPrompt(for chunk: TranscriptChunk) -> String {
-        """
-        Extract structured facts from this PART of a meeting transcript as NDJSON.
+    private static func mapUserPrompt(for chunk: TranscriptChunk, language: String?) -> String {
+        // S10: on the long route the reduce writes from the chunk notes, so
+        // their language decides the final document's language — instruct it
+        // explicitly when detected.
+        let languageInstruction = language.map { " Write the chunknote in \($0)." } ?? ""
+        return """
+        Extract structured facts from this PART of a meeting transcript as NDJSON.\(languageInstruction)
 
         Each transcript line is formatted as:
         [start-end][speaker][channel][id=SEGMENT_ID]: text
@@ -478,74 +743,118 @@ actor SummarizationPipeline {
         """
     }
 
-    // MARK: - Prompts: prose reduce phase
+    // MARK: - Prompts: markdown reduce phase
 
-    private static let proseSystemPrompt = """
-    You write the final summary of a meeting for a local-first macOS app, based
-    ONLY on the extracted notes and facts the user provides. The meeting was
-    processed in parts; you are given a per-part gist plus the merged,
-    de-duplicated facts.
-    Do NOT introduce any decision, action, owner, due date, question, or risk that
-    is not present in the material provided. Do not invent details.
-    Keep the summary in the dominant language of the material.
+    /// The reduce prompt: the SAME adaptive document as the single-pass route
+    /// (the shared blocks are interpolated verbatim), but grounded in the map
+    /// phase's material instead of a transcript — per-part notes
+    /// (chronological, time-ranged) plus the merged, de-duplicated facts. The
+    /// action items in that material are the only candidates for the checkbox
+    /// list, and the no-new-items rule ("Do NOT introduce any decision,
+    /// action, owner, due date, question, or risk") is pinned by
+    /// SummaryMapReduceTests alongside the five shared ruleset phrases.
+    private static let reduceSystemPrompt = """
+    You are an expert meeting note-taker. The meeting was too long for one
+    pass, so it was processed in parts: the user gives you each part's note in
+    chronological order with its time range, plus the merged, de-duplicated
+    facts extracted from the whole meeting. Write the notes a colleague who
+    missed the meeting would need, grounded ONLY in that material.
+    Do NOT introduce any decision, action, owner, due date, question, or risk
+    that is not present in the material provided. Do not invent details.
+    Output ONE Markdown document and nothing else — no preamble, no closing
+    remarks, no code fences.
 
-    Output format: NDJSON. Emit ONE JSON object per line and nothing else —
-    no prose, no Markdown, no code fences. Each line is one complete JSON object.
-
-    Allowed line shapes (emit EXACTLY these two, in this order, and nothing else):
-    {"type":"short","text":"one or two sentences covering the whole meeting"}
-    {"type":"detailed","text":"a thorough paragraph covering the whole meeting"}
-
-    Rules:
-    - Emit exactly one "short" line, then one "detailed" line.
-    - Ground every statement in the notes and facts below; add nothing new.
+    Document shape:
+    - If the material lists action items, START the document with a
+      "### Action Items" section: a checkbox list with one
+      "- [ ] Name to <verb> ..." item per action item in the material — those
+      are the only candidates. If an action item has no owner, write the item
+      without a name. NEVER invent an owner or a due date; include a due date
+      only when the material carries one. If the material lists no action
+      items, do not write an Action Items section.
+    - After that, write one "###" section per distinct work topic in the part
+      notes. Make every title SPECIFIC to the content, like "Audio Bug:
+      Wireless Headphone Frequency Issue" — never a generic bucket like
+      "Discussion", "Updates", or "Miscellaneous". Use a generic category
+      section only when the meeting earns it: "Key Decisions" only if the
+      material lists decisions; a context section only if outside events
+      shaped the meeting. NEVER write an empty section, a "(none)" placeholder,
+      or a section for a category with nothing in it.
     - Cover the whole meeting, using the ordered part notes for the arc.
-    - "You" means the current user; "Team" means teammates from system audio.
+
+    \(adaptiveSharedRules)
     """
 
-    private static func proseUserPrompt(facts: MergedFacts, notes: [ChunkMapResult]) -> String {
+    /// The reduce's material: part notes first (chronological, time-ranged —
+    /// the meeting's arc), then ONLY the fact sections that have content.
+    /// Empty sections are omitted entirely — a "(none)" line here would tempt
+    /// the model into writing an empty section in the document, exactly what
+    /// the ruleset forbids. Owner/due decorate an action item only when the
+    /// merge actually carries them (never "unspecified" filler, which reads
+    /// like material to preserve).
+    private static func reduceUserPrompt(
+        facts: MergedFacts, notes: [ChunkMapResult], language: String?
+    ) -> String {
         var lines: [String] = [
-            "Write the meeting summary as NDJSON: one \"short\" line, then one",
-            "\"detailed\" line. Use ONLY the material below and add nothing new.",
-            "",
-            "Part notes (in chronological order):",
+            "Write the meeting notes from this material. Use ONLY the material",
+            "below and add nothing new.",
         ]
-        let partNotes = notes
-            .map { note -> String in
-                let gist = note.chunkNote.trimmingCharacters(in: .whitespacesAndNewlines)
-                let range = "[\(timestamp(note.start))-\(timestamp(note.end))]"
-                return gist.isEmpty ? "\(range) (no notable content)" : "\(range) \(gist)"
-            }
-        lines.append(contentsOf: partNotes.isEmpty ? ["(none)"] : partNotes)
+        // S10: state the output language explicitly when detected (the
+        // closing reminder repeats it as the final sentence).
+        if let language {
+            lines.append("Write the notes in \(language).")
+        }
 
-        lines.append("")
-        lines.append("Decisions:")
-        lines.append(contentsOf: facts.decisions.isEmpty
-            ? ["(none)"]
-            : facts.decisions.map { decision in
+        let partNotes = notes.compactMap { note -> String? in
+            let gist = note.chunkNote.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !gist.isEmpty else { return nil }
+            return "[\(timestamp(note.start))-\(timestamp(note.end))] \(gist)"
+        }
+        if !partNotes.isEmpty {
+            lines.append("")
+            lines.append("Part notes (in chronological order):")
+            lines.append(contentsOf: partNotes)
+        }
+
+        if !facts.decisions.isEmpty {
+            lines.append("")
+            lines.append("Decisions:")
+            lines.append(contentsOf: facts.decisions.map { decision in
                 let details = decision.details.trimmingCharacters(in: .whitespacesAndNewlines)
                 return details.isEmpty ? "- \(decision.title)" : "- \(decision.title): \(details)"
             })
+        }
 
-        lines.append("")
-        lines.append("Action items:")
-        lines.append(contentsOf: facts.actionItems.isEmpty
-            ? ["(none)"]
-            : facts.actionItems.map { action in
-                "- \(action.task) (owner: \(action.owner ?? "unspecified"), due: \(action.dueDate ?? "unspecified"))"
+        if !facts.actionItems.isEmpty {
+            lines.append("")
+            lines.append("Action items:")
+            lines.append(contentsOf: facts.actionItems.map { action in
+                var decorations: [String] = []
+                if let owner = action.owner { decorations.append("owner: \(owner)") }
+                if let due = action.dueDate { decorations.append("due: \(due)") }
+                return decorations.isEmpty
+                    ? "- \(action.task)"
+                    : "- \(action.task) (\(decorations.joined(separator: ", ")))"
             })
+        }
 
-        lines.append("")
-        lines.append("Open questions:")
-        lines.append(contentsOf: facts.openQuestions.isEmpty
-            ? ["(none)"]
-            : facts.openQuestions.map { "- \($0.question)" })
+        if !facts.openQuestions.isEmpty {
+            lines.append("")
+            lines.append("Open questions:")
+            lines.append(contentsOf: facts.openQuestions.map { "- \($0.question)" })
+        }
 
+        if !facts.risks.isEmpty {
+            lines.append("")
+            lines.append("Risks:")
+            lines.append(contentsOf: facts.risks.map { "- \($0.risk)" })
+        }
+
+        // S9: the reduce's leak channel is chunk notes carrying social
+        // content — close the material with the same reminder the
+        // single-pass user prompt ends on.
         lines.append("")
-        lines.append("Risks:")
-        lines.append(contentsOf: facts.risks.isEmpty
-            ? ["(none)"]
-            : facts.risks.map { "- \($0.risk)" })
+        lines.append(workNotesReminder(language: language))
 
         return lines.joined(separator: "\n")
     }
@@ -564,6 +873,21 @@ actor SummarizationPipeline {
                 let start = timestamp(utterance.start)
                 let end = timestamp(utterance.end)
                 return "[\(start)-\(end)][\(speakerName(utterance.speaker))][\(utterance.channel.rawValue)][id=\(utterance.id.uuidString)]: \(utterance.text)"
+            }
+            .joined(separator: "\n")
+    }
+
+    /// The markdown route's rendering: the same derived utterances as
+    /// `transcriptText` (so the two routes can never disagree about merging or
+    /// backchannel filtering), minus the channel tag and segment IDs — the
+    /// markdown prompt has no evidence protocol, and IDs only invite the model
+    /// to quote them into the notes. Internal so the format is table-tested.
+    static func plainTranscriptText(from segments: [TranscriptSegment]) -> String {
+        TranscriptUtterance.derive(from: segments)
+            .map { utterance in
+                let start = timestamp(utterance.start)
+                let end = timestamp(utterance.end)
+                return "[\(start)-\(end)] \(speakerName(utterance.speaker)): \(utterance.text)"
             }
             .joined(separator: "\n")
     }
@@ -608,42 +932,6 @@ actor SummarizationPipeline {
         Set(segments.map { $0.id.uuidString.lowercased() })
     }
 
-    // MARK: - Partial-line preview
-
-    /// Best-effort decode of the in-progress prose line so short/detailed text
-    /// can grow on screen before the line is terminated. Returns nil for line
-    /// types whose partial content we don't preview (lists) or unparseable heads.
-    private static func partialProse(_ fragment: String) -> (type: String, text: String)? {
-        guard let typeMarker = fragment.range(of: "\"type\":\"") else { return nil }
-        let afterType = fragment[typeMarker.upperBound...]
-        guard let typeEnd = afterType.firstIndex(of: "\"") else { return nil }
-        let type = String(afterType[..<typeEnd])
-        guard type == "short" || type == "detailed" else { return nil }
-
-        guard let textMarker = fragment.range(of: "\"text\":\"") else { return nil }
-
-        var text = ""
-        var escaped = false
-        for character in fragment[textMarker.upperBound...] {
-            if escaped {
-                switch character {
-                case "n": text.append("\n")
-                case "t": text.append("\t")
-                case "r": text.append("\r")
-                default: text.append(character)
-                }
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else if character == "\"" {
-                break // unescaped quote → end of the value
-            } else {
-                text.append(character)
-            }
-        }
-        return (type, text)
-    }
-
     // MARK: - Field helpers
 
     private static func string(_ key: String, in object: [String: Any]) -> String {
@@ -673,14 +961,14 @@ actor SummarizationPipeline {
     // MARK: - Allowed shapes per phase
 
     /// Which NDJSON line types a generation may contribute. The validator gates
-    /// well-formedness; this gates *which* well-formed shapes a phase accepts, so
-    /// a stray prose line in the map phase (or a stray fact in the prose phase)
-    /// is silently ignored rather than corrupting the phase output.
+    /// well-formedness; this gates *which* well-formed shapes a phase accepts,
+    /// so a stray line of another type (say, a leftover "short" from the
+    /// retired prose protocol) is silently ignored rather than corrupting the
+    /// phase output.
     private struct AllowedShapes: OptionSet {
         let rawValue: Int
-        static let prose = AllowedShapes(rawValue: 1 << 0)      // short, detailed
-        static let facts = AllowedShapes(rawValue: 1 << 1)      // decision/action/question/risk
-        static let chunkNote = AllowedShapes(rawValue: 1 << 2)  // chunknote
+        static let facts = AllowedShapes(rawValue: 1 << 0)      // decision/action/question/risk
+        static let chunkNote = AllowedShapes(rawValue: 1 << 1)  // chunknote
     }
 
     // MARK: - NDJSON accumulator
@@ -693,48 +981,31 @@ actor SummarizationPipeline {
         /// Lowercased segment IDs a cited evidence ID must match to survive.
         private let validEvidenceIDs: Set<String>
 
-        private var shortSummary = ""
-        private var detailedSummary = ""
         private var decisions: [SummaryDecision] = []
         private var actionItems: [SummaryActionItem] = []
         private var openQuestions: [SummaryOpenQuestion] = []
         private var risks: [SummaryRisk] = []
-        /// The map phase's chunk gist; unused (stays "") on other phases.
+        /// The map phase's chunk gist ("" until the model emits it).
         private(set) var chunkNote = ""
 
         /// Normalized "type + primary text" keys already added, so the common
         /// small-model loop of repeating the same item is collapsed to one.
         private var seenKeys: Set<String> = []
 
-        init(allowed: AllowedShapes, validEvidenceIDs: Set<String>, seed: MergedFacts?) {
+        init(allowed: AllowedShapes, validEvidenceIDs: Set<String>) {
             self.allowed = allowed
             self.validEvidenceIDs = validEvidenceIDs
-            if let seed {
-                // Seed the prose reduce with the merged facts so its snapshots
-                // carry the full summary while prose streams in. Prose phase
-                // never re-adds facts (they are not in `allowed`), so no dedup
-                // seeding is needed.
-                decisions = seed.decisions
-                actionItems = seed.actionItems
-                openQuestions = seed.openQuestions
-                risks = seed.risks
-            }
         }
 
         var snapshot: MeetingSummary {
             MeetingSummary(
-                shortSummary: shortSummary,
-                detailedSummary: detailedSummary,
+                shortSummary: "",
+                detailedSummary: "",
                 decisions: decisions,
                 actionItems: actionItems,
                 openQuestions: openQuestions,
                 risks: risks
             )
-        }
-
-        var hasContent: Bool {
-            !shortSummary.isEmpty || !detailedSummary.isEmpty || !decisions.isEmpty
-                || !actionItems.isEmpty || !openQuestions.isEmpty || !risks.isEmpty
         }
 
         /// Gate + apply one completed NDJSON line. Invalid lines are dropped and
@@ -763,14 +1034,6 @@ actor SummarizationPipeline {
             }
 
             switch type {
-            case "short":
-                guard allowed.contains(.prose) else { return false }
-                shortSummary = SummarizationPipeline.string("text", in: object)
-                return true
-            case "detailed":
-                guard allowed.contains(.prose) else { return false }
-                detailedSummary = SummarizationPipeline.string("text", in: object)
-                return true
             case "chunknote":
                 guard allowed.contains(.chunkNote) else { return false }
                 let text = SummarizationPipeline.string("text", in: object)
@@ -850,25 +1113,6 @@ actor SummarizationPipeline {
             guard count < SummaryLimits.maxItemsPerSection else { return false }
             let key = SummaryDedup.key(type, primaryText)
             return seenKeys.insert(key).inserted
-        }
-
-        /// Preview the in-progress prose line. Returns true if the visible text
-        /// changed. No-op unless the phase accepts prose.
-        mutating func applyPartialProse(_ fragment: String) -> Bool {
-            guard allowed.contains(.prose),
-                  let (type, text) = SummarizationPipeline.partialProse(fragment) else { return false }
-            switch type {
-            case "short":
-                guard text != shortSummary else { return false }
-                shortSummary = text
-                return true
-            case "detailed":
-                guard text != detailedSummary else { return false }
-                detailedSummary = text
-                return true
-            default:
-                return false
-            }
         }
     }
 

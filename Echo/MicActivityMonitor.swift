@@ -9,7 +9,8 @@
 //  audio.
 //
 //  Thin shim in the `InputDeviceMonitor` mold: no decisions here. It reports
-//  the raw set of (pid, bundleID) mic clients with Echo's own process excluded;
+//  the raw set of (pid, bundleID, app bundle) mic clients with Echo's own
+//  process excluded;
 //  catalog matching, debouncing and every product rule live in
 //  `CallAppCatalog` / `CallSessionMachine`.
 //
@@ -25,9 +26,17 @@ final class MicActivityMonitor {
     /// One process capturing microphone input. `bundleID` is empty for daemons
     /// and unbundled processes — which is why an empty ID can never match the
     /// catalog.
+    ///
+    /// `appBundleID` is the second identity: the bundle ID of the outermost
+    /// `.app` the process's executable lives in (`AppBundleIdentity`), which is
+    /// how a browser helper that shares no bundle prefix with its parent —
+    /// Firefox's and Zen's `plugincontainer` — still attributes to the browser
+    /// the user launched. Empty when no `.app` encloses the executable, and an
+    /// empty identity matches nothing.
     struct Client: Hashable, Sendable {
         var pid: pid_t
         var bundleID: String
+        var appBundleID: String = ""
     }
 
     /// Fires on the main queue whenever the set of mic-capturing processes
@@ -204,7 +213,13 @@ final class MicActivityMonitor {
     private func clients(in objects: [AudioObjectID]) -> [Client] {
         objects.compactMap { object in
             guard isRunningInput(object), let pid = pid(of: object), pid != ownPID else { return nil }
-            return Client(pid: pid, bundleID: bundleID(of: object))
+            // Resolved for the capturing processes only — a handful at any
+            // moment, so the path lookup costs nothing on this path.
+            return Client(
+                pid: pid,
+                bundleID: bundleID(of: object),
+                appBundleID: AppBundleIdentity.appBundleID(ofPID: pid)
+            )
         }
     }
 
@@ -324,13 +339,25 @@ final class MicActivityMonitor {
 
     private func dumpProcessTable() {
         let objects = processObjects()
+        let browsers = BrowserCatalog.installed()
         var rows: [String] = []
         for object in objects {
             guard let pid = pid(of: object) else { continue }
             let bundle = bundleID(of: object)
+            let appBundle = AppBundleIdentity.appBundleID(ofPID: pid)
             let running = isRunningInput(object)
-            guard running || CallAppCatalog.match(bundleID: bundle) != nil else { continue }
-            rows.append("obj=\(object) pid=\(pid) input=\(running ? 1 : 0) bundle=\(bundle.isEmpty ? "<none>" : bundle)")
+            let matched = CallAppCatalog.match(
+                bundleID: bundle,
+                appBundleID: appBundle,
+                browsers: browsers
+            )
+            guard running || matched != nil else { continue }
+            rows.append("""
+            obj=\(object) pid=\(pid) input=\(running ? 1 : 0) \
+            bundle=\(bundle.isEmpty ? "<none>" : bundle) \
+            app=\(appBundle.isEmpty ? "<none>" : appBundle) \
+            catalog=\(matched?.displayName ?? "-")
+            """)
         }
         Self.log.info("""
         dump: \(objects.count, privacy: .public) process objects, \
@@ -350,7 +377,8 @@ final class MicActivityMonitor {
             Self.log.info("""
             mic client + pid=\(client.pid, privacy: .public) \
             bundle=\(client.bundleID.isEmpty ? "<none>" : client.bundleID, privacy: .public) \
-            catalog=\(CallAppCatalog.match(bundleID: client.bundleID)?.displayName ?? "-", privacy: .public)
+            app=\(client.appBundleID.isEmpty ? "<none>" : client.appBundleID, privacy: .public) \
+            catalog=\(CallAppCatalog.match(bundleID: client.bundleID, appBundleID: client.appBundleID, browsers: BrowserCatalog.installed())?.displayName ?? "-", privacy: .public)
             """)
         }
         for client in previous.subtracting(current).sorted(by: { $0.pid < $1.pid }) {

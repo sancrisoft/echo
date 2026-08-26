@@ -2,10 +2,11 @@
 //  SummarizationPipelineStreamTests.swift
 //  EchoTests
 //
-//  Drives the full streaming path (TextGenerating seam → buffer/newline split
-//  → validator → accumulator → snapshots) with a scripted fake engine, no real
-//  model. Chunks are split at cruel points — mid-escape, mid-line — because
-//  that is exactly how token streaming arrives.
+//  Drives the single-pass route's full streaming path (TextGenerating seam →
+//  markdown accumulation → sanitizer → snapshots) with a scripted fake engine,
+//  no real model. Chunks are split at cruel points — mid-word, mid-line —
+//  because that is exactly how token streaming arrives. The long route's
+//  NDJSON map-reduce streaming lives in SummaryMapReduceTests.
 //
 
 import Foundation
@@ -13,12 +14,21 @@ import Testing
 @testable import Echo
 
 /// Scripted TextGenerating: each call to `stream` pops the next script (an
-/// array of raw chunks) and replays it. Thread-safe so the pipeline can call
-/// it from any isolation.
+/// array of raw chunks) and replays it, recording exactly what the pipeline
+/// asked for (system, user, params) so tests can assert on the real prompts
+/// and sampling in flight. Thread-safe so the pipeline can call it from any
+/// isolation.
 private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
+
+    struct RecordedCall {
+        let system: String
+        let user: String
+        let params: GenerationParams
+    }
+
     private let lock = NSLock()
     private var scripts: [[String]]
-    private(set) var callCount = 0
+    private var recorded: [RecordedCall] = []
 
     init(scripts: [[String]]) {
         self.scripts = scripts
@@ -28,7 +38,7 @@ private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
         -> AsyncThrowingStream<String, Error>
     {
         lock.lock()
-        callCount += 1
+        recorded.append(RecordedCall(system: system, user: user, params: params))
         let chunks = scripts.isEmpty ? [] : scripts.removeFirst()
         lock.unlock()
         return AsyncThrowingStream { continuation in
@@ -42,7 +52,13 @@ private final class ScriptedEngine: TextGenerating, @unchecked Sendable {
     var calls: Int {
         lock.lock()
         defer { lock.unlock() }
-        return callCount
+        return recorded.count
+    }
+
+    var recordedCalls: [RecordedCall] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
     }
 }
 
@@ -52,27 +68,251 @@ private func segment(_ text: String, id: UUID = UUID(), at start: TimeInterval =
     )
 }
 
+// MARK: - Generation presets
+
+/// The markdown route needs different sampling than the NDJSON phases, and the
+/// two must never drift into each other: the preset carries the markdown
+/// tuning, the default init keeps the NDJSON tuning. Both are pinned by value
+/// so a "harmless" retune shows up as a failing test, not a mystery regression
+/// in summary quality.
+@Suite("GenerationParams presets")
+struct GenerationParamsPresetTests {
+
+    @Test("markdownSummary carries the markdown-prose tuning")
+    func markdownSummaryValues() {
+        let params = GenerationParams.markdownSummary
+        #expect(params.temperature == 0.4)
+        #expect(params.topP == 0.95)
+        #expect(params.maxTokens == 4096)
+        #expect(params.repetitionPenalty == 1.05)
+        #expect(params.frequencyPenalty == 0.0)
+        #expect(params.presencePenalty == 0.0)
+    }
+
+    @Test("the default init keeps the NDJSON tuning untouched")
+    func defaultsUnchanged() {
+        let params = GenerationParams()
+        #expect(params.temperature == 0.3)
+        #expect(params.topP == 0.9)
+        #expect(params.maxTokens == 3072)
+        #expect(params.repetitionPenalty == 1.1)
+        #expect(params.frequencyPenalty == 0.6)
+        #expect(params.presencePenalty == 0.3)
+    }
+}
+
+// MARK: - Markdown sanitizer (table)
+
+/// A small model loves to wrap its whole answer in a code fence despite being
+/// told not to. The sanitizer's whole job is trim + unwrap that one outer
+/// fence; anything subtler is the renderer's problem (later slice).
+@Suite("sanitizedMarkdown")
+struct SanitizedMarkdownTests {
+
+    @Test("clean documents pass through untouched", arguments: [
+        "### Action Items\n- [ ] Ship it",
+        "Plain paragraph.",
+    ])
+    func passthrough(document: String) {
+        #expect(SummarizationPipeline.sanitizedMarkdown(document) == document)
+    }
+
+    @Test("leading and trailing whitespace is trimmed")
+    func trimsWhitespace() {
+        #expect(SummarizationPipeline.sanitizedMarkdown("\n\n  ### Notes\nBody.  \n\n") == "### Notes\nBody.")
+    }
+
+    @Test("an outer bare fence is unwrapped")
+    func unwrapsBareFence() {
+        let wrapped = "```\n### Notes\nBody.\n```"
+        #expect(SummarizationPipeline.sanitizedMarkdown(wrapped) == "### Notes\nBody.")
+    }
+
+    @Test("an outer ```markdown fence is unwrapped")
+    func unwrapsLanguageFence() {
+        let wrapped = "```markdown\n### Notes\nBody.\n```"
+        #expect(SummarizationPipeline.sanitizedMarkdown(wrapped) == "### Notes\nBody.")
+    }
+
+    @Test("trailing newline junk around the fence still unwraps")
+    func unwrapsDespiteTrailingJunk() {
+        let wrapped = "\n```markdown\n### Notes\nBody.\n```\n\n\n"
+        #expect(SummarizationPipeline.sanitizedMarkdown(wrapped) == "### Notes\nBody.")
+    }
+
+    @Test("a document that merely starts with a code block is not damaged")
+    func openFenceWithoutClosingStays() {
+        // No closing fence line at the end → not a wrapper, leave it alone.
+        let document = "```swift\nlet x = 1\n```\nAnd prose after."
+        #expect(SummarizationPipeline.sanitizedMarkdown(document) == document)
+    }
+
+    @Test("whitespace-only input sanitizes to empty")
+    func whitespaceOnly() {
+        #expect(SummarizationPipeline.sanitizedMarkdown("  \n\t\n") == "")
+    }
+}
+
+// MARK: - Plain transcript rendering (markdown prompt)
+
+/// The markdown prompt shows the model a human-shaped transcript: same derived
+/// utterances as `transcriptText` (ADR-021 merging), but no channel tag and no
+/// segment IDs — the markdown route has no evidence protocol to feed.
+@Suite("plainTranscriptText")
+struct PlainTranscriptTextTests {
+
+    @Test("renders derived utterances as [start-end] Speaker: text")
+    func lineFormat() {
+        let mine = TranscriptSegment(
+            channel: .microphone, speaker: .me, text: "Morning, all.", start: 61, end: 63)
+        let theirs = TranscriptSegment(
+            channel: .system, speaker: .teammates, text: "Morning!", start: 64, end: 65)
+
+        let text = SummarizationPipeline.plainTranscriptText(from: [mine, theirs])
+        let lines = text.components(separatedBy: "\n")
+
+        #expect(lines == [
+            "[1:01-1:03] You: Morning, all.",
+            "[1:04-1:05] Team: Morning!",
+        ])
+        #expect(!text.contains("[id="))
+        #expect(!text.contains("[microphone]"))
+        #expect(!text.contains("[system]"))
+    }
+}
+
+// MARK: - Dominant language (S10)
+
+/// Language detection that steers the prompts' language injection: an English
+/// name for a clearly dominant language, nil when there is no confident
+/// answer. A wrong label would steer the WHOLE summary's language, so for
+/// garbled or too-short text nil (generic prompts) is the only safe answer.
+@Suite("dominantLanguageName")
+struct DominantLanguageTests {
+
+    @Test("clearly Spanish segments detect as Spanish")
+    func spanishDetected() {
+        let segments = [
+            segment("Bueno, empecemos con la revisión del panel de métricas de esta semana."),
+            segment("Claro, las pruebas de regresión terminaron ayer y todo salió bien."),
+            segment("Entonces estamos de acuerdo: lanzamos la beta el viernes que viene."),
+        ]
+        #expect(SummarizationPipeline.dominantLanguageName(of: segments) == "Spanish")
+    }
+
+    @Test("clearly English segments detect as English")
+    func englishDetected() {
+        let segments = [
+            segment("Okay, let's review the dashboard launch and the regression pass."),
+            segment("QA finished everything yesterday and the results all came back green."),
+            segment("Then we are agreed: we ship the beta this coming Friday morning."),
+        ]
+        #expect(SummarizationPipeline.dominantLanguageName(of: segments) == "English")
+    }
+
+    @Test("empty, garbled, or too-short text yields nil, never a coin-flip label")
+    func unconfidentYieldsNil() {
+        #expect(SummarizationPipeline.dominantLanguageName(of: []) == nil)
+        #expect(SummarizationPipeline.dominantLanguageName(of: [segment("")]) == nil)
+        #expect(SummarizationPipeline.dominantLanguageName(of: [segment("zzxq vrrk 12 glmp 44")]) == nil)
+    }
+}
+
+// MARK: - Caption source (markdown-stripped head)
+
+/// The library-row caption is written by a tiny generation that reads the head
+/// of the finished summary. A markdown document's head is markup-dense
+/// ("### Action Items", "- [ ]", "**bold**") — fed raw, the caption model
+/// parrots the markup. `captionSource` strips the syntax so the model reads
+/// prose, and caps the head so a long document never floods the prompt.
+@Suite("captionSource")
+struct CaptionSourceTests {
+
+    @Test("heading, checkbox, bullet, and emphasis markup is stripped")
+    func stripsMarkup() {
+        let markdown = """
+        ### Action Items
+        - [ ] Diego to ship the **hotfix**
+        - [x] Juan to test the `Echo` build
+
+        ### Release Review
+        - The team agreed the *build* is ready.
+        """
+
+        let source = SummarizationPipeline.captionSource(from: markdown)
+
+        #expect(source.contains("Action Items"))
+        #expect(source.contains("Diego to ship the hotfix"))
+        #expect(source.contains("Juan to test the Echo build"))
+        #expect(source.contains("The team agreed the build is ready."))
+        #expect(!source.contains("#"))
+        #expect(!source.contains("["))
+        #expect(!source.contains("*"))
+        #expect(!source.contains("`"))
+    }
+
+    @Test("table rows and horizontal rules are dropped")
+    func dropsTablesAndRules() {
+        let markdown = """
+        ### Options
+        | Option | Cost |
+        | --- | --- |
+        | A | low |
+
+        ---
+
+        Prose survives.
+        """
+
+        let source = SummarizationPipeline.captionSource(from: markdown)
+
+        #expect(source.contains("Options"))
+        #expect(source.contains("Prose survives."))
+        #expect(!source.contains("|"))
+        #expect(!source.contains("---"))
+    }
+
+    @Test("a plain paragraph passes through unchanged")
+    func plainParagraphPassesThrough() {
+        let prose = "A quick sync about shipping the release on Friday."
+        #expect(SummarizationPipeline.captionSource(from: prose) == prose)
+    }
+
+    @Test("the stripped head is capped, and the cap applies after stripping")
+    func capsAfterStripping() {
+        // Every line spends most of its characters on markup; stripping first
+        // means the cap budgets prose, not asterisks.
+        let line = "- [ ] **Someone** to do the `thing` again\n"
+        let markdown = String(repeating: line, count: 200)
+
+        let source = SummarizationPipeline.captionSource(from: markdown)
+
+        #expect(source.count <= 1200)
+        #expect(!source.contains("*"))
+        #expect(source.hasPrefix("Someone to do the thing again"))
+    }
+}
+
 @Suite("SummarizationPipeline streaming")
 struct SummarizationPipelineStreamTests {
 
-    /// The full protocol, split at hostile boundaries: inside the type name,
-    /// inside a \" escape, in the middle of a UUID, and with one line spread
-    /// over many one-character deltas.
-    @Test("cruel chunk splits still produce correct progressive snapshots")
+    /// One markdown document, split at hostile boundaries: mid-word, mid-line,
+    /// and a char-by-char tail. Snapshots must fill in progressively and never
+    /// shrink, and the final snapshot must carry the sanitized full document
+    /// with every legacy field left empty.
+    @Test("cruel chunk splits still produce a growing markdown document")
     func cruelSplits() async throws {
-        // Evidence must cite a real segment ID or the item is dropped (SPEC-05
-        // executable grounding), so the fixture segment carries this exact UUID.
-        let segID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
-        let ndjson =
-            #"{"type":"short","text":"Ship v2 \"Friday\"."}"# + "\n"
-            + #"{"type":"detailed","text":"The team reviewed QA and agreed."}"# + "\n"
-            + #"{"type":"decision","title":"Ship v2","details":null,"evidence":["11111111-1111-1111-1111-111111111111"]}"# + "\n"
-            + #"{"type":"action","task":"Update changelog","owner":null,"due":null,"evidence":["11111111-1111-1111-1111-111111111111"]}"# + "\n"
+        let document = """
+        ### Action Items
+        - [ ] Update the changelog
 
-        // Split 1: mid key/escape/UUID. Split 2: char-by-char.
+        ### Release Review
+        You and Team agreed the build is ready to ship.
+        """
+
         var chunks: [String] = []
-        let breakpoints = [12, 30, 38, 55, 90, 120, 170, 200]
-        var remaining = ndjson
+        let breakpoints = [3, 11, 19, 30, 44, 58]   // mid-word and mid-line on purpose
+        var remaining = document
         var consumed = 0
         for breakpoint in breakpoints {
             let take = breakpoint - consumed
@@ -88,87 +328,152 @@ struct SummarizationPipelineStreamTests {
         let pipeline = SummarizationPipeline()
 
         var snapshots: [MeetingSummary] = []
-        for try await snapshot in await pipeline.generate(from: [segment("hello", id: segID)], using: engine) {
+        for try await snapshot in await pipeline.generate(from: [segment("hello")], using: engine) {
             snapshots.append(snapshot)
         }
 
         let final = try #require(snapshots.last)
-        #expect(final.shortSummary == #"Ship v2 "Friday"."#)
-        #expect(final.detailedSummary == "The team reviewed QA and agreed.")
-        #expect(final.decisions.count == 1)
-        #expect(final.decisions.first?.title == "Ship v2")
-        #expect(final.decisions.first?.evidenceSegmentIDs == ["11111111-1111-1111-1111-111111111111"])
-        #expect(final.actionItems.count == 1)
-        #expect(final.actionItems.first?.owner == nil)
-
-        // Progressive: the short summary must appear before the last snapshot
-        // (char-by-char preview), and snapshots only ever grow.
-        #expect(snapshots.count > 3)
-        #expect(snapshots.first?.decisions.isEmpty == true)
-        let shortAppearsEarly = snapshots.prefix(snapshots.count - 1).contains { !$0.shortSummary.isEmpty }
-        #expect(shortAppearsEarly)
-    }
-
-    @Test("malformed lines are dropped, valid ones survive")
-    func malformedLinesDropped() async throws {
-        let segID = UUID()
-        let chunks = [
-            "{\"type\":\"short\",\"text\":\"Valid.\"}\n",
-            "total garbage, not json\n",
-            "{\"type\":\"decision\",\"title\":\"No evidence key\"}\n",
-            "{\"type\":\"detailed\",\"text\":\"Also valid.\"}\n",
-            "{\"type\":\"risk\",\"risk\":\"Real risk\",\"details\":null,\"evidence\":[\"\(segID.uuidString)\"]}\n",
-        ]
-        let engine = ScriptedEngine(scripts: [chunks])
-        let pipeline = SummarizationPipeline()
-
-        var final: MeetingSummary?
-        for try await snapshot in await pipeline.generate(from: [segment("hi", id: segID)], using: engine) {
-            final = snapshot
-        }
-
-        let summary = try #require(final)
-        #expect(summary.shortSummary == "Valid.")
-        #expect(summary.detailedSummary == "Also valid.")
-        #expect(summary.decisions.isEmpty)       // malformed decision dropped
-        #expect(summary.risks.count == 1)
+        #expect(final.markdown == document)
+        #expect(final.shortSummary.isEmpty)
+        #expect(final.detailedSummary.isEmpty)
+        #expect(final.decisions.isEmpty)
+        #expect(final.actionItems.isEmpty)
+        #expect(final.openQuestions.isEmpty)
+        #expect(final.risks.isEmpty)
         #expect(engine.calls == 1)
+
+        // Progressive: many snapshots, and the document only ever grows.
+        #expect(snapshots.count > 3)
+        var previousLength = 0
+        for snapshot in snapshots {
+            #expect(snapshot.markdown.count >= previousLength)
+            previousLength = snapshot.markdown.count
+        }
     }
 
-    @Test("single-pass drops items whose evidence cites no real segment")
-    func singlePassEvidenceGrounding() async throws {
-        let realID = UUID()
-        let fakeID = UUID()   // not part of the transcript
-        let chunks = [
-            "{\"type\":\"short\",\"text\":\"S.\"}\n",
-            "{\"type\":\"detailed\",\"text\":\"D.\"}\n",
-            // Grounded: cites the real segment → kept.
-            "{\"type\":\"decision\",\"title\":\"Real\",\"details\":null,\"evidence\":[\"\(realID.uuidString)\"]}\n",
-            // Hallucinated evidence only → dropped.
-            "{\"type\":\"decision\",\"title\":\"Fake\",\"details\":null,\"evidence\":[\"\(fakeID.uuidString)\"]}\n",
-            // Empty evidence → dropped.
-            "{\"type\":\"risk\",\"risk\":\"Empty\",\"details\":null,\"evidence\":[]}\n",
+    /// The markdown route must generate with the markdown tuning, not the
+    /// NDJSON default — the whole point of the preset. Every field is compared
+    /// so a partial hand-off (say, only maxTokens copied over) still fails.
+    @Test("the single-pass route streams with the markdownSummary preset")
+    func singlePassUsesMarkdownPreset() async throws {
+        let engine = ScriptedEngine(scripts: [["### Notes\nBody."]])
+        let pipeline = SummarizationPipeline()
+
+        for try await _ in await pipeline.generate(from: [segment("hi")], using: engine) {}
+
+        let call = try #require(engine.recordedCalls.first)
+        let expected = GenerationParams.markdownSummary
+        #expect(call.params.temperature == expected.temperature)
+        #expect(call.params.topP == expected.topP)
+        #expect(call.params.maxTokens == expected.maxTokens)
+        #expect(call.params.repetitionPenalty == expected.repetitionPenalty)
+        #expect(call.params.frequencyPenalty == expected.frequencyPenalty)
+        #expect(call.params.presencePenalty == expected.presencePenalty)
+    }
+
+    /// A cheap regression net over the adaptive ruleset — not a full-text
+    /// assert (wording may be tuned), but the load-bearing invariants must
+    /// survive any rewording: the Action Items anchor, the never-invent
+    /// grounding rule, the dominant-language rule, the no-code-fences output
+    /// contract, and the never-empty-section rule. Asserted on the system
+    /// prompt the engine actually receives, so a prompt/plumbing mismatch
+    /// fails too.
+    @Test("the system prompt encodes the adaptive ruleset's invariants")
+    func systemPromptInvariants() async throws {
+        let engine = ScriptedEngine(scripts: [["### Notes\nBody."]])
+        let pipeline = SummarizationPipeline()
+
+        for try await _ in await pipeline.generate(from: [segment("hi")], using: engine) {}
+
+        let system = try #require(engine.recordedCalls.first).system
+        #expect(system.contains("### Action Items"))
+        #expect(system.localizedCaseInsensitiveContains("never invent an owner or a due date"))
+        #expect(system.contains("dominant language of the transcript"))
+        #expect(system.localizedCaseInsensitiveContains("no code fences"))
+        #expect(system.localizedCaseInsensitiveContains("never write an empty section"))
+        // S8 measured-gap rules: the commitment sweep (mid-topic commitments
+        // still get a checkbox), the mention-is-not-ownership test (the
+        // owner-invention trap), and the hard small-talk omission.
+        #expect(system.localizedCaseInsensitiveContains("sweep the whole transcript for commitments"))
+        #expect(system.localizedCaseInsensitiveContains("naming someone who did not take the task is an error"))
+        #expect(system.localizedCaseInsensitiveContains("no section, no mention"))
+    }
+
+    /// S9 recency reinforcement: the small-talk omission rule in the far-away
+    /// system prompt alone measured 6/6 leaks, so the USER prompt must CLOSE
+    /// with the work-notes reminder — after the transcript, at the end of the
+    /// context, where a small model weighs it most. The fixture text is
+    /// deliberately language-undetectable (S10): with no confident language,
+    /// the prompts keep their generic wording and the ownership recap stays
+    /// the closer.
+    @Test("the user prompt closes with the work-notes reminder after the transcript")
+    func userPromptClosesWithWorkNotesReminder() async throws {
+        let engine = ScriptedEngine(scripts: [["### Notes\nBody."]])
+        let pipeline = SummarizationPipeline()
+
+        for try await _ in await pipeline.generate(
+            from: [segment("zzxq vrrk 12 glmp 44")], using: engine) {}
+
+        let user = try #require(engine.recordedCalls.first).user
+        let transcript = try #require(user.range(of: "Transcript:"))
+        let reminder = try #require(user.range(of: "Reminder: these are WORK notes."))
+        #expect(transcript.upperBound <= reminder.lowerBound)
+        #expect(user.localizedCaseInsensitiveContains("leave out all social and personal conversation"))
+        #expect(user.localizedCaseInsensitiveContains("no section, no mention"))
+        // S10: no confident language -> no explicit language sentence.
+        #expect(!user.contains("Write the notes in"))
+        // The reminder carries BOTH probabilistic traps: measured alone, the
+        // small-talk line at the end displaced the ownership rule (owner trap
+        // 4/4 -> 0/2), so the owner recap must close the context with it.
+        #expect(user.hasSuffix("checkbox with NO name."))
+    }
+
+    /// S10 field bug: a fully-Spanish transcript produced an ENGLISH summary —
+    /// the scaffolding is English and the closing slot dominates (measured in
+    /// S9). A detected language must therefore appear EXPLICITLY: as framing
+    /// before the transcript and as the reminder's final sentence. Zero-sum
+    /// guard: language is appended — the small-talk and ownership recaps must
+    /// survive alongside it.
+    @Test("a Spanish transcript injects the explicit language sentence, keeping both recaps")
+    func spanishTranscriptInjectsLanguageSentence() async throws {
+        let engine = ScriptedEngine(scripts: [["### Notas\nCuerpo."]])
+        let pipeline = SummarizationPipeline()
+        let segments = [
+            segment("Bueno, empecemos con la revisión del panel de métricas de esta semana."),
+            segment("Claro, las pruebas de regresión terminaron ayer y todo salió bien."),
+            segment("Entonces estamos de acuerdo: lanzamos la beta el viernes que viene."),
         ]
+
+        for try await _ in await pipeline.generate(from: segments, using: engine) {}
+
+        let user = try #require(engine.recordedCalls.first).user
+        let sentence = try #require(user.range(of: "Write the notes in Spanish."))
+        let transcript = try #require(user.range(of: "Transcript:"))
+        #expect(sentence.upperBound <= transcript.lowerBound)
+        #expect(user.hasSuffix("Write the notes in Spanish."))
+        #expect(user.localizedCaseInsensitiveContains("no section, no mention"))
+        #expect(user.localizedCaseInsensitiveContains("checkbox with NO name"))
+    }
+
+    @Test("a document streamed inside a code fence is unwrapped in the final snapshot")
+    func fenceUnwrappedAtTheEnd() async throws {
+        let chunks = ["```markdown\n### No", "tes\nBody.", "\n```"]
         let engine = ScriptedEngine(scripts: [chunks])
         let pipeline = SummarizationPipeline()
 
         var final: MeetingSummary?
-        for try await snapshot in await pipeline.generate(from: [segment("hi", id: realID)], using: engine) {
+        for try await snapshot in await pipeline.generate(from: [segment("hi")], using: engine) {
             final = snapshot
         }
 
-        let summary = try #require(final)
-        #expect(summary.decisions.count == 1)
-        #expect(summary.decisions.first?.title == "Real")
-        #expect(summary.decisions.first?.evidenceSegmentIDs == [realID.uuidString])
-        #expect(summary.risks.isEmpty)   // empty-evidence risk dropped
+        #expect(final?.markdown == "### Notes\nBody.")
     }
 
-    @Test("a stream with no valid short/detailed retries exactly once")
+    @Test("a whitespace-only generation retries exactly once")
     func retriesOnceThenSucceeds() async throws {
-        let garbage = ["I am a chatty model and refuse to emit JSON.\n"]
-        let good = ["{\"type\":\"short\",\"text\":\"Second try.\"}\n{\"type\":\"detailed\",\"text\":\"Worked.\"}\n"]
-        let engine = ScriptedEngine(scripts: [garbage, good])
+        let whitespace = ["   \n", "\t\n\n"]
+        let good = ["### Notes\nSecond try worked."]
+        let engine = ScriptedEngine(scripts: [whitespace, good])
         let pipeline = SummarizationPipeline()
 
         var final: MeetingSummary?
@@ -177,13 +482,12 @@ struct SummarizationPipelineStreamTests {
         }
 
         #expect(engine.calls == 2)
-        #expect(final?.shortSummary == "Second try.")
-        #expect(final?.detailedSummary == "Worked.")
+        #expect(final?.markdown == "### Notes\nSecond try worked.")
     }
 
-    @Test("two garbage generations end in emptyModelResponse")
+    @Test("two whitespace-only generations end in emptyModelResponse")
     func emptyAfterRetry() async {
-        let engine = ScriptedEngine(scripts: [["nope\n"], ["still nope\n"]])
+        let engine = ScriptedEngine(scripts: [["  \n"], ["\t \n"]])
         let pipeline = SummarizationPipeline()
 
         var thrown: Error?
@@ -198,6 +502,76 @@ struct SummarizationPipelineStreamTests {
             Issue.record("Expected emptyModelResponse, got \(String(describing: thrown))")
             return
         }
+    }
+
+    /// The library row's caption is generated from the finished summary, so a
+    /// markdown-only summary (no legacy prose fields) must still feed it.
+    @Test("a markdown-only summary still produces a one-line caption")
+    func captionFromMarkdownOnlySummary() async throws {
+        let engine = ScriptedEngine(scripts: [["A quick sync about shipping the release."]])
+        let pipeline = SummarizationPipeline()
+        let summary = MeetingSummary(
+            markdown: "### Release Plan\nYou and Team agreed to ship Friday.",
+            shortSummary: "", detailedSummary: "",
+            decisions: [], actionItems: [], openQuestions: [], risks: [])
+
+        let caption = await pipeline.oneLineDescription(for: summary, using: engine)
+
+        #expect(engine.calls == 1)
+        #expect(caption == "A quick sync about shipping the release.")
+    }
+
+    /// The caption preference chain stays shortSummary → markdown →
+    /// detailedSummary, but the markdown leg must feed the STRIPPED head —
+    /// the caption model reads prose, not markup.
+    @Test("a markdown-only summary feeds the stripped head to the caption prompt")
+    func captionPromptGetsStrippedMarkdown() async throws {
+        let engine = ScriptedEngine(scripts: [["A sync about shipping the release."]])
+        let pipeline = SummarizationPipeline()
+        let summary = MeetingSummary(
+            markdown: "### Release Plan\n- [ ] Diego to ship **v1** on `Friday`",
+            shortSummary: "", detailedSummary: "",
+            decisions: [], actionItems: [], openQuestions: [], risks: [])
+
+        _ = await pipeline.oneLineDescription(for: summary, using: engine)
+
+        let user = try #require(engine.recordedCalls.first).user
+        #expect(user.contains("Release Plan"))
+        #expect(user.contains("Diego to ship v1 on Friday"))
+        #expect(!user.contains("###"))
+        #expect(!user.contains("- [ ]"))
+        #expect(!user.contains("**"))
+        #expect(!user.contains("`"))
+    }
+
+    @Test("a short summary still outranks the markdown document as caption source")
+    func captionPrefersShortSummary() async throws {
+        let engine = ScriptedEngine(scripts: [["A caption."]])
+        let pipeline = SummarizationPipeline()
+        let summary = MeetingSummary(
+            markdown: "### Markdown Notes\nShould not be used.",
+            shortSummary: "The short prose summary.", detailedSummary: "",
+            decisions: [], actionItems: [], openQuestions: [], risks: [])
+
+        _ = await pipeline.oneLineDescription(for: summary, using: engine)
+
+        let user = try #require(engine.recordedCalls.first).user
+        #expect(user.contains("The short prose summary."))
+        #expect(!user.contains("Markdown Notes"))
+    }
+
+    @Test("an entirely empty summary yields no caption and never calls the engine")
+    func captionSkipsEmptySummary() async {
+        let engine = ScriptedEngine(scripts: [["should never be used"]])
+        let pipeline = SummarizationPipeline()
+        let summary = MeetingSummary(
+            shortSummary: "", detailedSummary: "",
+            decisions: [], actionItems: [], openQuestions: [], risks: [])
+
+        let caption = await pipeline.oneLineDescription(for: summary, using: engine)
+
+        #expect(engine.calls == 0)
+        #expect(caption == nil)
     }
 
     @Test("empty transcript throws without touching the engine")

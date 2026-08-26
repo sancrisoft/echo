@@ -96,31 +96,50 @@ final class CallDetectionController {
 
     #if DEBUG
     private static func previewFace(named name: String) -> IslandFace? {
+        // ECHO_ISLAND_PREVIEW_APP renders the face with a chosen app name, so
+        // the widest catalog names ("Google Chrome", "Microsoft Teams") can be
+        // checked for wrapping without waiting for a call in that app.
+        let appName = ProcessInfo.processInfo.environment["ECHO_ISLAND_PREVIEW_APP"] ?? "Zoom"
         switch name {
-        case "startPrompt": return .startPrompt(appName: "Zoom", scoped: true)
+        case "startPrompt": return .startPrompt(appName: appName, scoped: true)
         case "compactPill": return .compactPill
-        case "endGrace": return .endGrace(appName: "Zoom")
+        case "endGrace": return .endGrace(appName: appName)
         case "saved": return .saved
         default: return nil
         }
     }
     #endif
 
-    /// The catalogued apps behind a set of mic clients: deduped, in catalog
-    /// order, so attribution is deterministic when several apps capture at
-    /// once. `disabledNames` drops apps the user excluded in Settings —
-    /// filtered HERE, the single matcher call site, so a disabled app is
-    /// invisible everywhere downstream (island, scope dropdown, auto-scope;
-    /// decision §2.6). Names, not prefixes: one displayName covers all of an
-    /// app's catalog prefixes, and a stale name (catalog renamed the app) is
+    /// The apps behind a set of mic clients: deduped, in catalog order, so
+    /// attribution is deterministic when several apps capture at once.
+    /// `disabledNames` drops apps the user excluded in Settings — filtered
+    /// HERE, the single matcher call site, so a disabled app is invisible
+    /// everywhere downstream (island, scope dropdown, auto-scope; decision
+    /// §2.6). Names, not prefixes: one displayName covers all of an app's
+    /// catalog prefixes, and a stale name (catalog renamed the app) is
     /// harmlessly ignored because nothing matches it.
+    ///
+    /// `browsers` is the installed-browser tier (`BrowserCatalog`), ordered
+    /// after the curated table so a Zoom call in front of an open browser tab
+    /// is still attributed to Zoom. A browser the curated table already names
+    /// resolves to the curated entry, so it can never appear twice.
     static func matchedApps(
         from clients: [MicActivityMonitor.Client],
-        disabledNames: Set<String> = []
+        disabledNames: Set<String> = [],
+        browsers: [CallApp] = []
     ) -> [CallApp] {
-        let matched = Set(clients.compactMap { CallAppCatalog.match(bundleID: $0.bundleID) })
-        return CallAppCatalog.apps.filter {
-            matched.contains($0) && !disabledNames.contains($0.displayName)
+        let matched = Set(clients.compactMap {
+            CallAppCatalog.match(
+                bundleID: $0.bundleID,
+                appBundleID: $0.appBundleID,
+                browsers: browsers
+            )
+        })
+        var seen = Set<CallApp>()
+        return (CallAppCatalog.apps + browsers).filter {
+            seen.insert($0).inserted
+                && matched.contains($0)
+                && !disabledNames.contains($0.displayName)
         }
     }
 
@@ -130,7 +149,8 @@ final class CallDetectionController {
     private func applyMatchedClients() {
         let apps = Self.matchedApps(
             from: latestClients,
-            disabledNames: Set(settings.disabledCallApps)
+            disabledNames: Set(settings.disabledCallApps),
+            browsers: BrowserCatalog.installed()
         )
         appsInCall = apps
         apply(machine.handle(.matchedAppsChanged(apps)))

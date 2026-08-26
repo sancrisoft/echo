@@ -2,10 +2,17 @@
 //  CallAppCatalog.swift
 //  Echo
 //
-//  SP-006 / ADR-017: the curated set of apps whose microphone capture means
-//  "the user is probably in a call". Detection is deliberately NOT "any app
-//  that touches the mic" — dictation, voice memos and voice assistants must
-//  never raise the island, so only catalogued bundle IDs match.
+//  SP-006 / ADR-017: the set of apps whose microphone capture means "the user
+//  is probably in a call". Detection is deliberately NOT "any app that touches
+//  the mic" — dictation, voice memos and voice assistants must never raise the
+//  island.
+//
+//  Two tiers meet in `match`: the curated table in this file (native meeting
+//  apps, plus the browser processes that need naming by hand), and every
+//  browser installed on this Mac, asked of the system by `BrowserCatalog`.
+//  The second tier is why a Meet call in a browser nobody hardcoded is
+//  detected; the first is why the curated names and near-miss exclusions still
+//  hold.
 //
 //  Pure and table-tested. The Core Audio side (`MicActivityMonitor`) reports
 //  raw (pid, bundleID) mic clients and never decides what they mean; matching
@@ -19,7 +26,8 @@ nonisolated struct CallApp: Equatable, Hashable, Sendable {
     /// Island copy: "Zoom call detected".
     let displayName: String
 
-    /// The bundle-ID prefix this app is recognised by — see `matches(bundleID:)`.
+    /// The bundle-ID prefix this app is recognised by — see
+    /// `matches(bundleID:appBundleID:)`.
     let bundlePrefix: String
 
     /// SP-008: whether a recording session can honestly narrow its system
@@ -36,28 +44,45 @@ nonisolated struct CallApp: Equatable, Hashable, Sendable {
         self.scopeable = scopeable
     }
 
-    /// Exact match, or the prefix followed by a `.` so helper processes
-    /// attribute to their parent app (`com.google.Chrome.helper` → Chrome)
-    /// while neighbouring identifiers do not (`com.google.Chromecast`,
-    /// `com.google.Chromium`).
+    /// Whether a process belongs to this app, judged on both identities the
+    /// capture layers can read: the bundle ID Core Audio reports for the
+    /// process itself, and `appBundleID` — the bundle ID of the outermost
+    /// `.app` its executable lives in (`AppBundleIdentity`).
     ///
-    /// Case-sensitive: bundle IDs are compared as Core Audio reports them.
-    /// An empty bundle ID — daemons and unbundled processes, for which
-    /// `kAudioProcessPropertyBundleID` yields nothing — never matches, so a
-    /// nameless capture can never be read as a call.
-    func matches(bundleID: String) -> Bool {
-        guard !bundleID.isEmpty else { return false }
-        return bundleID == bundlePrefix || bundleID.hasPrefix(bundlePrefix + ".")
+    /// The bundle ID alone is enough for Chromium-shaped apps, whose helpers
+    /// carry the parent's prefix (`com.google.Chrome.helper` → Chrome), and it
+    /// is what keeps neighbours out (`com.google.Chromecast`,
+    /// `com.google.Chromium`). It is *not* enough for Gecko-shaped ones: a
+    /// Firefox or Zen media process is `org.mozilla.plugincontainer` /
+    /// `app.zen-browser.plugincontainer`, sharing no prefix with the browser
+    /// the user launched — those attribute through the app bundle they live
+    /// in, which is why `appBundleID` exists.
+    ///
+    /// Case-sensitive: identifiers are compared as the system reports them.
+    /// Both being empty — daemons and unbundled processes, for which
+    /// `kAudioProcessPropertyBundleID` yields nothing and no `.app` encloses
+    /// the executable — never matches, so a nameless capture can never be read
+    /// as a call.
+    func matches(bundleID: String, appBundleID: String = "") -> Bool {
+        matches(identifier: bundleID) || matches(identifier: appBundleID)
+    }
+
+    private func matches(identifier: String) -> Bool {
+        guard !identifier.isEmpty else { return false }
+        return identifier == bundlePrefix || identifier.hasPrefix(bundlePrefix + ".")
     }
 }
 
-/// The shipped catalog (ADR-017: it lives in code; growing it is a code
-/// change, and a user-editable list is a future spec).
+/// The curated tier (ADR-017: it lives in code; growing it is a code change,
+/// and a user-editable list is a future spec).
 ///
-/// Browsers are included because Meet-in-a-browser is a primary meeting
-/// surface; the accepted cost is that non-call browser mic use (voice search)
-/// can offer to record. The island is dismissible and never records on its own,
-/// so the worst case is one ignored prompt.
+/// Browsers appear here as well as in `BrowserCatalog` — the curated entries
+/// keep the display names Echo has always shown ("Brave", not "Brave
+/// Browser") and cover the one browser process that lives outside its app
+/// bundle, Safari's WebKit GPU process. The accepted cost of detecting
+/// browsers at all is that non-call browser mic use (voice search) can offer
+/// to record. The island is dismissible and never records on its own, so the
+/// worst case is one ignored prompt.
 nonisolated enum CallAppCatalog {
 
     /// Order is the attribution order: with several catalogued processes
@@ -104,19 +129,43 @@ nonisolated enum CallAppCatalog {
         CallApp(displayName: "Safari", bundlePrefix: "com.apple.WebKit.GPU"),
     ]
 
-    /// The catalogued app this bundle ID belongs to, or `nil` for everything
-    /// else — the deliberate silence that keeps dictation and voice memos from
-    /// ever raising the island.
-    static func match(bundleID: String) -> CallApp? {
-        apps.first { $0.matches(bundleID: bundleID) }
+    /// The app a capturing process belongs to, or `nil` for everything else —
+    /// the deliberate silence that keeps dictation and voice memos from ever
+    /// raising the island.
+    ///
+    /// Two tiers. The curated table above is consulted first, so the native
+    /// meeting apps, Echo's long-standing display names and the one browser
+    /// process that lives outside its app bundle (Safari's WebKit GPU process)
+    /// all keep resolving exactly as before. `browsers` — every browser
+    /// installed on this Mac, from `BrowserCatalog` — is the fallback, and it
+    /// is what makes a Meet call in a browser nobody hardcoded detectable.
+    /// Empty by default so the matcher stays pure and table-testable; the
+    /// detection path passes the live set.
+    static func match(
+        bundleID: String,
+        appBundleID: String = "",
+        browsers: [CallApp] = []
+    ) -> CallApp? {
+        apps.first { $0.matches(bundleID: bundleID, appBundleID: appBundleID) }
+            ?? browsers.first { $0.matches(bundleID: bundleID, appBundleID: appBundleID) }
     }
 
-    /// The catalog's unique display names, in order of first appearance —
-    /// the Settings page's per-app rows. One row per app: a name owning
-    /// several prefixes (Teams, FaceTime, Safari) appears once and disabling
-    /// it covers all of them.
-    static var uniqueDisplayNames: [String] {
+    /// Every app detection can name, in order of first appearance — the
+    /// Settings page's per-app rows. One row per app: a name owning several
+    /// prefixes (Teams, FaceTime, Safari) appears once and disabling it covers
+    /// all of them, and an installed browser the curated table already names
+    /// (Chrome, Safari) does not get a second row.
+    ///
+    /// `browsers` is the same live set the matcher takes, so every browser
+    /// that can raise the island has a checkbox that silences it.
+    static func detectableDisplayNames(browsers: [CallApp] = []) -> [String] {
         var seen = Set<String>()
-        return apps.compactMap { seen.insert($0.displayName).inserted ? $0.displayName : nil }
+        return (apps + browsers).compactMap {
+            seen.insert($0.displayName).inserted ? $0.displayName : nil
+        }
     }
+
+    /// The curated table's own display names — `detectableDisplayNames()` with
+    /// no browsers.
+    static var uniqueDisplayNames: [String] { detectableDisplayNames() }
 }

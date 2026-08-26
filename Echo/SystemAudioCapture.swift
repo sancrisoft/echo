@@ -575,7 +575,19 @@ final class SystemAudioCapture: AudioCaptureSource {
             guard let pid = pid(of: object) else { return nil }
             return ScopedProcessCandidate(
                 pid: pid,
-                entry: .init(object: object, bundleID: bundleID(of: object, pid: pid))
+                entry: .init(
+                    object: object,
+                    bundleID: bundleID(of: object, pid: pid),
+                    // The second identity, for the helpers whose bundle ID
+                    // shares no prefix with their parent app (Firefox's and
+                    // Zen's media processes). One cheap syscall per process; the
+                    // Info.plist read behind it is cached per app bundle, which
+                    // is what keeps a follow update over every process object
+                    // affordable — measured over this machine's full process
+                    // table (204 processes): 7 ms cold, 1 ms warm, against an
+                    // 80 ms debounce.
+                    appBundleID: AppBundleIdentity.appBundleID(ofPID: pid)
+                )
             )
         }
     }
