@@ -697,6 +697,10 @@ private struct AllMeetingsView: View {
     @State private var searchText = ""
     @State private var sortOrder: MeetingSortOrder = .recent
     @State private var selection: UUID?
+    /// The row under the pointer, owned here rather than per-row so the
+    /// highlight is painted in one place — the row's own frame is inset from
+    /// the card, and a `@State` inside the row would only track the content.
+    @State private var hoveredID: UUID?
     @State private var renameTarget: MeetingMeta?
     @State private var renameText = ""
     @FocusState private var searchFocused: Bool
@@ -826,10 +830,16 @@ private struct AllMeetingsView: View {
     }
 
     private func meetingList(_ metas: [MeetingMeta]) -> some View {
-        // Plain style + explicit 20pt row insets: rows share the header's
-        // horizontal padding, so each row's ⋯ button lines up with the
-        // header's sort control.
-        List(selection: $selection) {
+        // Plain style. The row insets stop 12pt short of the header's 20pt
+        // padding and `MeetingRow` makes up the difference internally, so the
+        // content still lines its ⋯ button up with the header's sort control
+        // while the selection/hover card has 12pt of gutter to sit in.
+        //
+        // Deliberately NO `selection:` binding. The table draws its own
+        // full-bleed accent bar for a selected row, and this list wants the
+        // sidebar's indigo card instead; with the binding in place both paint,
+        // one on top of the other. `selection` is ours — see `MeetingRowChrome`.
+        List {
             if sortOrder.groupsByDate {
                 ForEach(MeetingDateGroup.groups(for: metas)) { group in
                     Section(group.title) { rows(for: group.metas) }
@@ -839,6 +849,17 @@ private struct AllMeetingsView: View {
             }
         }
         .listStyle(.plain)
+        #if DEBUG
+        // Dev-only verification hook, alongside the window's ECHO_SNAPSHOT_PATH
+        // dump: a pointer and a keyboard can't be driven from the CLI, so this
+        // stages the two states worth looking at — the first row selected, the
+        // second hovered — on the run that gets captured. Inert otherwise.
+        .onAppear {
+            guard ProcessInfo.processInfo.environment["ECHO_PRESELECT_ROW"] == "1" else { return }
+            selection = metas.first?.id
+            hoveredID = metas.dropFirst().first?.id
+        }
+        #endif
         .onDeleteCommand { trashSelected() }
         .onKeyPress(.return) {
             guard let selection else { return .ignored }
@@ -860,12 +881,44 @@ private struct AllMeetingsView: View {
                     renameText = meta.title
                 }
             )
-            .tag(meta.id)
-            .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-            .simultaneousGesture(TapGesture(count: 2).onEnded {
-                opened = OpenedDetail(target: .saved(meta.id))
-            })
+            .id(meta.id)
+            .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
+            .listRowBackground(
+                MeetingRowChrome(isSelected: selection == meta.id, isHovered: hoveredID == meta.id)
+            )
+            .onHover { inside in
+                if inside { hoveredID = meta.id }
+                else if hoveredID == meta.id { hoveredID = nil }
+            }
+            // The double-click used to be a `simultaneousGesture`, which sat in
+            // front of the table's own click handling and swallowed the first
+            // click whole: nothing selected, nothing highlighted, and the list
+            // read as frozen until you double-clicked.
+            //
+            // Selection deliberately does NOT ride a second tap gesture. Two
+            // taps of different counts on one view force SwiftUI to wait out
+            // the system's double-click interval — half a second by default —
+            // before it can rule out a double, and that wait is felt as the
+            // highlight arriving late. A zero-distance drag takes no part in
+            // that disambiguation: it reports the press as it happens, which
+            // is also the moment Finder moves its own highlight. `onEnded` is
+            // there because a press that never moves is not guaranteed to
+            // produce a change on every path; `select` is idempotent.
+            .onTapGesture(count: 2) { opened = OpenedDetail(target: .saved(meta.id)) }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in select(meta.id) }
+                    .onEnded { _ in select(meta.id) }
+            )
         }
+    }
+
+    /// Moves the selection onto a row. Idempotent: the press gesture reports
+    /// more than once for a single click, and re-selecting the row that is
+    /// already selected must not churn state.
+    private func select(_ id: UUID) {
+        guard selection != id else { return }
+        selection = id
     }
 
     // MARK: Data
@@ -892,6 +945,7 @@ private struct TrashView: View {
     @Binding var opened: OpenedDetail?
 
     @State private var selection: UUID?
+    @State private var hoveredID: UUID?
     @State private var confirmDelete: MeetingMeta?
     @State private var confirmEmpty = false
 
@@ -953,7 +1007,12 @@ private struct TrashView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            List(selection: $selection) {
+            // Same treatment as the Meetings list, for the same reason: no
+            // `selection:` binding (the card below is the highlight), row
+            // insets that leave the card a gutter, and two ordinary taps in
+            // place of the double-click gesture that used to eat the first
+            // click.
+            List {
                 ForEach(trashed) { meta in
                     TrashRow(
                         meta: meta,
@@ -961,11 +1020,21 @@ private struct TrashView: View {
                         onRestore: { Task { await controller.library.restore(meta.id) } },
                         onDelete: { confirmDelete = meta }
                     )
-                    .tag(meta.id)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-                    .simultaneousGesture(TapGesture(count: 2).onEnded {
-                        opened = OpenedDetail(target: .saved(meta.id))
-                    })
+                    .id(meta.id)
+                    .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
+                    .listRowBackground(
+                        MeetingRowChrome(isSelected: selection == meta.id, isHovered: hoveredID == meta.id)
+                    )
+                    .onHover { inside in
+                        if inside { hoveredID = meta.id }
+                        else if hoveredID == meta.id { hoveredID = nil }
+                    }
+                    .onTapGesture(count: 2) { opened = OpenedDetail(target: .saved(meta.id)) }
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { _ in select(meta.id) }
+                            .onEnded { _ in select(meta.id) }
+                    )
                 }
             }
             .listStyle(.plain)
@@ -979,6 +1048,13 @@ private struct TrashView: View {
 
     private var deletePresented: Binding<Bool> {
         Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })
+    }
+
+    /// See `AllMeetingsView.select`: the press gesture reports more than once
+    /// per click, so this has to be idempotent.
+    private func select(_ id: UUID) {
+        guard selection != id else { return }
+        selection = id
     }
 }
 
@@ -1007,6 +1083,34 @@ private struct SettingsPageView: View {
 }
 
 // MARK: - Rows
+
+/// A row's hover / selected card, shared by the Meetings and Trash lists and
+/// installed as the row's `listRowBackground` so it fills the full row height
+/// and sits behind the content.
+///
+/// Painted here rather than left to the table: a `List` with a `selection`
+/// binding draws its own full-bleed accent bar, which is not the look this
+/// window wants and which would show through underneath this card. The tint is
+/// the sidebar's selected-row tint, so the two selections in the window read as
+/// the same idea. `listRowBackground` covers the whole row regardless of
+/// `listRowInsets`, so the 12pt gutter has to come from this view's own
+/// padding.
+private struct MeetingRowChrome: View {
+    let isSelected: Bool
+    let isHovered: Bool
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        shape
+            .fill(
+                isSelected ? Color.echoIndigo.opacity(0.14)
+                    : isHovered ? Color.primary.opacity(0.06)
+                    : Color.clear
+            )
+            .overlay(shape.strokeBorder(isSelected ? Color.echoIndigo.opacity(0.35) : .clear))
+            .padding(.horizontal, 12)
+    }
+}
 
 /// The small indigo app mark used for meeting rows and the top bar.
 private struct MeetingGlyph: View {
@@ -1080,6 +1184,10 @@ private struct MeetingRow: View {
             quickActions
         }
         .padding(.vertical, 4)
+        // Restores the 20pt the list's row insets gave up so the hover /
+        // selected card can breathe: content stays where it was, the card is
+        // what moved.
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
     }
 
@@ -1276,6 +1384,9 @@ private struct TrashRow: View {
             .fixedSize()
         }
         .padding(.vertical, 4)
+        // Matches `MeetingRow`: the 8pt the list's row insets gave up so the
+        // hover / selected card has a gutter.
+        .padding(.horizontal, 8)
         .contentShape(Rectangle())
     }
 
