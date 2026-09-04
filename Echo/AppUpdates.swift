@@ -2,29 +2,32 @@
 //  AppUpdates.swift
 //  Echo
 //
-//  Telling the user a newer Echo exists.
+//  Telling the user a newer Echo exists, and installing it.
 //
-//  Echo ships as ad-hoc signed zips attached to GitHub releases, installed and
-//  updated by scripts/install.sh; there is no Sparkle feed and the app never
-//  replaces its own bundle while running (deliberate — see the README's
-//  release notes). What it can do is ask GitHub what the latest release is,
-//  compare, and hand the user the one command that installs it:
+//  Echo ships as ad-hoc signed zips attached to GitHub releases, installed
+//  and updated by scripts/install.sh; there is no Sparkle feed. The app asks
+//  GitHub what the latest release is, compares, and — on request — updates
+//  itself by starting that same installer as a detached process and quitting:
+//  the installer swaps the bundle and reopens Echo, so the app never
+//  overwrites itself while running.
 //
 //    • `ReleaseVersion`      the "v0.0.12" ⇄ "0.0.12" arithmetic, pure
 //    • `GitHubReleaseFeed`   the repository's URLs and the API decoding, pure
 //    • `UpdateChecker`       observable state for Settings and the menu bar,
 //                            plus the once-a-day automatic check
-//    • `UpdateActions`       leaving the app: release page, clipboard, Terminal
+//    • `UpdaterPlan`         what the updater script needs to know, pure
+//    • `UpdateActions`       leaving the app: release page, clipboard, and
+//                            the update itself (updater script + quit)
 //
 //  Privacy: a check is one unauthenticated GET to api.github.com for the
 //  latest release's metadata. It carries Echo's version in the User-Agent and
 //  nothing about the user or their meetings, and one Settings toggle turns the
-//  automatic one off.
+//  automatic one off. An update downloads the installer and the release zip
+//  from GitHub, nothing else.
 //
-//  Known blind spot: a hotfix rebuild ships inside the version it fixes (same
-//  CFBundleShortVersionString, new bits), so it is invisible here. The install
-//  script sees it — it compares code-directory hashes — so "Update in Terminal"
-//  on an up-to-date version is still a correct thing to offer.
+//  Comparing versions is the whole truth: a fix is always a new version (no
+//  rebuilds under an existing tag, decided 2026-09-04), so the installer's
+//  code-directory-hash comparison is idempotency, not a second signal.
 //
 
 import AppKit
@@ -259,6 +262,11 @@ final class UpdateChecker {
     private(set) var isChecking = false
     private(set) var lastCheckedAt: Date?
 
+    /// What the last Update Now left behind when it failed, handed in at
+    /// launch from the updater's report file (see `UpdateActions`). Shown in
+    /// Settings for this run only: the report is consumed when read.
+    private(set) var lastInstallFailure: String?
+
     @ObservationIgnored private let transport: Transport
     @ObservationIgnored private var inFlight: Task<Void, Never>?
     @ObservationIgnored private var automatic: Task<Void, Never>?
@@ -275,6 +283,10 @@ final class UpdateChecker {
     var availableRelease: LatestRelease? {
         if case .available(let release) = status { return release }
         return nil
+    }
+
+    func noteInstallFailure(_ message: String) {
+        lastInstallFailure = message
     }
 
     /// Runs one check. Concurrent callers (the daily timer and a click on
@@ -371,10 +383,45 @@ final class UpdateChecker {
 
 // MARK: - Leaving the app
 
-nonisolated enum UpdateActionError: Error {
-    /// `NSWorkspace` declined to open the `.command` file — no handler for
-    /// it, or Terminal missing.
-    case terminalDidNotOpen
+nonisolated enum UpdateActionError: Error, CustomStringConvertible {
+    /// The updater script or its log could not be written.
+    case couldNotPrepare(String)
+    /// `Process` refused to start `/bin/bash` on the updater script.
+    case updaterDidNotStart(String)
+
+    var description: String {
+        switch self {
+        case .couldNotPrepare(let why): return "Couldn't prepare the updater: \(why)"
+        case .updaterDidNotStart(let why): return "Couldn't start the updater: \(why)"
+        }
+    }
+}
+
+/// What the updater script needs to know, gathered on the main actor and
+/// rendered into bash by `UpdateActions.updaterScript`. Pure, so a test can
+/// render one without a running app.
+nonisolated struct UpdaterPlan: Equatable, Sendable {
+    /// The Echo process the updater waits for before touching anything.
+    var pid: Int32
+    /// The bundle to replace and reopen — `/Applications/Echo.app` normally.
+    var bundleURL: URL
+    /// Where the installer is fetched from: the README's URL.
+    var installerURL: URL
+    /// Appended to with everything the updater and the installer print.
+    var logURL: URL
+    /// Written only when the update fails; Echo reads it at the next launch.
+    var failureReportURL: URL
+    /// For the log's first line.
+    var appVersion: String
+
+    /// The installer's own default. A bundle anywhere else is handed to it
+    /// as `ECHO_INSTALL_DEST`, so the copy that was running is the one
+    /// replaced (a dev build in DerivedData, a ~/Applications install).
+    static let defaultInstallPath = "/Applications/Echo.app"
+
+    var installsToDefaultPath: Bool {
+        bundleURL.standardizedFileURL.path == Self.defaultInstallPath
+    }
 }
 
 @MainActor
@@ -394,36 +441,152 @@ enum UpdateActions {
         pasteboard.setString(GitHubReleaseFeed.installCommand, forType: .string)
     }
 
-    /// Writes a `.command` file that runs the install one-liner and opens
-    /// it, which lands in Terminal (the default handler for `.command`). The
-    /// script quits Echo, swaps the bundle and reopens it, so the app never
-    /// has to replace itself while running — the same path as the README.
-    static func runInstallerInTerminal() throws {
-        let url = FileManager.default.temporaryDirectory
-            .appending(path: "Update Echo.command", directoryHint: .notDirectory)
-        try installerCommandFileContents(appVersion: AppVersion.display)
-            .write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        guard NSWorkspace.shared.open(url) else {
-            throw UpdateActionError.terminalDidNotOpen
-        }
+    /// ~/Library/Application Support/Echo/Logs/update.log — every update's
+    /// transcript, appended.
+    nonisolated static var updateLogURL: URL {
+        EchoPaths.logsDirectory.appending(path: "update.log", directoryHint: .notDirectory)
     }
 
-    nonisolated static func installerCommandFileContents(appVersion: String) -> String {
-        """
+    /// ~/Library/Application Support/Echo/Logs/update-failed.txt — exists only
+    /// between a failed update and the next launch, which reads and removes it.
+    nonisolated static var failureReportURL: URL {
+        EchoPaths.logsDirectory.appending(path: "update-failed.txt", directoryHint: .notDirectory)
+    }
+
+    /// Updates Echo. Writes the updater script, starts it detached with its
+    /// output going to `update.log`, and quits. The updater waits for this
+    /// process to exit, downloads and runs the installer — which swaps the
+    /// bundle and reopens Echo — and on any failure leaves a report and
+    /// reopens the Echo that was there. Returns only when the updater could
+    /// not be started; otherwise the process ends here.
+    static func updateAndRelaunch() throws {
+        let plan = UpdaterPlan(
+            pid: ProcessInfo.processInfo.processIdentifier,
+            bundleURL: Bundle.main.bundleURL,
+            installerURL: GitHubReleaseFeed.installScriptURL,
+            logURL: updateLogURL,
+            failureReportURL: failureReportURL,
+            appVersion: AppVersion.display
+        )
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appending(path: "update-echo.sh", directoryHint: .notDirectory)
+        let log: FileHandle
+        do {
+            try updaterScript(plan).write(to: scriptURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+            try FileManager.default.createDirectory(
+                at: plan.logURL.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            if !FileManager.default.fileExists(atPath: plan.logURL.path) {
+                FileManager.default.createFile(atPath: plan.logURL.path, contents: nil)
+            }
+            log = try FileHandle(forWritingTo: plan.logURL)
+            try log.seekToEnd()
+        } catch {
+            throw UpdateActionError.couldNotPrepare(error.localizedDescription)
+        }
+
+        let updater = Process()
+        updater.executableURL = URL(fileURLWithPath: "/bin/bash")
+        updater.arguments = [scriptURL.path]
+        updater.standardInput = FileHandle.nullDevice
+        updater.standardOutput = log
+        updater.standardError = log
+        do {
+            try updater.run()
+        } catch {
+            throw UpdateActionError.updaterDidNotStart(error.localizedDescription)
+        }
+        // A child outlives its parent on macOS; the updater is waiting for
+        // exactly this exit.
+        NSApplication.shared.terminate(nil)
+    }
+
+    /// The report a failed update left for this launch, if any. Removed once
+    /// read, so it is shown once.
+    nonisolated static func takeFailureReport(at url: URL = failureReportURL) -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        try? FileManager.default.removeItem(at: url)
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    /// The updater, as bash. It refuses to proceed while Echo is still
+    /// running, fetches the installer to a file before running it (a cut-off
+    /// download cannot run half a script, and a curl failure is reported as
+    /// one), insists the installer is one that understands
+    /// `ECHO_INSTALL_DEST`, and reopens Echo whether or not the update
+    /// succeeded — the installer's staging-and-swap means a failure leaves
+    /// the old bundle in place.
+    nonisolated static func updaterScript(_ plan: UpdaterPlan) -> String {
+        let destination = plan.installsToDefaultPath
+            ? "# Default location: the installer reopens Echo itself once the bundle is swapped."
+            : "export ECHO_INSTALL_DEST=\(shellQuoted(plan.bundleURL.path))"
+        return """
         #!/bin/bash
-        # Written by Echo \(appVersion) for Settings › Updates › Update in Terminal.
-        # It runs the same install command as the README. Safe to delete.
-        printf '\\nUpdating Echo…\\n\\n'
-        \(GitHubReleaseFeed.installCommand)
-        status=$?
-        printf '\\n'
-        if [ "$status" -eq 0 ]; then
-          echo "Done. You can close this window."
-        else
-          echo "The installer stopped with exit code $status. Unless it said otherwise above, the Echo you had is untouched."
+        # Written by Echo \(plan.appVersion) for Settings › Updates › Update Now. Waits for
+        # Echo to quit, runs the same installer as the README, and reopens Echo.
+        # Safe to delete.
+        set -o pipefail
+        trap '' HUP
+
+        pid=\(plan.pid)
+        app=\(shellQuoted(plan.bundleURL.path))
+        report=\(shellQuoted(plan.failureReportURL.path))
+        logfile=\(shellQuoted(plan.logURL.path))
+        installer=\(shellQuoted(plan.installerURL.absoluteString))
+        work="$(mktemp -d "${TMPDIR:-/tmp}/echo-update.XXXXXX")"
+        trap 'rm -rf "$work"' EXIT
+
+        log() { printf '[%s] %s\\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+        fail() {
+          log "$1"
+          mkdir -p "$(dirname "$report")" && printf '%s\\n' "$1" > "$report"
+          osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "Echo update failed"' -e 'end run' "$1" >/dev/null 2>&1 || true
+        }
+        reopen() {
+          sleep 1
+          pgrep -qx Echo >/dev/null 2>&1 || open "$app"
+        }
+
+        log "Echo \(plan.appVersion) asked for an update; waiting for pid $pid to quit"
+        for _ in $(seq 1 150); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+        if kill -0 "$pid" 2>/dev/null; then
+          fail "Echo did not quit, so nothing was updated."
+          exit 1
         fi
 
+        log "downloading $installer"
+        curl -fsSL --max-time 60 -o "$work/install.sh" "$installer"
+        code=$?
+        if [ "$code" -ne 0 ]; then
+          fail "Couldn't download the installer (curl exit $code). Are you online? Echo was left as it was."
+          reopen
+          exit 1
+        fi
+        if ! grep -q 'ECHO_INSTALL_DEST' "$work/install.sh"; then
+          fail "The installer on GitHub is older than this Echo expects; update with the README's command instead. Echo was left as it was."
+          reopen
+          exit 1
+        fi
+
+        \(destination)
+        log "running the installer"
+        bash "$work/install.sh"
+        code=$?
+        if [ "$code" -eq 0 ]; then
+          log "installer finished"
+        else
+          fail "The installer exited with code $code; unless it said otherwise, the Echo you had is untouched. Details in $logfile"
+        fi
+        reopen
+
         """
+    }
+
+    /// Single-quotes `text` for bash, so spaces, `$`, backticks and quotes
+    /// in a path survive.
+    nonisolated static func shellQuoted(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

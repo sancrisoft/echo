@@ -78,10 +78,11 @@ Run `... | bash -s -- --help` for every option.
 
 Echo checks GitHub once a day and shows **Update available** in its menu bar
 popover when there is a newer release. Settings › Updates has **Check for
-Updates**, the release notes, and **Update in Terminal**, which runs the install
-command above. Running that command yourself does the same thing; if you already
-have the latest build it says so and changes nothing. The daily check can be
-turned off in Settings › Updates.
+Updates**, the release notes, and **Update Now**, which quits Echo, runs the
+install script above and reopens Echo on the new version. Running the install
+command yourself does the same thing; if you already have the latest build it
+says so and changes nothing. The daily check can be turned off in Settings ›
+Updates.
 
 ### Uninstall
 

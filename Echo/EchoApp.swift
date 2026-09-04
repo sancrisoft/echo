@@ -89,6 +89,11 @@ struct EchoApp: App {
         // hosted test run must send no request.
         let updates = UpdateChecker()
         if !TestHost.isActive {
+            // A failed Update Now reopened Echo unchanged and left a report;
+            // Settings › Updates shows it once.
+            if let failure = UpdateActions.takeFailureReport() {
+                updates.noteInstallFailure(failure)
+            }
             updates.startAutomaticChecks { settings.checkForUpdatesAutomatically }
         }
 

@@ -4,8 +4,9 @@
 //
 //  The GitHub-releases update check: the version arithmetic behind the tags,
 //  decoding GitHub's release object, the comparison, the checker's error
-//  mapping, and — because a public repo's install command is quoted in three
-//  places — that the README, the script and the app all say the same one.
+//  mapping, the updater script Update Now hands to bash, and — because a
+//  public repo's install command is quoted in three places — that the README,
+//  the script and the app all say the same one.
 //
 
 import Foundation
@@ -190,11 +191,94 @@ struct GitHubReleaseFeedTests {
         #expect(!workflow.contains("gh api"), "the release notes must not send a public user to the GitHub CLI")
     }
 
-    @Test func theTerminalCommandFileRunsTheInstallCommand() {
-        let contents = UpdateActions.installerCommandFileContents(appVersion: "v0.0.12 (87)")
-        #expect(contents.hasPrefix("#!/bin/bash\n"))
-        #expect(contents.contains("\n\(GitHubReleaseFeed.installCommand)\n"))
-        #expect(contents.contains("v0.0.12 (87)"))
+}
+
+// MARK: - The updater
+
+/// The bash Echo hands to `/bin/bash` when the user clicks Update Now. Rendered
+/// from a fixed plan so the assertions read like the script.
+@Suite("Updater script")
+struct UpdaterScriptTests {
+
+    private func plan(bundle: String = UpdaterPlan.defaultInstallPath) -> UpdaterPlan {
+        UpdaterPlan(
+            pid: 4242,
+            bundleURL: URL(fileURLWithPath: bundle),
+            installerURL: GitHubReleaseFeed.installScriptURL,
+            logURL: URL(fileURLWithPath: "/Users/someone/Library/Application Support/Echo/Logs/update.log"),
+            failureReportURL: URL(fileURLWithPath: "/Users/someone/Library/Application Support/Echo/Logs/update-failed.txt"),
+            appVersion: "v0.0.12 (87)"
+        )
+    }
+
+    @Test func waitsForEchoToQuitThenRunsTheREADMEsInstaller() {
+        let script = UpdateActions.updaterScript(plan())
+        #expect(script.hasPrefix("#!/bin/bash\n"))
+        #expect(script.contains("set -o pipefail"))
+        #expect(script.contains("pid=4242"))
+        #expect(script.contains("kill -0 \"$pid\""))
+        #expect(script.contains("installer='\(GitHubReleaseFeed.installScriptURL.absoluteString)'"))
+        #expect(script.contains("curl -fsSL --max-time 60 -o \"$work/install.sh\" \"$installer\""))
+        #expect(script.contains("bash \"$work/install.sh\""))
+        #expect(script.contains("v0.0.12 (87)"))
+    }
+
+    @Test func theDefaultLocationIsLeftToTheInstaller() {
+        let script = UpdateActions.updaterScript(plan())
+        #expect(!script.contains("ECHO_INSTALL_DEST="))
+        #expect(script.contains("open \"$app\""))
+    }
+
+    @Test func aBundleAnywhereElseIsTheOneReplaced() {
+        let script = UpdateActions.updaterScript(plan(bundle: "/Users/someone/Applications/Echo.app"))
+        #expect(script.contains("export ECHO_INSTALL_DEST='/Users/someone/Applications/Echo.app'"))
+    }
+
+    @Test func pathsWithSpacesAreQuoted() {
+        let script = UpdateActions.updaterScript(plan())
+        #expect(script.contains("report='/Users/someone/Library/Application Support/Echo/Logs/update-failed.txt'"))
+        #expect(script.contains("logfile='/Users/someone/Library/Application Support/Echo/Logs/update.log'"))
+    }
+
+    @Test func aFailureLeavesAReportAndReopensEcho() {
+        let script = UpdateActions.updaterScript(plan())
+        #expect(script.contains("> \"$report\""))
+        #expect(script.contains("grep -q 'ECHO_INSTALL_DEST' \"$work/install.sh\""), "refuses an installer that predates the seam it relies on")
+        // Two failure branches reopen Echo, and so does the normal ending.
+        #expect(script.components(separatedBy: "\n  reopen\n").count - 1 == 2, "each failure path reopens Echo")
+        #expect(script.hasSuffix("\nreopen\n"))
+    }
+
+    @Test(arguments: [
+        ("plain", "'plain'"),
+        ("with space", "'with space'"),
+        ("it's", "'it'\\''s'"),
+    ] as [(String, String)])
+    func shellQuoting(input: (String, String)) {
+        #expect(UpdateActions.shellQuoted(input.0) == input.1)
+    }
+
+    @Test func theScriptIsValidBash() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "updater-\(UUID().uuidString).sh", directoryHint: .notDirectory)
+        try UpdateActions.updaterScript(plan()).write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let bash = Process()
+        bash.executableURL = URL(fileURLWithPath: "/bin/bash")
+        bash.arguments = ["-n", url.path]
+        try bash.run()
+        bash.waitUntilExit()
+        #expect(bash.terminationStatus == 0)
+    }
+
+    @Test func aFailureReportIsReadOnce() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "report-\(UUID().uuidString).txt", directoryHint: .notDirectory)
+        #expect(UpdateActions.takeFailureReport(at: url) == nil)
+        try "The installer exited with code 1\n".write(to: url, atomically: true, encoding: .utf8)
+        #expect(UpdateActions.takeFailureReport(at: url) == "The installer exited with code 1")
+        #expect(UpdateActions.takeFailureReport(at: url) == nil)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 }
 
@@ -236,6 +320,13 @@ struct UpdateCheckerTests {
         #expect(UpdateChecker.evaluate(installed: ReleaseVersion("0.0.12"), latest: latest) == .upToDate(latest))
         // A dev build's 1.0 is ahead of every tag: nothing to offer it.
         #expect(UpdateChecker.evaluate(installed: ReleaseVersion("1.0"), latest: latest) == .upToDate(latest))
+    }
+
+    @Test func aLeftoverInstallFailureIsKeptForSettings() {
+        let checker = checker(installed: "0.0.11") { _ in throw URLError(.notConnectedToInternet) }
+        #expect(checker.lastInstallFailure == nil)
+        checker.noteInstallFailure("The installer exited with code 1")
+        #expect(checker.lastInstallFailure == "The installer exited with code 1")
     }
 
     @Test func anUnreadableInstalledVersionIsAFailureNotAGuess() throws {
