@@ -49,6 +49,7 @@ TAG=""
 FROM_ZIP=""
 DATA_CHOICE=""   # "" (ask), keep, delete
 TMP=""
+DOWNLOADED_ZIP=""   # set by download_release
 
 # --- output -------------------------------------------------------------------
 
@@ -274,7 +275,10 @@ digest_from_release_json() {  # $1 json file, $2 asset name -> "sha256:<hex>" or
     "$1" "$2" 2>/dev/null || true
 }
 
-download_release() {  # $1 tag -> prints the zip path
+# Hands the zip back through DOWNLOADED_ZIP rather than stdout: the progress
+# lines below share stdout, and a caller capturing it with $(...) would read
+# them as part of the path.
+download_release() {  # $1 tag -> sets DOWNLOADED_ZIP
   local name url zip
   name="$(asset_name "$1")"
   url="https://github.com/$REPO/releases/download/$1/$name"
@@ -305,7 +309,7 @@ download_release() {  # $1 tag -> prints the zip path
       note "GitHub published no checksum for this file; relying on the code signature check"
       ;;
   esac
-  printf '%s' "$zip"
+  DOWNLOADED_ZIP="$zip"
 }
 
 # --- install ------------------------------------------------------------------
@@ -354,7 +358,7 @@ install_zip() {  # $1 zip path
 }
 
 install_from_github() {
-  local tag="$TAG" installed zip
+  local tag="$TAG" installed
   if [ -z "$tag" ]; then
     tag="$(require_latest_tag)"
     say "Latest release: $tag"
@@ -371,8 +375,8 @@ install_from_github() {
     esac
   fi
 
-  zip="$(download_release "$tag")"
-  install_zip "$zip"
+  download_release "$tag"
+  install_zip "$DOWNLOADED_ZIP"
 }
 
 # --- check --------------------------------------------------------------------
