@@ -1,0 +1,27 @@
+Echo
+Copyright 2026 Sancrisoft
+
+This product includes software developed at Sancrisoft
+(https://github.com/sancrisoft/echo).
+
+Echo is licensed under the Apache License, Version 2.0; see LICENSE.
+
+It bundles the following third-party software, whose licenses require
+these notices to be kept with every copy:
+
+  webrtc-audio-processing (BSD-3-Clause)
+    Copyright (c) 2011, Google Inc. All rights reserved.
+
+  abseil-cpp (Apache License 2.0)
+
+  mlx-swift (MIT License)
+    Copyright (c) 2023 ml-explore
+
+  mlx-swift-lm (MIT License)
+    Copyright (c) 2024 ml-explore
+
+  FluidAudio (Apache License 2.0)
+
+The full text of the vendored WebRTC and abseil licenses is in
+Vendor/webrtc-apm/licenses/. The remaining packages are fetched by Swift
+Package Manager and carry their own LICENSE files.
