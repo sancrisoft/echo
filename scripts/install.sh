@@ -35,8 +35,9 @@ REPO="${ECHO_INSTALL_REPO:-sancrisoft/echo}"
 APP_PATH="${ECHO_INSTALL_DEST:-/Applications/Echo.app}"
 DATA_DIR="$HOME/Library/Application Support/Echo"
 MIN_MACOS="15.6"
-# What the on-device models need on first launch; the installer only warns.
-RECOMMENDED_FREE_GB=12
+# Free space the first launch needs: the two on-device models take about 4 GB
+# on disk and the download stages through roughly 6 GB. The installer only warns.
+RECOMMENDED_FREE_GB=6
 
 # A custom destination means "leave whatever Echo is running alone".
 MANAGES_RUNNING_APP=true
@@ -222,7 +223,7 @@ preflight() {
 
   say "This Mac: Apple Silicon, macOS $macos, ${free_gb} GB free"
   if [ "$free_gb" -lt "$RECOMMENDED_FREE_GB" ]; then
-    warn "Echo downloads about ${RECOMMENDED_FREE_GB} GB of on-device models on first launch; ${free_gb} GB free may not be enough"
+    warn "Echo downloads about 4 GB of on-device models on first launch and needs about ${RECOMMENDED_FREE_GB} GB free while it does; ${free_gb} GB free may not be enough"
   fi
 }
 

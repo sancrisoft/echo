@@ -15,7 +15,7 @@ Everything runs locally: audio, transcripts, and summaries never leave your Mac.
 ## Requirements
 
 - An Apple Silicon (M-series) Mac running macOS 15.6 or later
-- About 12GB free — mostly the on-device models, downloaded once on first launch
+- About 6 GB free for the first launch, which downloads the two on-device models (about 4 GB on disk)
 
 ## Install
 
