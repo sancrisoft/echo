@@ -87,8 +87,8 @@ jobs:
               --notes "Install or update with:
 
           \`\`\`sh
-          gh api -H \"Accept: application/vnd.github.raw\" repos/${GITHUB_REPOSITORY}/contents/scripts/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash
           \`\`\`
 
-          No \`gh\`? See the [install instructions](https://github.com/${GITHUB_REPOSITORY}#install) for a curl + token alternative."
+          See the [install instructions](https://github.com/${GITHUB_REPOSITORY}#install) for the details."
           fi

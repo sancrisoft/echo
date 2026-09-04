@@ -14,46 +14,64 @@ Everything runs locally: audio, transcripts, and summaries never leave your Mac.
 
 ## Requirements
 
-- macOS 15.6 or later
-- Apple Silicon (M-series) Mac
-- Disk space for the on-device models (several GB, downloaded on first use)
-- [GitHub CLI](https://cli.github.com) (`gh`) with access to this repository — or a personal access token — for installation
+- An Apple Silicon (M-series) Mac running macOS 15.6 or later
+- About 12GB free — mostly the on-device models, downloaded once on first launch
 
 ## Install
 
+Open Terminal, paste this, press return:
+
 ```sh
-gh api -H "Accept: application/vnd.github.raw" repos/sancrisoft/echo/contents/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash
 ```
 
-That's it — the script downloads the latest release and installs it to `/Applications`. Echo lives in the menu bar (it has no Dock icon).
+That's the whole install. It takes about a minute.
 
-Prerequisites: `brew install gh` and `gh auth login` if you haven't already.
+**What that command does** — you can [read the script](scripts/install.sh) before
+running it, and it is worth 30 seconds if you have never installed anything this
+way:
+
+1. Checks your Mac can run Echo (Apple Silicon, macOS version) and warns if disk
+   space looks tight for the models.
+2. Downloads the latest release from GitHub and checks it twice: against the
+   checksum GitHub publishes for the file, then against the app's own code
+   signature.
+3. Copies `Echo.app` into `/Applications` and opens it.
+
+It touches nothing else and prints each step as it goes. If Echo is already
+running it quits it first and reopens it on the new version.
+
+> **Why a command and not a normal download?** Echo is signed but not notarized
+> by Apple (that needs a paid developer account, and this is still a proof of
+> concept). macOS quarantines anything unnotarized that arrives through a
+> browser, so a hand-downloaded copy refuses to open. The installer clears that
+> flag, which is the one thing you cannot do by dragging an icon.
 
 <details>
-<summary>Install a specific version</summary>
+<summary>Other ways to install</summary>
+
+Install a specific version:
 
 ```sh
-gh api -H "Accept: application/vnd.github.raw" repos/sancrisoft/echo/contents/scripts/install.sh | bash -s v0.0.1
+curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --version v0.0.11
 ```
 
-Available versions are listed under [Releases](https://github.com/sancrisoft/echo/releases).
-</details>
-
-<details>
-<summary>Using curl instead of gh</summary>
-
-If you don't use the GitHub CLI (e.g. you only authenticate to GitHub over SSH), you can install with plain `curl` and a personal access token. SSH keys don't work against the GitHub API, so a token is required for the private release assets:
-
-1. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new) with access to `sancrisoft/echo` and read-only **Contents** permission (a classic token with the `repo` scope also works).
-2. Run:
+Check what you have and whether it's current, without changing anything:
 
 ```sh
-export GITHUB_TOKEN=github_pat_...
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw" \
-  https://api.github.com/repos/sancrisoft/echo/contents/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --check
 ```
 
-Appending `-s v0.0.1` installs that specific version, same as with `gh`.
+Install from a zip somebody sent you, with no network:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --from ~/Downloads/Echo-0.0.11.zip
+```
+
+Can't write to `/Applications`? Put `ECHO_INSTALL_DEST="$HOME/Applications/Echo.app"`
+in front of the command and it installs there instead.
+
+Run `... | bash -s -- --help` for every option.
 </details>
 
 ### Update
@@ -63,18 +81,23 @@ Run the same install command again — it replaces the installed app with the la
 ### Uninstall
 
 ```sh
-rm -rf /Applications/Echo.app
-rm -rf ~/Library/Application\ Support/Echo   # transcripts, summaries, and models
+curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --uninstall
 ```
+
+It removes the app, then asks separately before deleting your meetings — those
+are yours, and it defaults to keeping them. Add `--keep-data` or `--delete-data`
+to skip the question.
 
 ## First launch
 
-On first use Echo will ask for two permissions:
+Echo lives in the menu bar; it has no Dock icon. On first use it asks for two
+permissions:
 
 - **Microphone** — to transcribe your voice.
-- **System Audio Recording** — to transcribe what other meeting participants say.
+- **System Audio Recording** — to transcribe what other participants say.
 
-It will also download the transcription and summarization models (several GB, one time). Model files and all meeting data live in `~/Library/Application Support/Echo`.
+It then downloads the transcription and summarization models (several GB, once).
+Models and all meeting data live in `~/Library/Application Support/Echo`.
 
 ## Privacy
 
@@ -92,6 +115,6 @@ Releases are built by CI from version tags:
 git tag v0.0.2 && git push origin v0.0.2
 ```
 
-The [release workflow](.github/workflows/release.yml) builds `Echo.app` (Release, arm64), packages it as `Echo-<version>.zip`, and publishes a GitHub release. The app version comes from the tag; nothing needs to change in the Xcode project.
+The [release workflow](.github/workflows/release.yml) builds `Echo.app` (Release, arm64), packages it as `Echo-<version>.zip`, and publishes a GitHub release whose notes carry the install command. The install script reads these releases, so pushing the tag is the whole release. The app version comes from the tag; nothing needs to change in the Xcode project.
 
-> **Note** — Echo is currently a proof of concept. Builds are ad-hoc signed (not notarized by Apple), which is fine when installed through the script above; downloading the zip manually from the Releases page through a browser will trigger Gatekeeper warnings. Use the install script.
+> **Note** — Echo is currently a proof of concept. Builds are ad-hoc signed (not notarized by Apple), which is fine when installed through the script above; downloading the zip manually from the Releases page through a browser will trigger Gatekeeper warnings (`xattr -dr com.apple.quarantine /Applications/Echo.app` clears them). Use the install script.
