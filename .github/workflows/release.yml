@@ -90,5 +90,5 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash
           \`\`\`
 
-          See the [install instructions](https://github.com/${GITHUB_REPOSITORY}#install) for the details."
+          Already running Echo? It notices this release on its own — **Update available** in the menu bar popover, or Settings › Updates. See the [install instructions](https://github.com/${GITHUB_REPOSITORY}#install) for the details."
           fi

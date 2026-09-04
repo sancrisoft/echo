@@ -76,7 +76,12 @@ Run `... | bash -s -- --help` for every option.
 
 ### Update
 
-Run the same install command again — it replaces the installed app with the latest release.
+Echo checks GitHub once a day and shows **Update available** in its menu bar
+popover when there is a newer release. Settings › Updates has **Check for
+Updates**, the release notes, and **Update in Terminal**, which runs the install
+command above. Running that command yourself does the same thing; if you already
+have the latest build it says so and changes nothing. The daily check can be
+turned off in Settings › Updates.
 
 ### Uninstall
 
@@ -101,7 +106,7 @@ Models and all meeting data live in `~/Library/Application Support/Echo`.
 
 ## Privacy
 
-Echo is local-first by design. Audio capture, transcription, and summarization all run on your Mac; nothing is uploaded anywhere. Deleting the folder in `~/Library/Application Support/Echo` removes all of it.
+Echo is local-first by design. Audio capture, transcription, and summarization all run on your Mac; nothing is uploaded anywhere. The only network traffic is downloading the models once and, if you leave it on, a once-a-day request to GitHub for the latest release's version number — which says nothing about you or your meetings. Deleting the folder in `~/Library/Application Support/Echo` removes all of it.
 
 ## Development
 
@@ -115,6 +120,6 @@ Releases are built by CI from version tags:
 git tag v0.0.2 && git push origin v0.0.2
 ```
 
-The [release workflow](.github/workflows/release.yml) builds `Echo.app` (Release, arm64), packages it as `Echo-<version>.zip`, and publishes a GitHub release whose notes carry the install command. The install script reads these releases, so pushing the tag is the whole release. The app version comes from the tag; nothing needs to change in the Xcode project.
+The [release workflow](.github/workflows/release.yml) builds `Echo.app` (Release, arm64), packages it as `Echo-<version>.zip`, and publishes a GitHub release whose notes carry the install command. The install script and the in-app update check both read these releases, so pushing the tag is the whole release. The app version comes from the tag; nothing needs to change in the Xcode project.
 
 > **Note** — Echo is currently a proof of concept. Builds are ad-hoc signed (not notarized by Apple), which is fine when installed through the script above; downloading the zip manually from the Releases page through a browser will trigger Gatekeeper warnings (`xattr -dr com.apple.quarantine /Applications/Echo.app` clears them). Use the install script.

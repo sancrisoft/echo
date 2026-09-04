@@ -31,6 +31,17 @@ struct AppSettingsPreferencesTests {
             #expect(!settings.keepRecordingsAfterTranscription)
             #expect(settings.autoGenerateSummaries)
             #expect(settings.disabledCallApps.isEmpty)
+            #expect(settings.checkForUpdatesAutomatically)
+        }
+    }
+
+    @Test func updateCheckToggleRoundTripsThroughDisk() {
+        withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            settings.setCheckForUpdates(automatically: false)
+            #expect(!settings.checkForUpdatesAutomatically)
+
+            #expect(!AppSettings(fileURL: url).checkForUpdatesAutomatically)
         }
     }
 
@@ -88,6 +99,7 @@ struct AppSettingsPreferencesTests {
             #expect(!settings.keepRecordingsAfterTranscription)
             #expect(settings.autoGenerateSummaries)
             #expect(settings.disabledCallApps.isEmpty)
+            #expect(settings.checkForUpdatesAutomatically)
         }
     }
 
@@ -101,6 +113,7 @@ struct AppSettingsPreferencesTests {
             settings.setKeepRecordings(enabled: true)
             settings.setAutoGenerateSummaries(enabled: false)
             settings.setCallApp("Slack", enabled: false)
+            settings.setCheckForUpdates(automatically: false)
 
             let reloaded = AppSettings(fileURL: url)
             #expect(reloaded.privacyBannerDismissed)
@@ -108,6 +121,7 @@ struct AppSettingsPreferencesTests {
             #expect(reloaded.keepRecordingsAfterTranscription)
             #expect(!reloaded.autoGenerateSummaries)
             #expect(reloaded.disabledCallApps == ["Slack"])
+            #expect(!reloaded.checkForUpdatesAutomatically)
         }
     }
 

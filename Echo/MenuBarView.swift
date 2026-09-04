@@ -26,6 +26,7 @@ struct MenuBarView: View {
     @Environment(RecordingController.self) private var controller
     @Environment(AppSettings.self) private var settings
     @Environment(CallDetectionController.self) private var callDetection
+    @Environment(UpdateChecker.self) private var updates
     @Environment(\.openWindow) private var openWindow
 
     /// Stats for the most recently saved meeting, shown on the idle face.
@@ -78,11 +79,26 @@ struct MenuBarView: View {
             appGlyph
             Text("Echo")
                 .font(.system(size: 17, weight: .bold))
-            // So internal testers can see at a glance which build they run.
-            Text(AppVersion.display)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .padding(.top, 3)
+            // So internal testers can see at a glance which build they run —
+            // and, once a newer release is on GitHub, the one place a
+            // menu-bar-only user learns about it. The link takes over the
+            // version's slot rather than adding a row: it lands on Settings ›
+            // Updates, where the version is repeated next to the buttons.
+            if updates.availableRelease != nil {
+                Button(action: openUpdates) {
+                    Text("Update available")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.echoIndigo)
+                        .padding(.top, 3)
+                }
+                .buttonStyle(.plain)
+                .help("A newer Echo is on GitHub — opens Settings › Updates")
+            } else {
+                Text(AppVersion.display)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 3)
+            }
             Spacer()
             // One button, one destination. A gear used to sit beside this one
             // opening the native Settings window, but two glyphs in a 300pt
@@ -297,6 +313,13 @@ struct MenuBarView: View {
     private func openDashboard() {
         // Shared with SP-006's island (which has no `openWindow` of its own).
         DashboardOpening.open(using: openWindow)
+    }
+
+    /// Lands on Settings › Updates: select the section first so the window
+    /// never flashes the meetings list (same order as Cmd-,).
+    private func openUpdates() {
+        controller.library.section = .settings
+        openDashboard()
     }
 
     private func stopAndOpenDashboard() {
