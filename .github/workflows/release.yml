@@ -56,11 +56,23 @@ jobs:
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             build
 
+      # The zip's root holds Echo.app and, next to it, LICENSE, NOTICE and
+      # THIRD_PARTY_NOTICES.md: the MIT and BSD licenses of the bundled
+      # dependencies require their notices to accompany the binary. Next to the
+      # bundle, never inside it — adding a file to a signed .app breaks the seal
+      # that `codesign --verify` (here and in scripts/install.sh) checks. The
+      # installer expects Echo.app at the zip root after `ditto -x -k`, which
+      # this layout keeps.
       - name: Package zip
         run: |
           APP="build/Build/Products/Release/Echo.app"
-          codesign --verify --deep --strict "$APP"
-          ditto -c -k --keepParent "$APP" "Echo-$VERSION.zip"
+          ZIP_ROOT="build/zip-root"
+          rm -rf "$ZIP_ROOT"
+          mkdir -p "$ZIP_ROOT"
+          ditto "$APP" "$ZIP_ROOT/Echo.app"
+          cp LICENSE NOTICE THIRD_PARTY_NOTICES.md "$ZIP_ROOT/"
+          codesign --verify --deep --strict "$ZIP_ROOT/Echo.app"
+          ditto -c -k "$ZIP_ROOT" "Echo-$VERSION.zip"
 
       # Publish: create the release on a normal version tag, or replace the
       # asset in place when the release already exists (a hotfix, or a rebuild
