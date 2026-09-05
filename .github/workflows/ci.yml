@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "v2/**"
+
+permissions:
+  contents: read
+
+# A new push to a pull request supersedes the run in flight, so only the latest
+# commit is built. Pushes to main and v2/** are never cancelled: every merge
+# commit keeps its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    # Branch protection requires this check by name; keep it stable.
+    name: Build and test
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Xcode
+        uses: ./.github/actions/setup-xcode
+
+      # Builds Echo.app (Debug, the test host) and runs the unit tests in it.
+      # The acceptance suites — the ones that download a model or replay the
+      # recorded audio under Fixtures/, which is not in the repository — gate
+      # themselves on TEST_RUNNER_ECHO_ACCEPTANCE and skip with a note when it
+      # is absent, so this run needs neither models nor fixtures.
+      #
+      # arm64 only, ad-hoc signed, for the same reasons as the release build:
+      # MLX and the vendored webrtc-apm library are arm64-only, and there is
+      # no signing identity on the runner. The tests are hosted in Echo.app
+      # and share its data folder, so they run serially.
+      - name: Build and run the unit tests
+        run: |
+          xcodebuild test \
+            -project Echo.xcodeproj \
+            -scheme Echo \
+            -destination 'platform=macOS,arch=arm64' \
+            -only-testing:EchoTests \
+            -parallel-testing-enabled NO \
+            -derivedDataPath build \
+            -resultBundlePath build/EchoTests.xcresult \
+            -skipMacroValidation \
+            -skipPackagePluginValidation \
+            ARCHS=arm64 \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=-
+
+      # The result bundle holds the per-test outcomes, the build log and any
+      # attachments; open it in Xcode to see what failed.
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: EchoTests.xcresult
+          path: build/EchoTests.xcresult
+          if-no-files-found: ignore
