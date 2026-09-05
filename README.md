@@ -129,7 +129,7 @@ Echo is local-first by design. Audio capture, transcription and summarization al
 
 ## Open source
 
-Echo is free software under the [Apache License 2.0](LICENSE); [NOTICE](NOTICE) carries the attributions that travel with it. Bug reports and ideas go to [GitHub Issues](https://github.com/sancrisoft/echo/issues), which are also the roadmap: what is planned lives there, as epics and their sub-issues. Pull requests are welcome; the Development section below has what you need to build and test.
+Echo is free software under the [Apache License 2.0](LICENSE); [NOTICE](NOTICE) carries the attributions that travel with it. [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) lists every bundled dependency and model with its license, and ships in each release zip next to `Echo.app`. Bug reports and ideas go to [GitHub Issues](https://github.com/sancrisoft/echo/issues), which are also the roadmap: what is planned lives there, as epics and their sub-issues. Pull requests are welcome; the Development section below has what you need to build and test.
 
 Echo stands on other people's work: [FluidAudio](https://github.com/FluidInference/FluidAudio) for on-device speech recognition, [MLX](https://github.com/ml-explore/mlx-swift) and [mlx-swift-lm](https://github.com/ml-explore/mlx-swift-lm) for running the language model, the WebRTC audio-processing library for echo cancellation, NVIDIA's Parakeet model (CC-BY-4.0), and the Qwen team and mlx-community for the summary model and its quantized weights.
 
