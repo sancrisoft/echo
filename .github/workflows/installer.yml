@@ -1,0 +1,86 @@
+name: Installer
+
+# The install script copies over /Applications on every user's Mac, so it gets
+# its own checks: syntax, shellcheck and the shell tests on every change, and a
+# smoke run that installs the latest real release into a scratch destination.
+on:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - ".github/workflows/installer.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - ".github/workflows/installer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  shell-tests:
+    name: Installer shell tests
+    # macOS: the script and its tests lean on osascript, defaults, ditto and
+    # codesign.
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Syntax
+        run: |
+          for script in scripts/install.sh scripts/tests/install_test.sh; do
+            bash -n "$script"
+          done
+
+      # Preinstalled on GitHub's macOS images; the fallback covers an image
+      # that stops shipping it.
+      - name: shellcheck
+        run: |
+          command -v shellcheck >/dev/null || brew install shellcheck
+          shellcheck --version
+          shellcheck scripts/install.sh scripts/tests/install_test.sh
+
+      - name: Shell tests
+        run: bash scripts/tests/install_test.sh
+
+  # The real thing, minus /Applications: a custom ECHO_INSTALL_DEST keeps the
+  # script away from any running Echo, and the runner has none anyway.
+  # Unauthenticated on purpose, since that is how users run it; the checksum
+  # lookup is the one API call, it is rate-limited per address, and the script
+  # already falls back to the code-signature check when it is refused.
+  smoke:
+    name: Installer smoke
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Job-level `env` cannot read the runner context, so the destination is
+      # exported from a step; every later step inherits it.
+      - name: Choose a scratch destination
+        run: echo "ECHO_INSTALL_DEST=$RUNNER_TEMP/Echo.app" >> "$GITHUB_ENV"
+
+      - name: Install the latest release into a scratch destination
+        run: |
+          bash scripts/install.sh
+          test -d "$ECHO_INSTALL_DEST"
+          codesign --verify --deep --strict "$ECHO_INSTALL_DEST"
+
+      - name: Check reports the install as current
+        run: |
+          bash scripts/install.sh --check | tee check.log
+          grep -q "You're up to date." check.log
+
+      - name: Dry runs against the install change nothing
+        run: |
+          bash scripts/install.sh --dry-run
+          bash scripts/install.sh --dry-run --uninstall --keep-data
+          test -d "$ECHO_INSTALL_DEST"
+
+      - name: Uninstall removes it
+        run: |
+          bash scripts/install.sh --uninstall --keep-data
+          test ! -e "$ECHO_INSTALL_DEST"

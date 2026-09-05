@@ -26,6 +26,7 @@ final class AppSettings {
         var keepRecordingsAfterTranscription = false
         var autoGenerateSummaries = true
         var disabledCallApps: [String] = []
+        var checkForUpdatesAutomatically = true
 
         init() {}
 
@@ -53,6 +54,9 @@ final class AppSettings {
             disabledCallApps = try container.decodeIfPresent(
                 [String].self, forKey: .disabledCallApps
             ) ?? defaults.disabledCallApps
+            checkForUpdatesAutomatically = try container.decodeIfPresent(
+                Bool.self, forKey: .checkForUpdatesAutomatically
+            ) ?? defaults.checkForUpdatesAutomatically
         }
     }
 
@@ -83,6 +87,11 @@ final class AppSettings {
     /// prefixes. A name the catalog no longer carries is harmlessly ignored.
     private(set) var disabledCallApps: [String]
 
+    /// Whether Echo asks GitHub once a day for the latest release (see
+    /// `UpdateChecker`). On by default; off means no request leaves the app
+    /// until the user clicks Check for Updates themselves.
+    private(set) var checkForUpdatesAutomatically: Bool
+
     @ObservationIgnored private let fileURL: URL
 
     init(fileURL: URL = EchoPaths.settingsFile) {
@@ -93,6 +102,7 @@ final class AppSettings {
         self.keepRecordingsAfterTranscription = stored.keepRecordingsAfterTranscription
         self.autoGenerateSummaries = stored.autoGenerateSummaries
         self.disabledCallApps = stored.disabledCallApps
+        self.checkForUpdatesAutomatically = stored.checkForUpdatesAutomatically
     }
 
     /// Permanently dismisses the privacy banner and persists the change.
@@ -138,6 +148,13 @@ final class AppSettings {
         persist()
     }
 
+    /// Turns the daily update check on or off and persists the change.
+    func setCheckForUpdates(automatically enabled: Bool) {
+        guard checkForUpdatesAutomatically != enabled else { return }
+        checkForUpdatesAutomatically = enabled
+        persist()
+    }
+
     private static func load(from url: URL) -> Stored {
         guard let data = try? Data(contentsOf: url) else { return Stored() }
         do {
@@ -155,6 +172,7 @@ final class AppSettings {
         stored.keepRecordingsAfterTranscription = keepRecordingsAfterTranscription
         stored.autoGenerateSummaries = autoGenerateSummaries
         stored.disabledCallApps = disabledCallApps
+        stored.checkForUpdatesAutomatically = checkForUpdatesAutomatically
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),

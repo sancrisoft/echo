@@ -29,14 +29,8 @@ jobs:
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
 
-      # Same Xcode build (17F113) as the local development machine.
-      - name: Select Xcode 26.6
-        run: sudo xcode-select -s /Applications/Xcode_26.6.app
-
-      # mlx-swift compiles Metal shaders; the Metal toolchain is a separate
-      # download in Xcode 26 and is not preinstalled on the runner image.
-      - name: Install Metal toolchain
-        run: sudo xcodebuild -downloadComponent MetalToolchain
+      - name: Set up Xcode
+        uses: ./.github/actions/setup-xcode
 
       # Ad-hoc signed (no Apple Developer account). arm64 only: the vendored
       # webrtc-apm static lib and MLX are arm64-only.
@@ -62,11 +56,23 @@ jobs:
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             build
 
+      # The zip's root holds Echo.app and, next to it, LICENSE, NOTICE and
+      # THIRD_PARTY_NOTICES.md: the MIT and BSD licenses of the bundled
+      # dependencies require their notices to accompany the binary. Next to the
+      # bundle, never inside it — adding a file to a signed .app breaks the seal
+      # that `codesign --verify` (here and in scripts/install.sh) checks. The
+      # installer expects Echo.app at the zip root after `ditto -x -k`, which
+      # this layout keeps.
       - name: Package zip
         run: |
           APP="build/Build/Products/Release/Echo.app"
-          codesign --verify --deep --strict "$APP"
-          ditto -c -k --keepParent "$APP" "Echo-$VERSION.zip"
+          ZIP_ROOT="build/zip-root"
+          rm -rf "$ZIP_ROOT"
+          mkdir -p "$ZIP_ROOT"
+          ditto "$APP" "$ZIP_ROOT/Echo.app"
+          cp LICENSE NOTICE THIRD_PARTY_NOTICES.md "$ZIP_ROOT/"
+          codesign --verify --deep --strict "$ZIP_ROOT/Echo.app"
+          ditto -c -k "$ZIP_ROOT" "Echo-$VERSION.zip"
 
       # Publish: create the release on a normal version tag, or replace the
       # asset in place when the release already exists (a hotfix, or a rebuild
@@ -87,8 +93,8 @@ jobs:
               --notes "Install or update with:
 
           \`\`\`sh
-          gh api -H \"Accept: application/vnd.github.raw\" repos/${GITHUB_REPOSITORY}/contents/scripts/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install.sh | bash
           \`\`\`
 
-          No \`gh\`? See the [install instructions](https://github.com/${GITHUB_REPOSITORY}#install) for a curl + token alternative."
+          Already running Echo? It notices this release on its own — **Update available** in the menu bar popover, or Settings › Updates. See the [install instructions](https://github.com/${GITHUB_REPOSITORY}#install) for the details."
           fi

@@ -9,7 +9,8 @@
 //
 //  Sections light up with their backends: Call Detection / Recordings /
 //  Summaries bind straight to `AppSettings`; General (launch at login) and
-//  Storage land with their slices.
+//  Storage land with their slices; Updates reads `UpdateChecker` and hands
+//  off to the install script for the update itself.
 //
 
 import ServiceManagement
@@ -18,6 +19,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(RecordingController.self) private var controller
     @Environment(AppSettings.self) private var settings
+    @Environment(UpdateChecker.self) private var updates
 
     /// Launch-at-login state lives in the OS (`SMAppService` is the source
     /// of truth — the §0 exception): read on appearance, re-read after every
@@ -31,9 +33,14 @@ struct SettingsView: View {
     @State private var confirmDeleteAllRecordings = false
     @State private var confirmEmptyTrash = false
 
+    /// Shown under the update buttons when the updater could not be started,
+    /// with the command to paste instead.
+    @State private var updateActionError: String?
+
     var body: some View {
         Form {
             generalSection
+            updatesSection
             callDetectionSection
             recordingsSection
             summariesSection
@@ -91,6 +98,101 @@ struct SettingsView: View {
             launchAtLoginError = error.localizedDescription
         }
         launchAtLogin = SMAppService.mainApp.status == .enabled
+    }
+
+    // MARK: - Updates
+
+    private var updatesSection: some View {
+        Section {
+            LabeledContent("Version", value: AppVersion.display)
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(updateStatusText)
+                    if let checked = updates.lastCheckedAt {
+                        Text("Checked \(checked.formatted(.relative(presentation: .named)))")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                Spacer()
+                Button(updates.isChecking ? "Checking…" : "Check for Updates") {
+                    Task { await updates.check() }
+                }
+                .disabled(updates.isChecking)
+            }
+
+            if let release = updates.availableRelease {
+                HStack(spacing: 10) {
+                    // Updating quits Echo; a recording in progress would be
+                    // lost, so the button waits for it to stop.
+                    Button("Update Now") { updateNow() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(controller.isRecording)
+                    Button("View Release Notes") { UpdateActions.openReleasePage(release) }
+                }
+                if controller.isRecording {
+                    Text("Updating quits Echo — it can update once this recording stops.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Either this run's failure to start the updater, or the report a
+            // failed update left behind before Echo reopened.
+            if let problem = updateActionError ?? updates.lastInstallFailure {
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            }
+
+            Toggle("Check for updates automatically", isOn: Binding(
+                get: { settings.checkForUpdatesAutomatically },
+                set: { enabled in
+                    settings.setCheckForUpdates(automatically: enabled)
+                    // Turning it on is a request for an answer; give one now
+                    // instead of at the next daily tick.
+                    if enabled, updates.lastCheckedAt == nil {
+                        Task { await updates.check() }
+                    }
+                }
+            ))
+        } header: {
+            Text("Updates")
+        } footer: {
+            Text("Echo asks GitHub once a day whether a newer release exists. That request carries Echo's version and nothing about you or your meetings. Update Now quits Echo, runs the same install script as the README, and reopens Echo on the new version; if anything fails, the Echo you had reopens and the reason shows here.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var updateStatusText: String {
+        switch updates.status {
+        case .idle:
+            return updates.isChecking ? "Checking GitHub…" : "Echo checks GitHub's releases for newer versions."
+        case .upToDate:
+            return "You're up to date."
+        case .available(let release):
+            var text = "Echo \(release.version) is available"
+            if let published = release.publishedAt {
+                text += ", released \(published.formatted(.relative(presentation: .named)))"
+            }
+            return text + "."
+        case .failed(let message):
+            return message
+        }
+    }
+
+    /// Returns only if the updater could not be started; otherwise Echo quits
+    /// here and the updater reopens it.
+    private func updateNow() {
+        do {
+            try UpdateActions.updateAndRelaunch()
+        } catch {
+            ErrorTrace.record("Starting the updater failed", error: error, category: "Updates")
+            updateActionError = "\(error). Paste this into a terminal instead:  \(GitHubReleaseFeed.installCommand)"
+        }
     }
 
     // MARK: - Call Detection

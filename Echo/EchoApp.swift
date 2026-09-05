@@ -26,6 +26,9 @@ struct EchoApp: App {
     /// app does; it drives its own AppKit panel, and the menu-bar popup reads
     /// its `appsInCall` for the SP-008 scope selector.
     @State private var callDetection: CallDetectionController
+    /// The GitHub-releases update check. Settings renders its answer and
+    /// the menu-bar popover shows "Update available" from it.
+    @State private var updates: UpdateChecker
 
     init() {
         // Reclaim the retired summary model's snapshot (ADR-011): every
@@ -81,9 +84,23 @@ struct EchoApp: App {
             }
         }
 
+        // The daily "is there a newer Echo?" question, gated by its Settings
+        // toggle at every tick. Same test-host discipline as the rest: a
+        // hosted test run must send no request.
+        let updates = UpdateChecker()
+        if !TestHost.isActive {
+            // A failed Update Now reopened Echo unchanged and left a report;
+            // Settings › Updates shows it once.
+            if let failure = UpdateActions.takeFailureReport() {
+                updates.noteInstallFailure(failure)
+            }
+            updates.startAutomaticChecks { settings.checkForUpdatesAutomatically }
+        }
+
         _controller = State(initialValue: recording)
         _settings = State(initialValue: settings)
         _callDetection = State(initialValue: callDetection)
+        _updates = State(initialValue: updates)
     }
 
     /// The dashboard opens on demand from the menu bar — never at launch. In
@@ -110,6 +127,7 @@ struct EchoApp: App {
                 // SP-008: the popup's scope selector reads `appsInCall` —
                 // the same detection state the island renders from.
                 .environment(callDetection)
+                .environment(updates)
         } label: {
             Image(systemName: controller.isRecording ? "waveform.circle.fill" : "waveform")
                 // Captures SwiftUI's `openWindow` for the AppKit side (SP-006's
@@ -125,6 +143,7 @@ struct EchoApp: App {
             DashboardView()
                 .environment(controller)
                 .environment(settings)
+                .environment(updates)
         }
         .defaultLaunchBehavior(Self.dashboardLaunchBehavior)
         // No state restoration: the window opens on demand from the menu bar,
