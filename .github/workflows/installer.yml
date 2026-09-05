@@ -54,11 +54,14 @@ jobs:
     name: Installer smoke
     runs-on: macos-26
     timeout-minutes: 15
-    env:
-      ECHO_INSTALL_DEST: ${{ runner.temp }}/Echo.app
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Job-level `env` cannot read the runner context, so the destination is
+      # exported from a step; every later step inherits it.
+      - name: Choose a scratch destination
+        run: echo "ECHO_INSTALL_DEST=$RUNNER_TEMP/Echo.app" >> "$GITHUB_ENV"
 
       - name: Install the latest release into a scratch destination
         run: |
