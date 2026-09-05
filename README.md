@@ -86,6 +86,13 @@ Install from a zip somebody sent you, with no network:
 curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --from ~/Downloads/Echo-0.0.11.zip
 ```
 
+See the plan first — which release, from where, to where, whether Echo would be
+quit — without downloading or changing anything. Combine it with any of the above:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --dry-run
+```
+
 Can't write to `/Applications`? Put `ECHO_INSTALL_DEST="$HOME/Applications/Echo.app"`
 in front of the command and it installs there instead.
 
@@ -110,7 +117,7 @@ curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/instal
 
 It removes the app, then asks separately before deleting your meetings — those
 are yours, and it defaults to keeping them. Add `--keep-data` or `--delete-data`
-to skip the question.
+to skip the question, or `--dry-run` to see what it would remove and remove nothing.
 
 ## First launch
 

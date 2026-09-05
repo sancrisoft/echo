@@ -12,6 +12,7 @@
 #   --from <zip>      Install from a release zip already on disk (no network).
 #   --uninstall       Remove Echo.app, then ask before deleting your meetings.
 #       --keep-data / --delete-data   Answer that question up front.
+#   --dry-run         Print what the install or uninstall would do, then stop.
 #   --help            This text.
 #
 # How it gets the release without credentials: GitHub redirects
@@ -49,6 +50,7 @@ MODE="install"
 TAG=""
 FROM_ZIP=""
 DATA_CHOICE=""   # "" (ask), keep, delete
+DRY_RUN=false
 TMP=""
 DOWNLOADED_ZIP=""   # set by download_release
 
@@ -71,6 +73,7 @@ Options:
   --from <zip>      Install from a release zip already on disk (no network).
   --uninstall       Remove Echo.app, then ask before deleting your meetings.
       --keep-data / --delete-data   Answer that question up front.
+  --dry-run         Print what the install or uninstall would do, then stop.
   --help            Show this text.
 
 Releases: https://github.com/$REPO/releases
@@ -95,6 +98,7 @@ parse_args() {
       --uninstall)  MODE="uninstall"; shift ;;
       --keep-data)  DATA_CHOICE="keep"; shift ;;
       --delete-data) DATA_CHOICE="delete"; shift ;;
+      --dry-run)    DRY_RUN=true; shift ;;
       -h|--help)    MODE="help"; shift ;;
       v[0-9]*|[0-9]*.[0-9]*)
         # The original one-liner took the tag as a bare argument; keep it working.
@@ -445,6 +449,90 @@ uninstall() {
   esac
 }
 
+# --- dry run ------------------------------------------------------------------
+
+# Prints what the install or uninstall would do and does none of it: nothing is
+# downloaded, unpacked, quit, copied or deleted. The one network request left
+# is resolving the latest release when no tag was given.
+dry_run() {
+  say "Dry run — printing the plan; nothing will be downloaded, installed, quit or removed"
+  case "$MODE" in
+    uninstall) dry_run_uninstall ;;
+    *)         dry_run_install ;;
+  esac
+}
+
+dry_run_install() {
+  local tag="" installed build
+  preflight
+
+  if [ "$MODE" = "from" ]; then
+    [ -f "$FROM_ZIP" ] || die "no such file: $FROM_ZIP"
+    say "Would install from $FROM_ZIP (no network)"
+  else
+    if [ -n "$TAG" ]; then
+      tag="$TAG"
+      say "Requested release: $tag"
+    else
+      tag="$(require_latest_tag)"
+      say "Latest release: $tag"
+    fi
+    note "Would download https://github.com/$REPO/releases/download/$tag/$(asset_name "$tag")"
+    note "Would compare it with the checksum GitHub publishes, when there is one"
+  fi
+  note "Would verify the code signature before copying anything"
+
+  installed="$(installed_version)"
+  build="$(installed_build)"
+  if [ -z "$installed" ]; then
+    note "Would install to $APP_PATH (nothing is there now)"
+  elif [ -z "$tag" ]; then
+    note "Would replace Echo $installed (build ${build:-?}) at $APP_PATH, unless the zip holds that exact build"
+  else
+    case "$(version_compare "$installed" "${tag#v}")" in
+      1)  note "Would replace Echo $installed (build ${build:-?}) at $APP_PATH with the older $tag" ;;
+      0)  note "Would replace Echo $installed (build ${build:-?}) at $APP_PATH only if $tag is a different build" ;;
+      -1) note "Would update Echo $installed (build ${build:-?}) at $APP_PATH to ${tag#v}" ;;
+    esac
+  fi
+
+  if ! $MANAGES_RUNNING_APP; then
+    note "Would leave any running Echo alone (custom destination via ECHO_INSTALL_DEST)"
+  elif echo_is_running; then
+    note "Would quit Echo (it is running now) before copying, and open it again afterwards"
+  else
+    note "Would open Echo afterwards (it is not running now)"
+  fi
+}
+
+dry_run_uninstall() {
+  local installed build size
+  if [ -d "$APP_PATH" ]; then
+    installed="$(installed_version)"
+    build="$(installed_build)"
+    say "Would remove $APP_PATH (Echo ${installed:-?}, build ${build:-?})"
+    if ! $MANAGES_RUNNING_APP; then
+      note "Would leave any running Echo alone (custom destination via ECHO_INSTALL_DEST)"
+    elif echo_is_running; then
+      note "Would quit Echo first (it is running now)"
+    fi
+  else
+    say "Nothing installed at $APP_PATH"
+  fi
+
+  if [ ! -d "$DATA_DIR" ]; then
+    note "No data folder at $DATA_DIR"
+    return 0
+  fi
+
+  size="$(du -sh "$DATA_DIR" 2>/dev/null | awk '{ print $1 }')"
+  case "$DATA_CHOICE" in
+    keep)   say "Would keep your meetings, transcripts and models in $DATA_DIR (${size:-?})" ;;
+    delete) say "Would delete $DATA_DIR (${size:-?})" ;;
+    *)      say "Would ask before deleting $DATA_DIR (${size:-?}); the answer defaults to keeping it" ;;
+  esac
+}
+
 # --- main ---------------------------------------------------------------------
 
 main() {
@@ -455,12 +543,20 @@ main() {
       usage
       return 0 ;;
     check)
+      # Read-only already, so --dry-run has nothing to hold back here.
       check
       return 0 ;;
-    uninstall)
-      uninstall
-      return 0 ;;
   esac
+
+  if $DRY_RUN; then
+    dry_run
+    return 0
+  fi
+
+  if [ "$MODE" = "uninstall" ]; then
+    uninstall
+    return 0
+  fi
 
   TMP="$(mktemp -d "${TMPDIR:-/tmp}/echo-install.XXXXXX")"
   trap 'rm -rf "$TMP"' EXIT
