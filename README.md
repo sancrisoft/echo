@@ -160,6 +160,8 @@ The install script has tests of its own, plain bash with no framework, that poin
 bash scripts/tests/install_test.sh
 ```
 
+The [installer workflow](.github/workflows/installer.yml) runs them with shellcheck on every pull request that touches `scripts/`, and installs the latest real release into a scratch destination on a macOS runner to check the script end to end.
+
 ### Releasing
 
 Releases are built by CI from version tags:
