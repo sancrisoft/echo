@@ -154,6 +154,12 @@ xcodebuild test -project Echo.xcodeproj -scheme Echo \
 
 The acceptance suites — the ones that load a model or replay real meeting audio — are off by default: they need `TEST_RUNNER_ECHO_ACCEPTANCE=1` and audio fixtures that are not in the repository, and they skip themselves with a note when either is missing. Tests are hosted in `Echo.app` and share its data folder, so don't run them while your own Echo is recording.
 
+The install script has tests of its own, plain bash with no framework, that point it at a scratch folder and never touch a real Echo:
+
+```sh
+bash scripts/tests/install_test.sh
+```
+
 ### Releasing
 
 Releases are built by CI from version tags:
