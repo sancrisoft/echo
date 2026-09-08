@@ -6,6 +6,10 @@ enum EchoV2Window {
 
 @main
 struct EchoV2App: App {
+    init() {
+        EchoV2Launch.start()
+    }
+
     var body: some Scene {
         MenuBarExtra("Echo v2", systemImage: "waveform") {
             MenuBarView()

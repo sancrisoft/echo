@@ -21,7 +21,9 @@ let package = Package(
                 "EchoCallDetection",
                 "EchoRecording",
             ]
-        )
+        ),
+        // A separate product so hosted test targets can link it and the app cannot.
+        .library(name: "EchoTestSupport", targets: ["EchoTestSupport"]),
     ],
     targets: [
         .target(name: "EchoCore", swiftSettings: swift6),
@@ -61,9 +63,12 @@ let package = Package(
             ],
             swiftSettings: swift6
         ),
+        // Fixture discovery and the acceptance gate, for test targets only.
+        .target(name: "EchoTestSupport", dependencies: ["EchoCore"], swiftSettings: swift6),
         .testTarget(
             name: "EchoEngineTests",
             dependencies: [
+                "EchoTestSupport",
                 "EchoCore",
                 "CWebRTCAPM",
                 "EchoAudio",

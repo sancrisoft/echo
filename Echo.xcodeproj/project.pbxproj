@@ -13,6 +13,7 @@
 		5CF100000000000000000B02 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF100000000000000000A02 /* FluidAudio */; };
 		5CF200000000000000000B02 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF200000000000000000A02 /* Hub */; };
 		5CF200000000000000000B03 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF200000000000000000A03 /* Tokenizers */; };
+		980E6D84EC80F4C885BB201A /* EchoTestSupport in Frameworks */ = {isa = PBXBuildFile; productRef = F2E601377C6C07573673D3B5 /* EchoTestSupport */; };
 		9ADAE3E6F6FF28F7D24F915B /* EchoUI in Frameworks */ = {isa = PBXBuildFile; productRef = FB3B334C0660B008607576C5 /* EchoUI */; };
 /* End PBXBuildFile section */
 
@@ -24,9 +25,17 @@
 			remoteGlobalIDString = 5CDE08DC2FEA41D600DFAFA7;
 			remoteInfo = Echo;
 		};
+		DC483500D72ABF911E5907DD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5CDE08D52FEA41D600DFAFA7 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9E684D1FBB2B07F2E6EEAD86;
+			remoteInfo = EchoV2;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		488B4BD18C4F7B0CFF90E8A7 /* EchoV2Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EchoV2Tests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5CDE08DD2FEA41D600DFAFA7 /* Echo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Echo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5CE570022FF5000000000002 /* EchoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EchoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E5468FF3EA2A639213BC086A /* EchoV2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EchoV2.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -43,6 +52,11 @@
 			path = EchoTests;
 			sourceTree = "<group>";
 		};
+		94E2E9178780D977A8A371A3 /* EchoV2Tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = EchoV2Tests;
+			sourceTree = "<group>";
+		};
 		9D7B9E92299DE26064450FD6 /* App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = App;
@@ -51,6 +65,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		2E0129611BE29F856FA815A0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				980E6D84EC80F4C885BB201A /* EchoTestSupport in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5CDE08DA2FEA41D600DFAFA7 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -88,6 +110,7 @@
 				5CDE08DF2FEA41D600DFAFA7 /* Echo */,
 				5CE570032FF5000000000003 /* EchoTests */,
 				9D7B9E92299DE26064450FD6 /* App */,
+				94E2E9178780D977A8A371A3 /* EchoV2Tests */,
 				5CDE08DE2FEA41D600DFAFA7 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -98,6 +121,7 @@
 				5CDE08DD2FEA41D600DFAFA7 /* Echo.app */,
 				5CE570022FF5000000000002 /* EchoTests.xctest */,
 				E5468FF3EA2A639213BC086A /* EchoV2.app */,
+				488B4BD18C4F7B0CFF90E8A7 /* EchoV2Tests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -156,6 +180,30 @@
 			productReference = 5CE570022FF5000000000002 /* EchoTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		7D76E8FA0CD921BBB1F2157B /* EchoV2Tests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 659EC817768D14B4EDAE389E /* Build configuration list for PBXNativeTarget "EchoV2Tests" */;
+			buildPhases = (
+				411901FB0A106E70D6F9A287 /* Sources */,
+				2E0129611BE29F856FA815A0 /* Frameworks */,
+				905BC5D45AC2D3682950E493 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				E113E22A1D2CBF1E73C09B77 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				94E2E9178780D977A8A371A3 /* EchoV2Tests */,
+			);
+			name = EchoV2Tests;
+			packageProductDependencies = (
+				F2E601377C6C07573673D3B5 /* EchoTestSupport */,
+			);
+			productName = EchoV2Tests;
+			productReference = 488B4BD18C4F7B0CFF90E8A7 /* EchoV2Tests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		9E684D1FBB2B07F2E6EEAD86 /* EchoV2 */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 507A97C1A70C907925303C41 /* Build configuration list for PBXNativeTarget "EchoV2" */;
@@ -196,6 +244,9 @@
 						CreatedOnToolsVersion = 26.5;
 						TestTargetID = 5CDE08DC2FEA41D600DFAFA7;
 					};
+					7D76E8FA0CD921BBB1F2157B = {
+						TestTargetID = 9E684D1FBB2B07F2E6EEAD86;
+					};
 				};
 			};
 			buildConfigurationList = 5CDE08D82FEA41D600DFAFA7 /* Build configuration list for PBXProject "Echo" */;
@@ -222,6 +273,7 @@
 				5CDE08DC2FEA41D600DFAFA7 /* Echo */,
 				5CE570012FF5000000000001 /* EchoTests */,
 				9E684D1FBB2B07F2E6EEAD86 /* EchoV2 */,
+				7D76E8FA0CD921BBB1F2157B /* EchoV2Tests */,
 			);
 		};
 /* End PBXProject section */
@@ -241,6 +293,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		905BC5D45AC2D3682950E493 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		FF6DCC10E3515C30339B258A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -251,6 +310,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		411901FB0A106E70D6F9A287 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5CDE08D92FEA41D600DFAFA7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -279,6 +345,12 @@
 			isa = PBXTargetDependency;
 			target = 5CDE08DC2FEA41D600DFAFA7 /* Echo */;
 			targetProxy = 5C1957642FF7494300B1AB7D /* PBXContainerItemProxy */;
+		};
+		E113E22A1D2CBF1E73C09B77 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = EchoV2;
+			target = 9E684D1FBB2B07F2E6EEAD86 /* EchoV2 */;
+			targetProxy = DC483500D72ABF911E5907DD /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -531,6 +603,42 @@
 			};
 			name = Release;
 		};
+		6B7F917962E54B9592BF686C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.EchoV2Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EchoV2.app/Contents/MacOS/EchoV2";
+			};
+			name = Release;
+		};
+		7A6382D5C35893761F53CD64 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.EchoV2Tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/EchoV2.app/Contents/MacOS/EchoV2";
+			};
+			name = Debug;
+		};
 		BF1D558ED277164882120731 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -628,6 +736,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		659EC817768D14B4EDAE389E /* Build configuration list for PBXNativeTarget "EchoV2Tests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A6382D5C35893761F53CD64 /* Debug */,
+				6B7F917962E54B9592BF686C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -698,6 +815,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */;
 			productName = Tokenizers;
+		};
+		F2E601377C6C07573673D3B5 /* EchoTestSupport */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = EchoTestSupport;
 		};
 		FB3B334C0660B008607576C5 /* EchoUI */ = {
 			isa = XCSwiftPackageProductDependency;

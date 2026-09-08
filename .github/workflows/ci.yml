@@ -65,3 +65,65 @@ jobs:
           name: EchoTests.xcresult
           path: build/EchoTests.xcresult
           if-no-files-found: ignore
+
+  # The v2 rewrite, independent of the job above: v1 and v2 share the project
+  # file and nothing else, so neither should wait on or break the other.
+  v2:
+    name: Build and test v2
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Xcode
+        uses: ./.github/actions/setup-xcode
+
+      # `swift test` is a different invocation from the Xcode test bundle, so
+      # nothing in the job above ever ran these: the boundary guard that fails
+      # when an engine module imports SwiftUI only runs here.
+      #
+      # Acceptance suites (a model download, recorded audio) carry the
+      # .acceptance trait and skip with a note unless the gate is open. This
+      # runner spells it ECHO_ACCEPTANCE=1; the xcodebuild step below spells the
+      # same gate TEST_RUNNER_ECHO_ACCEPTANCE=1, because xcodebuild strips the
+      # prefix before the test process sees it. Neither is set here: CI has no
+      # models and no Fixtures/.
+      - name: Test the engine package
+        run: swift test --package-path Packages/EchoEngine
+
+      # No tests yet — the modules are namespaces until the ports land — so this
+      # is a compile check that the UI package still resolves against the engine.
+      - name: Build the UI package
+        run: swift build --package-path Packages/EchoUI
+
+      # EchoV2.app is the test host. What this proves that the package tests
+      # cannot: the test-host guard fires in the hosted context, so the launch
+      # seam performs no startup work and touches no data folder.
+      #
+      # arm64 only and ad-hoc signed for the same reasons as the v1 job: the
+      # vendored webrtc-apm library is arm64-only and the runner has no signing
+      # identity.
+      - name: Build and run the hosted app tests
+        run: |
+          xcodebuild test \
+            -project Echo.xcodeproj \
+            -scheme EchoV2 \
+            -destination 'platform=macOS,arch=arm64' \
+            -only-testing:EchoV2Tests \
+            -parallel-testing-enabled NO \
+            -derivedDataPath build/v2 \
+            -resultBundlePath build/v2/EchoV2Tests.xcresult \
+            -skipMacroValidation \
+            -skipPackagePluginValidation \
+            ARCHS=arm64 \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=-
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: EchoV2Tests.xcresult
+          path: build/v2/EchoV2Tests.xcresult
+          if-no-files-found: ignore
