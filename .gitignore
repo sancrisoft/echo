@@ -31,8 +31,11 @@ DerivedData/
 
 # Test fixtures — real recorded audio, local-only (never shipped in the repo).
 # Test sources ARE tracked as of 2026-07-13; only fixtures and generated
-# reports stay local.
-/Fixtures/
+# reports stay local. The recording protocol is the exception and is tracked:
+# every clone can record its own set, and seven places in the code point at it.
+# A negation cannot reach inside an ignored directory, hence /Fixtures/* here.
+/Fixtures/*
+!/Fixtures/README.md
 EchoTests/sp002-measure-report.txt
 /meetings_sample/
 
