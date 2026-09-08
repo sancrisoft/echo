@@ -231,8 +231,10 @@ swift-transformers.
 
 ## Vendored libraries
 
-These are checked into the repository under [Vendor/webrtc-apm](Vendor/webrtc-apm)
-as a prebuilt static library; [Vendor/webrtc-apm/VERSION](Vendor/webrtc-apm/VERSION)
+These are checked into the repository under [Packages/EchoEngine/Vendor](Packages/EchoEngine/Vendor)
+as a prebuilt static library, with the headers it is used through under
+[Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include](Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include);
+[Packages/EchoEngine/Vendor/VERSION](Packages/EchoEngine/Vendor/VERSION)
 records the upstream tag, commit and build.
 
 ### webrtc-audio-processing
@@ -242,7 +244,7 @@ BSD 3-Clause License · <https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-
 Copyright (c) 2011, Google Inc. All rights reserved. Source headers read
 "Copyright 2006-2023 The WebRTC Project Authors". The standalone WebRTC Audio Processing
 Module (AEC3), which cancels the meeting audio out of the microphone. License
-file: [Vendor/webrtc-apm/licenses/LICENSE.webrtc-audio-processing](Vendor/webrtc-apm/licenses/LICENSE.webrtc-audio-processing);
+file: [Packages/EchoEngine/Vendor/licenses/LICENSE.webrtc-audio-processing](Packages/EchoEngine/Vendor/licenses/LICENSE.webrtc-audio-processing);
 text under [BSD 3-Clause License](#bsd-3-clause-license).
 
 ### abseil-cpp
@@ -251,7 +253,7 @@ Apache License 2.0 · <https://github.com/abseil/abseil-cpp>
 
 Copyright 2017-2024 The Abseil Authors (source headers). Statically bundled
 inside the vendored WebRTC library. License file:
-[Vendor/webrtc-apm/licenses/LICENSE.abseil-cpp](Vendor/webrtc-apm/licenses/LICENSE.abseil-cpp).
+[Packages/EchoEngine/Vendor/licenses/LICENSE.abseil-cpp](Packages/EchoEngine/Vendor/licenses/LICENSE.abseil-cpp).
 
 ## Models
 
@@ -334,7 +336,7 @@ without including the above copyright and permission notices.
 
 ### BSD 3-Clause License
 
-webrtc-audio-processing, from `Vendor/webrtc-apm/licenses/LICENSE.webrtc-audio-processing`:
+webrtc-audio-processing, from `Packages/EchoEngine/Vendor/licenses/LICENSE.webrtc-audio-processing`:
 
 ```text
 Copyright (c) 2011, Google Inc. All rights reserved.
@@ -404,7 +406,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 The full text is Echo's own [LICENSE](LICENSE); the packages above that are
 under it ship the same text. Abseil's copy is at
-[Vendor/webrtc-apm/licenses/LICENSE.abseil-cpp](Vendor/webrtc-apm/licenses/LICENSE.abseil-cpp).
+[Packages/EchoEngine/Vendor/licenses/LICENSE.abseil-cpp](Packages/EchoEngine/Vendor/licenses/LICENSE.abseil-cpp).
 The Swift packages marked "with Runtime Library Exception" append this to it:
 
 ```text

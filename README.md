@@ -142,7 +142,7 @@ Echo stands on other people's work: [FluidAudio](https://github.com/FluidInferen
 
 ## Development
 
-You need an Apple Silicon Mac, Xcode 26.6 or later, and the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`). Open [Echo.xcodeproj](Echo.xcodeproj) and run the `Echo` scheme. Swift package dependencies resolve automatically; the WebRTC audio-processing library is vendored in [Vendor/webrtc-apm](Vendor/webrtc-apm). The build is arm64-only, because MLX and that vendored library are.
+You need an Apple Silicon Mac, Xcode 26.6 or later, and the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`). Open [Echo.xcodeproj](Echo.xcodeproj) and run the `Echo` scheme. Swift package dependencies resolve automatically; the WebRTC audio-processing library is vendored in [Packages/EchoEngine/Vendor](Packages/EchoEngine/Vendor). The build is arm64-only, because MLX and that vendored library are.
 
 Run the tests with:
 

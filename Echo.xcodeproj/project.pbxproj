@@ -13,6 +13,7 @@
 		5CF100000000000000000B02 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF100000000000000000A02 /* FluidAudio */; };
 		5CF200000000000000000B02 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF200000000000000000A02 /* Hub */; };
 		5CF200000000000000000B03 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF200000000000000000A03 /* Tokenizers */; };
+		9ADAE3E6F6FF28F7D24F915B /* EchoUI in Frameworks */ = {isa = PBXBuildFile; productRef = FB3B334C0660B008607576C5 /* EchoUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -74,6 +75,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9ADAE3E6F6FF28F7D24F915B /* EchoUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -171,6 +173,7 @@
 			);
 			name = EchoV2;
 			packageProductDependencies = (
+				FB3B334C0660B008607576C5 /* EchoUI */,
 			);
 			productName = EchoV2;
 			productReference = E5468FF3EA2A639213BC086A /* EchoV2.app */;
@@ -208,6 +211,8 @@
 				5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
 				5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */,
+				213C9595AB65C5BAA4CC5E39 /* XCLocalSwiftPackageReference "EchoEngine" */,
+				F0E31095D59A2E33B1A11B88 /* XCLocalSwiftPackageReference "EchoUI" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5CDE08DE2FEA41D600DFAFA7 /* Products */;
@@ -410,8 +415,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/Vendor/webrtc-apm/include",
-					"$(SRCROOT)/Vendor/webrtc-apm/include/webrtc-audio-processing-2",
+					"$(SRCROOT)/Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include",
+					"$(SRCROOT)/Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include/webrtc-audio-processing-2",
 				);
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
@@ -421,7 +426,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/webrtc-apm/lib";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Packages/EchoEngine/Vendor/WebRTCAPM.xcframework/macos-arm64";
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
@@ -455,8 +460,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/Vendor/webrtc-apm/include",
-					"$(SRCROOT)/Vendor/webrtc-apm/include/webrtc-audio-processing-2",
+					"$(SRCROOT)/Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include",
+					"$(SRCROOT)/Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include/webrtc-audio-processing-2",
 				);
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
@@ -466,7 +471,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/webrtc-apm/lib";
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Packages/EchoEngine/Vendor/WebRTCAPM.xcframework/macos-arm64";
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
@@ -625,6 +630,17 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		213C9595AB65C5BAA4CC5E39 /* XCLocalSwiftPackageReference "EchoEngine" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/EchoEngine;
+		};
+		F0E31095D59A2E33B1A11B88 /* XCLocalSwiftPackageReference "EchoUI" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/EchoUI;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -682,6 +698,10 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */;
 			productName = Tokenizers;
+		};
+		FB3B334C0660B008607576C5 /* EchoUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = EchoUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

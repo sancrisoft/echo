@@ -1,0 +1,30 @@
+webrtc-audio-processing (standalone WebRTC Audio Processing Module, AEC3)
+
+Source:   https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing.git
+Tag:      v2.1
+Commit:   846fe90a289f58b7c9303a635142aa2c7caa93e5
+Subproject: abseil-cpp 20240722.0 (meson wrap, statically bundled into the archive)
+
+Build (macOS arm64, static, release):
+  export MACOSX_DEPLOYMENT_TARGET=15.6
+  meson setup build -Ddefault_library=static --buildtype=release
+  ninja -C build
+  meson install -C build --destdir=<staging>
+
+Wrapped for SwiftPM, which cannot link a loose .a without unsafe flags:
+  xcodebuild -create-xcframework -library <staging>/lib/libwebrtc-audio-processing-2.a \
+    -output Packages/EchoEngine/Vendor/WebRTCAPM.xcframework
+
+Vendored artifacts (paths from the repository root):
+  Packages/EchoEngine/Vendor/WebRTCAPM.xcframework/     — one macos-arm64 slice, consumed as a .binaryTarget
+  Packages/EchoEngine/Vendor/licenses/                  — upstream BSD-3 (WebRTC) and Apache-2.0 (abseil)
+  Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include/webrtc-audio-processing-2/  — public headers (installed set)
+  Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include/absl/                       — abseil headers the public headers reference
+
+The headers live inside the CWebRTCAPM target because SwiftPM cannot put a
+header search path outside the target that uses it.
+
+Consumer cflags (per upstream pkg-config): -DWEBRTC_POSIX
+Both include roots are needed on the header search path:
+  Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include
+  Packages/EchoEngine/Sources/CWebRTCAPM/vendor/include/webrtc-audio-processing-2
