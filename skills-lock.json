@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "skills": {
+    "brainstorm": {
+      "source": "git@github.com:sancrisoft/conduct.git",
+      "sourceType": "git",
+      "skillPath": "skills/brainstorm/SKILL.md",
+      "computedHash": "0b855002f71af8be717ce0221e057d28c391e6f527b6e111d4af4dcbb3a22e8b"
+    },
+    "build": {
+      "source": "git@github.com:sancrisoft/conduct.git",
+      "sourceType": "git",
+      "skillPath": "skills/build/SKILL.md",
+      "computedHash": "4f7abafcbbe47ede3561cafa7301d5b9eea007ed7675ba812b9462f3206dba69"
+    },
+    "prototype": {
+      "source": "git@github.com:sancrisoft/conduct.git",
+      "sourceType": "git",
+      "skillPath": "skills/prototype/SKILL.md",
+      "computedHash": "cef4bb5453ed1605ad1814dd420448dce83a7c8ddc3fa112c95d8fb9d008a2d0"
+    },
+    "review": {
+      "source": "git@github.com:sancrisoft/conduct.git",
+      "sourceType": "git",
+      "skillPath": "skills/review/SKILL.md",
+      "computedHash": "24f4d0821346a00fc5e80207dabe00e637ab59f7cdc03f84600901b7e2de4753"
+    },
+    "spec": {
+      "source": "git@github.com:sancrisoft/conduct.git",
+      "sourceType": "git",
+      "skillPath": "skills/spec/SKILL.md",
+      "computedHash": "430039c59928c5578e09034ab3a9b38efa6c7e8884c10e06cd5283c338cd2bca"
+    },
+    "swift-concurrency": {
+      "source": "AvdLee/Swift-Concurrency-Agent-Skill",
+      "sourceType": "github",
+      "skillPath": "skills/swift-concurrency/SKILL.md",
+      "computedHash": "49e4df69412710a0ca320c21a9d26cf4abb6d2c553960cffaceea5a09e3be792"
+    },
+    "swift-testing-expert": {
+      "source": "AvdLee/Swift-Testing-Agent-Skill",
+      "sourceType": "github",
+      "skillPath": "swift-testing-expert/SKILL.md",
+      "computedHash": "ee2a73c7148264cb7e0a0819d3063225541e57162353d97707d9fab830d27ba6"
+    },
+    "swiftui-expert-skill": {
+      "source": "AvdLee/SwiftUI-Agent-Skill",
+      "sourceType": "github",
+      "skillPath": "skills/swiftui-expert-skill/SKILL.md",
+      "computedHash": "352119e45436aa70d5a0d29e275dc55769ab509c2098505b391c2e1347c1118a"
+    }
+  }
+}

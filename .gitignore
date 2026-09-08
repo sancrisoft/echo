@@ -38,3 +38,12 @@ EchoTests/sp002-measure-report.txt
 
 # Design canvas working files (artboards) — local-only.
 .design/
+
+# Agent skills. The third-party set is declared in skills-lock.json and
+# restored with `npx skills experimental_install`, never vendored here: it is
+# other authors' work and it would drag their licences into NOTICE. Echo's own
+# skills under .claude/skills/echo-* are tracked; everything else installed
+# there is a symlink into .agents/ and is not.
+.agents/
+.claude/skills/*
+!.claude/skills/echo-*
