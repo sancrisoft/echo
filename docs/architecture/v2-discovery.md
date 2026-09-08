@@ -239,8 +239,8 @@ stack since 2026-06-29. It must not survive into v2.
 |---|---|---|
 | FluidAudio 0.15.5 (Apache-2.0) | `AsrModels`, `AsrManager`, `ASRConfig`, `TdtDecoderState` | Batch transcription; chunks long audio internally at ~15 s windows; `melChunkContext: false` + `dualDecodeArbitration: true` fixed Spanish→English drift |
 | mlx-swift 0.31.6, mlx-swift-lm 3.31.4 (MIT) | Load and run Qwen3.5 4B | Metal shaders compiled at build time (needs the Metal toolchain); `MLX.GPU.set(cacheLimit:)`; no memory ceiling exists, memory is bounded by admission |
-| swift-huggingface 0.9.0 (`Hub`) | Repo metadata, config snapshot, local repo layout | `HubApi(downloadBase:, cache: nil)` is mandatory; the async download API never fires its delegate on this OS, which is why Echo owns its transport |
-| swift-transformers 1.3.3 (`Tokenizers`) | Tokenizer for ChatML | `applyChatTemplate` deliberately throws; the template is built in code |
+| swift-transformers 1.3.3 (`Hub`) | Repo metadata, config snapshot, local repo layout | `HubApi` is a swift-transformers product, not a swift-huggingface one; it pulls swift-huggingface 0.9.0 transitively (`from: "0.8.1"`, so a v2 package pins it). `HubApi(downloadBase:, cache: nil)` is mandatory; the async download API never fires its delegate on this OS, which is why Echo owns its transport |
+| swift-transformers 1.3.3 (`Tokenizers`) | Tokenizer for ChatML | Same package as `Hub` above. `applyChatTemplate` deliberately throws; the template is built in code |
 | webrtc-audio-processing v2.1 (BSD-3) + abseil | AEC3 | Static arm64 library, one ObjC++ seam, AEC3 only with seven features explicitly off |
 | Models | Parakeet (CC-BY-4.0, attribution shown in-app), Qwen3.5 4B OptiQ (Apache-2.0) | Downloaded at runtime, never redistributed |
 | GitHub | Release feed, install script, Update Now | The only network endpoints besides Hugging Face |

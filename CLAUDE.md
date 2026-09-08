@@ -50,7 +50,7 @@ Makefile             the commands
 | `DesignSystem` | `EchoColor`, `EchoFont`, `EchoSpacing`/`EchoRadius`/`EchoLayout`, primitives (`EchoButtonStyle`, `StatusBadge`, `MetaStrip`, `EmptyState`, `SelectableRowChrome`), `DesignGallery` | — |
 | `Workspace` | the main window: `WorkspaceWindow`, `WorkspaceModel`, sidebar, document, trash, settings screen, `MarkdownDocument`/`MarkdownView`, `MeetingGrouping`, `MeetingStatus`, `MeetingActions` (panels, pasteboard, Finder) | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem |
 | `Audio` *(pending)* | capture, AEC, device/route/health monitors, retention encoding, `CaptureScope`, `AppBundleIdentity`; vendored WebRTC | EchoCore |
-| `ModelDelivery` *(pending)* | resumable download, progress clamp, retry, manifest, retired cleanup | EchoCore |
+| `ModelDelivery` | `SnapshotDownloader`/`SnapshotSpec`, `ResumableFileDownload`, `DownloadProgress` (the one clamp), `DownloadRetry`, `SnapshotDownloadTally`/`SnapshotDownloadBudget`, `SnapshotManifest`, `DownloadPauseStore`, `RetiredModelCleanup`, `DiskSpace` | EchoCore, swift-transformers (`Hub`) |
 | `Transcription` *(pending)* | Parakeet model + pass, segment shaping, dedup | EchoCore, ModelDelivery |
 | `Summarization` *(pending)* | MLX engine, model lifecycle, pipeline, prompts, chunking | EchoCore, ModelDelivery |
 | `Recording` *(pending)* | `RecordingSession` facade, finalization machine, summary scheduling | EchoCore, Audio, Transcription, Summarization, ModelDelivery, Meetings |
