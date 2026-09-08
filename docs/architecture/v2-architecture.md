@@ -1,6 +1,7 @@
 # Echo v2 — Architecture
 
-Status: adopted 2026-09-08 for the v2 rebuild. Companion documents:
+Status: adopted 2026-09-08 for the v2 rebuild; reviewed after the first
+feature (`review-2026-09-08-first-feature.md`). Companion documents:
 `v2-discovery.md` (what the product is and what the PoC taught us) and the
 ADRs under `adr/` (the decisions with real trade-offs).
 
@@ -16,10 +17,10 @@ descriptive file names, few abstractions.
 ```
 Echo/
 ├── App/                      the macOS app target: composition, scenes, lifecycle
-│   ├── EchoApp.swift
+│   ├── EchoApp.swift         the scenes
 │   ├── AppComposition.swift  builds every service, wires them, starts side effects
-│   ├── ActivationPolicy.swift
-│   ├── MenuBarItem.swift
+│   ├── ActivationPolicy.swift · WindowOpener.swift · MenuBarMenu.swift
+│   ├── WindowSnapshot.swift  DEBUG: render a scene to a PNG (design review)
 │   ├── Info.plist · Echo.entitlements · Assets.xcassets
 ├── AppTests/                 tests that need the real app as host (few)
 ├── Packages/                 one local Swift package per capability
@@ -172,7 +173,7 @@ names inside a package are free to change.
 - `DataRoot`: `appSupport`, `meetings`, `models`, `logs`, `settingsFile`, `summaryDownloadStateFile`. No accessor creates directories; owners do.
 - `ErrorTrace.record(_:error:category:metadata:)`, `ErrorTraceLog` (prune, reader for tests).
 - `AppSettings` (`@Observable @MainActor`): typed read-only properties plus one mutator per preference.
-- `LaunchEnvironment.current`: typed debug flags (`openDashboardAtLaunch`, `appearanceOverride`, `snapshotPath`, `keepRetainedAudio`, …), populated only in DEBUG.
+- `LaunchEnvironment.current`: typed debug flags (`dataRootOverride`, `opensWindowAtLaunch`, `appearanceOverride`, `snapshotPath`, `snapshotScene`, `keepsRetainedAudio`, `installedVersionOverride`), populated only in DEBUG.
 - `TestHost.isActive`.
 - `AppIdentity`: `bundleIdentifier`, `logSubsystem`, `version` (`short`, `build`, `display`).
 
@@ -197,9 +198,9 @@ names inside a package are free to change.
 - `SnapshotDownloader`, `ResumableFileDownload`, `DownloadProgress` (the one clamp), `DownloadRetry.withStallRetry`, `SnapshotManifest`, `RetiredModelCleanup`, `DiskSpace`.
 
 **Meetings**
-- `MeetingStore` (actor): `save`, `listMetas`, `loadRecord`, `replaceTranscript`, `attachSummary`, `trash`/`restore`/`delete`, audio adoption/preservation/classification, `measureBreakdown`.
-- `MeetingLibrary` (`@Observable @MainActor`): `metas`, `trashedMetas`, `storage`, `refresh()`, mutation methods that re-read.
-- `MeetingMeta`, `MeetingRecord`, `TranscriptProvenance`, `CaptureScopeRecord`, `StorageBreakdown`, `MeetingExport` (markdown / plain text strings), `MeetingListSelection` (pure keyboard/selection rules).
+- `MeetingStore` (actor): `save`, `listMetas`, `loadMeta`, `loadRecord`, `updateMeta`, `delete`, `replaceTranscript`, `recordTerminalProvenance`, `attachSummary(markdown:caption:modelName:to:)`, `removeSummaryArtifacts`, `migrateLegacySummaries`, the audio name families and their classification, adoption, preservation, cloning and deletion.
+- `MeetingLibrary` (`@Observable @MainActor`): `metas`, `trashedMetas`, `storage`, `refresh()` (reads only), `foldLegacySummaries()`, `purgeExpiredTrash()`, `backfillWordCounts()`, `loadRecord`, `rename`/`trash`/`restore`/`deletePermanently`/`emptyTrash`, preserved-audio queries and deletions, `measureStorage()`; `store` for the pipeline.
+- `MeetingMeta`, `MeetingRecord` (`summaryMarkdown: String?`), `TranscriptProvenance`, `CaptureScopeRecord`, `LegacyMeetingSummary`, `StorageBreakdown.measure`, `MeetingExport` (markdown / plain text / standalone summary), `MeetingListSelection` (pure keyboard rules), `MeetingStoreError`.
 
 **Recording**
 - `RecordingSession` (`@Observable @MainActor`): `phase` (`idle` | `recording(startedAt:scope:)` | `stopping` | `finalizing(meetingID:progress:)` | `summarizing(meetingID:)`), `levels`, `notices`, `currentMeetingID`, `start(scope:)`, `stop()`, `retryTranscription(_:)`, `retranscribe(_:)`, `requestSummary(_:)`.
@@ -213,10 +214,10 @@ names inside a package are free to change.
 - `UpdateChecker` (`@Observable @MainActor`), `ReleaseVersion`, `GitHubReleaseFeed`, `UpdateInstaller`.
 
 **DesignSystem**
-- `EchoColor` (semantic tokens), `EchoFont` (the scale), `EchoSpacing`, `EchoRadius`, primitives (`EchoButtonStyle`, `Chip`, `ListRow`, `MetaStrip`, `StatusBadge`, `LevelMeter`, `EmptyState`).
+- `EchoColor` (semantic tokens for both appearances), `EchoFont` (the scale), `EchoSpacing`, `EchoRadius`, `EchoLayout`, primitives (`EchoButtonStyle` roles, `StatusBadge`, `MetaStrip`/`MetaItem`, `EmptyState`, `SelectableRowChrome`), `DesignGallery` (DEBUG). The token enums are `nonisolated`. A level meter arrives with Recording.
 
 **Workspace**
-- `WorkspaceWindow` (root view), `WorkspaceModel` (`@Observable @MainActor`).
+- `WorkspaceWindow(dataRoot:)` (root view), `WorkspaceModel` (`@Observable @MainActor`: `section`, `selectedMeetingID`, `selectedTrashedID`, `documentTab`, `searchText`, `sortOrder`, the selection rules), `MeetingSortOrder`, `MeetingFilter`, `MeetingDateGroup`, `MeetingStatus.resolve`, `MarkdownDocument.parse`, `MarkdownRendering`, `MarkdownView`.
 
 **Island**
 - `IslandController` (`@Observable @MainActor`), `IslandPanel`.
@@ -402,6 +403,10 @@ Adopted in ADR-004.
   formatter, configured in `.swift-format`) plus `scripts/check_boundaries.sh`.
 - `make format` — `swift format --in-place --recursive`.
 - `make run` — build and open the app.
+- `scripts/snapshot.sh [scene…]` — render the main window's scenes to PNGs
+  against a copy of the real library (`ECHO_SNAPSHOT_PATH`,
+  `ECHO_SNAPSHOT_SCENE`), the design-review tool; pixels cannot be captured from
+  outside a window on this macOS.
 - CI (`.github/workflows/ci.yml`): lint, package tests, app build and hosted
   tests, on pull requests and pushes to `main` and `v2`. Release and installer
   workflows are unchanged: the app target is still named `Echo`.
