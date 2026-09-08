@@ -27,7 +27,10 @@ nonisolated enum Acceptance {
     static let gate: Comment = """
     Slow transcription suite — run on demand with \
     TEST_RUNNER_ECHO_ACCEPTANCE=1 xcodebuild test -project Echo.xcodeproj \
-    -scheme Echo -destination 'platform=macOS' (see Fixtures/README.md). \
+    -scheme Echo -destination 'platform=macOS,arch=arm64' \
+    -skipMacroValidation -skipPackagePluginValidation \
+    -parallel-testing-enabled NO \
+    -only-testing:EchoTests/AECAcceptanceTests (see Fixtures/README.md). \
     Needs the Parakeet model already downloaded under \
     ~/Library/Application Support/Echo/Models — the suite never fetches it.
     """

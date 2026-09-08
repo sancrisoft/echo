@@ -667,8 +667,12 @@ nonisolated enum ParakeetPass {
                 )
                 // `language: nil` — neutral, the library default. The meeting's
                 // language is not a stored fact, and v3 is natively
-                // multilingual. `.spanish` is the first knob to try if
-                // validation ever shows residual English drift.
+                // multilingual. A hint is not the lever for residual English
+                // drift: it partitions by Unicode script, and Spanish and
+                // English are both Latin, so it cannot reject a single English
+                // token — see the `ASRConfig` comment above, where
+                // `dualDecodeArbitration` is the part of that case measured to
+                // work.
                 return try await manager.transcribe(samples, decoderState: &state, language: nil)
             }
             if let progressStream {
