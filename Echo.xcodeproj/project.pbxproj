@@ -28,6 +28,7 @@
 /* Begin PBXFileReference section */
 		5CDE08DD2FEA41D600DFAFA7 /* Echo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Echo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5CE570022FF5000000000002 /* EchoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EchoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E5468FF3EA2A639213BC086A /* EchoV2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EchoV2.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -39,6 +40,11 @@
 		5CE570032FF5000000000003 /* EchoTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = EchoTests;
+			sourceTree = "<group>";
+		};
+		9D7B9E92299DE26064450FD6 /* App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = App;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -64,6 +70,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FD1FC8C251CC094DCFECAF40 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -72,6 +85,7 @@
 			children = (
 				5CDE08DF2FEA41D600DFAFA7 /* Echo */,
 				5CE570032FF5000000000003 /* EchoTests */,
+				9D7B9E92299DE26064450FD6 /* App */,
 				5CDE08DE2FEA41D600DFAFA7 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -81,6 +95,7 @@
 			children = (
 				5CDE08DD2FEA41D600DFAFA7 /* Echo.app */,
 				5CE570022FF5000000000002 /* EchoTests.xctest */,
+				E5468FF3EA2A639213BC086A /* EchoV2.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -139,6 +154,28 @@
 			productReference = 5CE570022FF5000000000002 /* EchoTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		9E684D1FBB2B07F2E6EEAD86 /* EchoV2 */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 507A97C1A70C907925303C41 /* Build configuration list for PBXNativeTarget "EchoV2" */;
+			buildPhases = (
+				EC36E1E475E29269B6A3019E /* Sources */,
+				FD1FC8C251CC094DCFECAF40 /* Frameworks */,
+				FF6DCC10E3515C30339B258A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				9D7B9E92299DE26064450FD6 /* App */,
+			);
+			name = EchoV2;
+			packageProductDependencies = (
+			);
+			productName = EchoV2;
+			productReference = E5468FF3EA2A639213BC086A /* EchoV2.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -179,6 +216,7 @@
 			targets = (
 				5CDE08DC2FEA41D600DFAFA7 /* Echo */,
 				5CE570012FF5000000000001 /* EchoTests */,
+				9E684D1FBB2B07F2E6EEAD86 /* EchoV2 */,
 			);
 		};
 /* End PBXProject section */
@@ -198,6 +236,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FF6DCC10E3515C30339B258A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -209,6 +254,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		5CE570052FF5000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EC36E1E475E29269B6A3019E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -474,9 +526,76 @@
 			};
 			name = Release;
 		};
+		BF1D558ED277164882120731 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = App/EchoV2.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Echo v2";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.Echo.v2;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		E5748B227909424FFFF98E77 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = App/EchoV2.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Echo v2";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.Echo.v2;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		507A97C1A70C907925303C41 /* Build configuration list for PBXNativeTarget "EchoV2" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E5748B227909424FFFF98E77 /* Debug */,
+				BF1D558ED277164882120731 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		5CDE08D82FEA41D600DFAFA7 /* Build configuration list for PBXProject "Echo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
