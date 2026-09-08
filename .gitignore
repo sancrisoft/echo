@@ -29,8 +29,13 @@ DerivedData/
 # Working docs (specs, ADRs, brainstorms) — local-only, never in the repo.
 .conduct/
 
-# Test fixtures — real recorded audio, local-only (never shipped in the repo).
-# Test sources ARE tracked as of 2026-07-13; only fixtures and generated
-# reports stay local.
+# Test fixtures — real recorded audio and real meeting transcripts, local-only
+# (never in the repo). Test sources are tracked; only fixtures, samples and
+# generated reports stay local.
 /Fixtures/
-EchoTests/sp002-measure-report.txt/meetings_sample/
+/meetings_sample/
+/EchoTests/
+
+# Downloaded third-party agent skills (restored from a lock file, never vendored).
+.agents/skills/
+.claude/skills/
