@@ -32,7 +32,8 @@ DerivedData/
 # Test fixtures — real recorded audio and real meeting transcripts, local-only
 # (never in the repo). Test sources are tracked; only fixtures, samples and
 # generated reports stay local.
-/Fixtures/
+/Fixtures/*
+!/Fixtures/README.md
 /meetings_sample/
 /EchoTests/
 

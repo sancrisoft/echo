@@ -5,14 +5,15 @@ on:
   push:
     branches:
       - main
+      - v2
       - "v2/**"
 
 permissions:
   contents: read
 
 # A new push to a pull request supersedes the run in flight, so only the latest
-# commit is built. Pushes to main and v2/** are never cancelled: every merge
-# commit keeps its own result.
+# commit is built. Pushes to main and v2 are never cancelled: every merge commit
+# keeps its own result.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -30,26 +31,31 @@ jobs:
       - name: Set up Xcode
         uses: ./.github/actions/setup-xcode
 
-      # Builds Echo.app (Debug, the test host) and runs the unit tests in it.
-      # The acceptance suites — the ones that download a model or replay the
-      # recorded audio under Fixtures/, which is not in the repository — gate
-      # themselves on TEST_RUNNER_ECHO_ACCEPTANCE and skip with a note when it
-      # is absent, so this run needs neither models nor fixtures.
-      #
-      # arm64 only, ad-hoc signed, for the same reasons as the release build:
-      # MLX and the vendored webrtc-apm library are arm64-only, and there is
-      # no signing identity on the runner. The tests are hosted in Echo.app
-      # and share its data folder, so they run serially.
-      - name: Build and run the unit tests
+      # The formatter ships with the toolchain; the boundary script checks the
+      # rules SwiftPM cannot express (dependency direction, no UI in the engine,
+      # one environment reader, no UserDefaults).
+      - name: Lint
+        run: make lint
+
+      # Every package runs its own `swift test` with no host app (ADR-004).
+      # Acceptance suites gate themselves on ECHO_ACCEPTANCE and skip here:
+      # CI has no models and no Fixtures/.
+      - name: Package tests
+        run: make test-packages
+
+      # Builds Echo.app (Debug, the test host) and runs the few hosted tests.
+      # arm64 only and ad-hoc signed, like the release: there is no signing
+      # identity on the runner.
+      - name: App build and hosted tests
         run: |
           xcodebuild test \
             -project Echo.xcodeproj \
             -scheme Echo \
             -destination 'platform=macOS,arch=arm64' \
-            -only-testing:EchoTests \
+            -only-testing:AppTests \
             -parallel-testing-enabled NO \
             -derivedDataPath build \
-            -resultBundlePath build/EchoTests.xcresult \
+            -resultBundlePath build/AppTests.xcresult \
             -skipMacroValidation \
             -skipPackagePluginValidation \
             ARCHS=arm64 \
@@ -62,6 +68,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: EchoTests.xcresult
-          path: build/EchoTests.xcresult
+          name: AppTests.xcresult
+          path: build/AppTests.xcresult
           if-no-files-found: ignore
