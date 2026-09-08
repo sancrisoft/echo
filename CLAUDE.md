@@ -31,6 +31,8 @@ Packages/<Name>/     one local Swift package per capability
   Sources/<Name>/    flat: one file per concept
   Tests/<Name>Tests/
 docs/architecture/   v2-discovery.md · v2-architecture.md · adr/
+docs/design/         local only (gitignored): the redesign as a written spec
+.design/             local only (gitignored): the design canvas working copy
 scripts/             check_boundaries.sh · snapshot.sh · install.sh
 Fixtures/            real recordings, local-only (gitignored except README.md)
 Makefile             the commands
@@ -75,6 +77,32 @@ AppKit only for process identity in files the boundary script allowlists.
 - Every `ECHO_*` environment variable is a property of
   `EchoCore/LaunchEnvironment.swift`. No other file reads the environment.
 - Persisted preferences are the properties of `EchoCore/AppSettings.swift`.
+
+## Design
+
+The v2 UI is being brought, surface by surface, to a redesign that is internal
+to the company and is **not in the repository**. On a team machine it exists in
+two gitignored places: `docs/design/README.md`, the written spec (palette and
+type with exact values and the tokens they map to, the window layout, the
+document and transcript, light mode, every island state with sizes, motion and
+controls, the open decisions, and a map of what each surface still lacks), and
+`.design/`, the working copy of the design canvas it was read from. Ask the
+team for the canvas link if neither is present.
+
+Rules for any visual change:
+- Read the spec (or the canvas) before writing a view. If neither is
+  available, stop and ask; never guess a size, color, copy or state, and never
+  invent a screen the design does not draw — the `EmptyState` primitive is the
+  fallback for undrawn states.
+- Values go through `DesignSystem` tokens. A literal in a view is a missing
+  token; add it with the design's name.
+- Verify by rendering (`scripts/snapshot.sh`, both appearances) and compare
+  with the design.
+- Design decisions the spec marks as open are not resolved in code.
+- Never commit `.design/`, `docs/design/`, exports of the canvas, or design
+  details (values, copy, screenshots of the canvas) into tracked files or
+  commit messages. Token values in `DesignSystem` are the exception: the app
+  cannot be built without them.
 
 ## Adding or changing things
 
@@ -230,6 +258,9 @@ on pull requests and on pushes to `main` and `v2`.
   measurement; "improving" a port in passing.
 - Debug harnesses inside views; a new `ECHO_*` variable read anywhere but
   `LaunchEnvironment`.
+- Inventing UI the design does not draw, or a color/size/copy that is not in
+  the design spec.
+- Committing `.design/`, `docs/design/`, or any export or detail of the design.
 
 ## Decisions to know
 

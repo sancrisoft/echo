@@ -89,6 +89,10 @@ Each package answers "who owns this?" for one product capability from
 | **Island** | The floating panel: `IslandController` (applies `CallSessionMachine` actions to `RecordingSession`, owns timers), the non-activating `NSPanel`, the faces. | EchoCore, CallDetection, Recording, DesignSystem | — |
 | **App** (target) | Composition root, scenes, activation policy, the menu bar item, launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
 
+The UI packages are built towards an internal design that is not in the
+repository (see `CLAUDE.md`, "Design"); its written spec is the reference for
+every value, state and copy in `DesignSystem`, `Workspace` and `Island`.
+
 ### 2.1 Dependency graph
 
 ```

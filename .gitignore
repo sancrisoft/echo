@@ -40,3 +40,9 @@ DerivedData/
 # Downloaded third-party agent skills (restored from a lock file, never vendored).
 .agents/skills/
 .claude/skills/
+
+# Design — internal to the company, never in the repository. `.design/` is the
+# local working copy of the design canvas; `docs/design/` is the local written
+# spec read from it. Both exist only on team machines.
+.design/
+/docs/design/
