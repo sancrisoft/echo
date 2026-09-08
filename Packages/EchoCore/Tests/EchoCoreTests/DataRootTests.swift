@@ -38,6 +38,8 @@ struct LaunchEnvironmentTests {
         #expect(environment.dataRootOverride == nil)
         #expect(!environment.opensWindowAtLaunch)
         #expect(environment.appearanceOverride == nil)
+        #expect(environment.snapshotPath == nil)
+        #expect(environment.snapshotScene == .library)
         #expect(!environment.keepsRetainedAudio)
         #expect(environment.installedVersionOverride == nil)
     }
@@ -49,12 +51,16 @@ struct LaunchEnvironmentTests {
                 "ECHO_DATA_ROOT": "/tmp/echo-scratch",
                 "ECHO_OPEN_WINDOW": "1",
                 "ECHO_APPEARANCE": "dark",
+                "ECHO_SNAPSHOT_PATH": "/tmp/echo.png",
+                "ECHO_SNAPSHOT_SCENE": "transcript",
                 "ECHO_KEEP_RETAINED_AUDIO": "1",
                 "ECHO_INSTALLED_VERSION": "0.0.1",
             ])
             #expect(environment.dataRootOverride?.path() == "/tmp/echo-scratch/")
             #expect(environment.opensWindowAtLaunch)
             #expect(environment.appearanceOverride == .dark)
+            #expect(environment.snapshotPath?.path() == "/tmp/echo.png")
+            #expect(environment.snapshotScene == .transcript)
             #expect(environment.keepsRetainedAudio)
             #expect(environment.installedVersionOverride == "0.0.1")
         }
