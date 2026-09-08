@@ -3,28 +3,18 @@
 //  Echo
 //
 //  Opens the main window from code that has no SwiftUI `openWindow` of its own:
-//  the app menu's Settings command and, later, the island. As an LSUIElement
-//  agent, activating and opening the window does not reliably raise it — the
-//  window can appear behind other apps — so it is forced front on the next
-//  run-loop tick, once SwiftUI has created or surfaced the scene.
+//  the app menu's Settings command, the menu bar item and, later, the island.
+//  As an LSUIElement agent, activating and opening the window does not
+//  reliably raise it — the window can appear behind other apps — so it is
+//  forced front on the next run-loop tick, once SwiftUI has created or
+//  surfaced the scene.
 //
 
 import AppKit
 import EchoCore
-import Observation
 import SwiftUI
 
-@Observable
 final class WindowOpener {
-
-    /// The section the window should show when it next opens, if any. The
-    /// workspace consumes it on appearance so the window never flashes another
-    /// page first.
-    var pendingSection: PendingSection?
-
-    enum PendingSection: Sendable {
-        case settings
-    }
 
     private var open: ((String) -> Void)?
 
@@ -50,12 +40,6 @@ final class WindowOpener {
                 .first { $0.identifier?.rawValue == EchoWindow.main }?
                 .makeKeyAndOrderFront(nil)
         }
-    }
-
-    /// Opens the main window on its settings section.
-    func openSettings() {
-        pendingSection = .settings
-        openMainWindow()
     }
 }
 

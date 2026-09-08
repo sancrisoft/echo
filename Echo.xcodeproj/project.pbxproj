@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		E2A0000000000000000000B1 /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A1 /* EchoCore */; };
+		E2A0000000000000000000B2 /* Meetings in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A2 /* Meetings */; };
+		E2A0000000000000000000B3 /* DesignSystem in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A3 /* DesignSystem */; };
+		E2A0000000000000000000B4 /* Workspace in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A4 /* Workspace */; };
 		E2A0000000000000000000B9 /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A9 /* EchoCore */; };
 /* End PBXBuildFile section */
 
@@ -58,6 +61,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				E2A0000000000000000000B1 /* EchoCore in Frameworks */,
+				E2A0000000000000000000B2 /* Meetings in Frameworks */,
+				E2A0000000000000000000B3 /* DesignSystem in Frameworks */,
+				E2A0000000000000000000B4 /* Workspace in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -111,6 +117,9 @@
 			name = Echo;
 			packageProductDependencies = (
 				E2A0000000000000000000A1 /* EchoCore */,
+				E2A0000000000000000000A2 /* Meetings */,
+				E2A0000000000000000000A3 /* DesignSystem */,
+				E2A0000000000000000000A4 /* Workspace */,
 			);
 			productName = Echo;
 			productReference = E2A00000000000000000F001 /* Echo.app */;
@@ -170,6 +179,9 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				E2A000000000000000009001 /* XCLocalSwiftPackageReference "Packages/EchoCore" */,
+				E2A000000000000000009002 /* XCLocalSwiftPackageReference "Packages/Meetings" */,
+				E2A000000000000000009003 /* XCLocalSwiftPackageReference "Packages/DesignSystem" */,
+				E2A000000000000000009004 /* XCLocalSwiftPackageReference "Packages/Workspace" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E2A000000000000000003002 /* Products */;
@@ -490,12 +502,36 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/EchoCore;
 		};
+		E2A000000000000000009002 /* XCLocalSwiftPackageReference "Packages/Meetings" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/Meetings;
+		};
+		E2A000000000000000009003 /* XCLocalSwiftPackageReference "Packages/DesignSystem" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/DesignSystem;
+		};
+		E2A000000000000000009004 /* XCLocalSwiftPackageReference "Packages/Workspace" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/Workspace;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		E2A0000000000000000000A1 /* EchoCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = EchoCore;
+		};
+		E2A0000000000000000000A2 /* Meetings */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Meetings;
+		};
+		E2A0000000000000000000A3 /* DesignSystem */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DesignSystem;
+		};
+		E2A0000000000000000000A4 /* Workspace */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Workspace;
 		};
 		E2A0000000000000000000A9 /* EchoCore */ = {
 			isa = XCSwiftPackageProductDependency;

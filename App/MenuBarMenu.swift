@@ -11,11 +11,11 @@ import EchoCore
 import SwiftUI
 
 struct MenuBarMenu: View {
-    @Environment(WindowOpener.self) private var windowOpener
+    let composition: AppComposition
 
     var body: some View {
-        Button("Open Echo") { windowOpener.openMainWindow() }
-        Button("Settings…") { windowOpener.openSettings() }
+        Button("Open Echo") { composition.windowOpener.openMainWindow() }
+        Button("Settings…") { composition.openSettings() }
         Divider()
         Text(AppIdentity.version.display)
         Divider()

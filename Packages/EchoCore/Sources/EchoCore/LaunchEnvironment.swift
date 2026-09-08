@@ -17,6 +17,18 @@ public struct LaunchEnvironment: Sendable, Equatable {
         case dark
     }
 
+    /// What `ECHO_SNAPSHOT_PATH` renders.
+    public enum SnapshotScene: String, Sendable {
+        /// The library with nothing selected.
+        case library
+        /// The first meeting, on its Summary tab.
+        case summary
+        /// The first meeting, on its Transcript tab.
+        case transcript
+        case trash
+        case settings
+    }
+
     /// `ECHO_DATA_ROOT`: run the app against another data folder. The way to
     /// launch Echo "from zero" or against a scratch library without touching
     /// the real one.
@@ -28,6 +40,15 @@ public struct LaunchEnvironment: Sendable, Equatable {
 
     /// `ECHO_APPEARANCE=light|dark`: force the appearance, for design review.
     public let appearanceOverride: Appearance?
+
+    /// `ECHO_SNAPSHOT_PATH=<file.png>`: render the main window to that file
+    /// once its content has loaded, then quit. The design-review and smoke-test
+    /// hook; pixels cannot be captured from outside a window on this macOS.
+    public let snapshotPath: URL?
+
+    /// `ECHO_SNAPSHOT_SCENE=library|summary|transcript|trash|settings`: which
+    /// surface the snapshot shows. Defaults to the library.
+    public let snapshotScene: SnapshotScene
 
     /// `ECHO_KEEP_RETAINED_AUDIO=1`: a successful transcription pass keeps the
     /// meeting's audio under debug names instead of deleting it, so a real
@@ -48,12 +69,16 @@ public struct LaunchEnvironment: Sendable, Equatable {
             dataRootOverride = environment["ECHO_DATA_ROOT"].map { URL(filePath: $0, directoryHint: .isDirectory) }
             opensWindowAtLaunch = environment["ECHO_OPEN_WINDOW"] == "1"
             appearanceOverride = environment["ECHO_APPEARANCE"].flatMap(Appearance.init(rawValue:))
+            snapshotPath = environment["ECHO_SNAPSHOT_PATH"].map { URL(filePath: $0, directoryHint: .notDirectory) }
+            snapshotScene = environment["ECHO_SNAPSHOT_SCENE"].flatMap(SnapshotScene.init(rawValue:)) ?? .library
             keepsRetainedAudio = environment["ECHO_KEEP_RETAINED_AUDIO"] == "1"
             installedVersionOverride = environment["ECHO_INSTALLED_VERSION"]
         #else
             dataRootOverride = nil
             opensWindowAtLaunch = false
             appearanceOverride = nil
+            snapshotPath = nil
+            snapshotScene = .library
             keepsRetainedAudio = false
             installedVersionOverride = nil
         #endif

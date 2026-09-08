@@ -7,8 +7,10 @@
 //  `AppComposition.start()`, once, from here.
 //
 
+import DesignSystem
 import EchoCore
 import SwiftUI
+import Workspace
 
 /// Window identifiers, for `openWindow(id:)` and the activation policy.
 enum EchoWindow {
@@ -35,8 +37,7 @@ struct EchoApp: App {
         // instantiated, so it hosts the bridge that captures `openWindow` for
         // the app menu and the AppKit side.
         MenuBarExtra {
-            MenuBarMenu()
-                .environment(composition.windowOpener)
+            MenuBarMenu(composition: composition)
         } label: {
             Image(systemName: "waveform")
                 .background(WindowOpenerBridge(opener: composition.windowOpener))
@@ -46,43 +47,49 @@ struct EchoApp: App {
         // The main window opens on demand — from the menu bar, ⌘, or a debug
         // flag — never at launch on its own.
         Window("Echo", id: EchoWindow.main) {
-            MainWindowPlaceholder()
+            WorkspaceWindow(dataRoot: composition.dataRoot)
+                .environment(composition.library)
                 .environment(composition.settings)
+                .environment(composition.workspace)
+                .preferredColorScheme(colorSchemeOverride)
+                .snapshotIfRequested(composition)
         }
         .defaultLaunchBehavior(composition.environment.opensWindowAtLaunch ? .presented : .suppressed)
         // No state restoration: the window opens on demand, and restoring it
         // after a force-quit can resurrect a blank window that never
         // reconnects to the scene content.
         .restorationBehavior(.disabled)
-        .defaultSize(width: 1100, height: 720)
+        .defaultSize(width: EchoLayout.defaultWindow.width, height: EchoLayout.defaultWindow.height)
         .windowResizability(.contentMinSize)
         // ⌘, lands in the main window's settings section. There is no
         // `Settings` scene: a second, bare window with its own Cmd-Tab entry
         // was the worse of two hosts for the same screen.
         .commands {
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { composition.windowOpener.openSettings() }
+                Button("Settings…") { composition.openSettings() }
                     .keyboardShortcut(",", modifiers: .command)
             }
         }
     }
+
+    /// `ECHO_APPEARANCE` (DEBUG) forces an appearance for design review.
+    private var colorSchemeOverride: ColorScheme? {
+        switch composition.environment.appearanceOverride {
+        case .light: return .light
+        case .dark: return .dark
+        case nil: return nil
+        }
+    }
 }
 
-/// Stands in for the workspace until the Workspace package lands.
-private struct MainWindowPlaceholder: View {
-    @Environment(AppSettings.self) private var settings
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "waveform")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-            Text("Echo")
-                .font(.title2.weight(.semibold))
-            Text(AppIdentity.version.display)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(minWidth: 900, minHeight: 560)
+extension View {
+    /// `ECHO_SNAPSHOT_PATH` (DEBUG): render the window to a file and quit.
+    /// A no-op in release builds.
+    fileprivate func snapshotIfRequested(_ composition: AppComposition) -> some View {
+        #if DEBUG
+            return modifier(WindowSnapshot(composition: composition))
+        #else
+            return self
+        #endif
     }
 }
