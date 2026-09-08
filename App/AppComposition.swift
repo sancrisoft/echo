@@ -71,9 +71,8 @@ final class AppComposition {
         // the housekeeping that writes follows.
         Task { [library] in
             await library.refresh()
-            await library.store.migrateLegacySummaries()
+            await library.foldLegacySummaries()
             await library.purgeExpiredTrash()
-            await library.refresh()
             await library.backfillWordCounts()
         }
     }

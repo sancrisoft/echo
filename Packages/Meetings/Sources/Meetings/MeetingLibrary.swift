@@ -97,6 +97,13 @@ public final class MeetingLibrary {
         if purged { await refresh() }
     }
 
+    /// Folds every legacy `summary.json` into `summary.md` (idempotent, non-fatal
+    /// per meeting), then refreshes. Launch housekeeping.
+    public func foldLegacySummaries() async {
+        await store.migrateLegacySummaries()
+        await refresh()
+    }
+
     /// Fills in `wordCount` for meetings saved before it was denormalized (a
     /// one-time, self-healing migration). New meetings already carry it, so
     /// this is usually a no-op. Patches rows in place as it goes.
