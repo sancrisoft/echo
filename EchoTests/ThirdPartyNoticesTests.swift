@@ -74,8 +74,8 @@ struct ThirdPartyNoticesTests {
     @Test func theVendoredLicensesAreReferenced() throws {
         let notices = try text(Self.noticesName)
         for path in [
-            "Vendor/webrtc-apm/licenses/LICENSE.webrtc-audio-processing",
-            "Vendor/webrtc-apm/licenses/LICENSE.abseil-cpp",
+            "Packages/EchoEngine/Vendor/licenses/LICENSE.webrtc-audio-processing",
+            "Packages/EchoEngine/Vendor/licenses/LICENSE.abseil-cpp",
         ] {
             #expect(FileManager.default.fileExists(atPath: Self.root.appending(path: path).path), "\(path) is missing")
             #expect(notices.contains(path), "\(Self.noticesName) does not reference \(path)")
