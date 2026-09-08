@@ -7,80 +7,85 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		5CB100000000000000000B02 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5CB100000000000000000A02 /* MLXLLM */; };
-		5CB100000000000000000B03 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 5CB100000000000000000A03 /* MLXLMCommon */; };
-		5CB100000000000000000B04 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = 5CB100000000000000000A04 /* MLXEmbedders */; };
-		5CF100000000000000000B02 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF100000000000000000A02 /* FluidAudio */; };
-		5CF200000000000000000B02 /* Hub in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF200000000000000000A02 /* Hub */; };
-		5CF200000000000000000B03 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 5CF200000000000000000A03 /* Tokenizers */; };
+		E2A0000000000000000000B1 /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A1 /* EchoCore */; };
+		E2A0000000000000000000B9 /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A9 /* EchoCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		5C1957642FF7494300B1AB7D /* PBXContainerItemProxy */ = {
+		E2A00000000000000000C001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
-			containerPortal = 5CDE08D52FEA41D600DFAFA7 /* Project object */;
+			containerPortal = E2A00000000000000000D001 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 5CDE08DC2FEA41D600DFAFA7;
+			remoteGlobalIDString = E2A00000000000000000E001;
 			remoteInfo = Echo;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		5CDE08DD2FEA41D600DFAFA7 /* Echo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Echo.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		5CE570022FF5000000000002 /* EchoTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = EchoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E2A00000000000000000F001 /* Echo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Echo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E2A00000000000000000F002 /* AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		E2A000000000000000009E01 /* Exceptions for "App" folder in "Echo" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = E2A00000000000000000E001 /* Echo */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		5CDE08DF2FEA41D600DFAFA7 /* Echo */ = {
+		E2A000000000000000001001 /* App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Echo;
+			exceptions = (
+				E2A000000000000000009E01 /* Exceptions for "App" folder in "Echo" target */,
+			);
+			path = App;
 			sourceTree = "<group>";
 		};
-		5CE570032FF5000000000003 /* EchoTests */ = {
+		E2A000000000000000001002 /* AppTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = EchoTests;
+			path = AppTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		5CDE08DA2FEA41D600DFAFA7 /* Frameworks */ = {
+		E2A000000000000000002001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				5CF100000000000000000B02 /* FluidAudio in Frameworks */,
-				5CF200000000000000000B02 /* Hub in Frameworks */,
-				5CF200000000000000000B03 /* Tokenizers in Frameworks */,
-				5CB100000000000000000B02 /* MLXLLM in Frameworks */,
-				5CB100000000000000000B03 /* MLXLMCommon in Frameworks */,
-				5CB100000000000000000B04 /* MLXEmbedders in Frameworks */,
+				E2A0000000000000000000B1 /* EchoCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		5CE570062FF5000000000006 /* Frameworks */ = {
+		E2A000000000000000002002 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E2A0000000000000000000B9 /* EchoCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		5CDE08D42FEA41D600DFAFA7 = {
+		E2A000000000000000003001 = {
 			isa = PBXGroup;
 			children = (
-				5CDE08DF2FEA41D600DFAFA7 /* Echo */,
-				5CE570032FF5000000000003 /* EchoTests */,
-				5CDE08DE2FEA41D600DFAFA7 /* Products */,
+				E2A000000000000000001001 /* App */,
+				E2A000000000000000001002 /* AppTests */,
+				E2A000000000000000003002 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		5CDE08DE2FEA41D600DFAFA7 /* Products */ = {
+		E2A000000000000000003002 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				5CDE08DD2FEA41D600DFAFA7 /* Echo.app */,
-				5CE570022FF5000000000002 /* EchoTests.xctest */,
+				E2A00000000000000000F001 /* Echo.app */,
+				E2A00000000000000000F002 /* AppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -88,110 +93,104 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		5CDE08DC2FEA41D600DFAFA7 /* Echo */ = {
+		E2A00000000000000000E001 /* Echo */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 5CDE08E82FEA41D600DFAFA7 /* Build configuration list for PBXNativeTarget "Echo" */;
+			buildConfigurationList = E2A000000000000000004001 /* Build configuration list for PBXNativeTarget "Echo" */;
 			buildPhases = (
-				5CDE08D92FEA41D600DFAFA7 /* Sources */,
-				5CDE08DA2FEA41D600DFAFA7 /* Frameworks */,
-				5CDE08DB2FEA41D600DFAFA7 /* Resources */,
+				E2A000000000000000005001 /* Sources */,
+				E2A000000000000000002001 /* Frameworks */,
+				E2A000000000000000006001 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				5CDE08DF2FEA41D600DFAFA7 /* Echo */,
+				E2A000000000000000001001 /* App */,
 			);
 			name = Echo;
 			packageProductDependencies = (
-				5CF100000000000000000A02 /* FluidAudio */,
-				5CF200000000000000000A02 /* Hub */,
-				5CF200000000000000000A03 /* Tokenizers */,
-				5CB100000000000000000A02 /* MLXLLM */,
-				5CB100000000000000000A03 /* MLXLMCommon */,
-				5CB100000000000000000A04 /* MLXEmbedders */,
+				E2A0000000000000000000A1 /* EchoCore */,
 			);
 			productName = Echo;
-			productReference = 5CDE08DD2FEA41D600DFAFA7 /* Echo.app */;
+			productReference = E2A00000000000000000F001 /* Echo.app */;
 			productType = "com.apple.product-type.application";
 		};
-		5CE570012FF5000000000001 /* EchoTests */ = {
+		E2A00000000000000000E002 /* AppTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 5CE5700A2FF500000000000A /* Build configuration list for PBXNativeTarget "EchoTests" */;
+			buildConfigurationList = E2A000000000000000004002 /* Build configuration list for PBXNativeTarget "AppTests" */;
 			buildPhases = (
-				5CE570052FF5000000000005 /* Sources */,
-				5CE570062FF5000000000006 /* Frameworks */,
-				5CE570072FF5000000000007 /* Resources */,
+				E2A000000000000000005002 /* Sources */,
+				E2A000000000000000002002 /* Frameworks */,
+				E2A000000000000000006002 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				5CE570042FF5000000000004 /* PBXTargetDependency */,
+				E2A000000000000000007001 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				5CE570032FF5000000000003 /* EchoTests */,
+				E2A000000000000000001002 /* AppTests */,
 			);
-			name = EchoTests;
+			name = AppTests;
 			packageProductDependencies = (
+				E2A0000000000000000000A9 /* EchoCore */,
 			);
-			productName = EchoTests;
-			productReference = 5CE570022FF5000000000002 /* EchoTests.xctest */;
+			productName = AppTests;
+			productReference = E2A00000000000000000F002 /* AppTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		5CDE08D52FEA41D600DFAFA7 /* Project object */ = {
+		E2A00000000000000000D001 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2650;
-				LastUpgradeCheck = 2650;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
 				TargetAttributes = {
-					5CDE08DC2FEA41D600DFAFA7 = {
-						CreatedOnToolsVersion = 26.5;
+					E2A00000000000000000E001 = {
+						CreatedOnToolsVersion = 26.6;
 					};
-					5CE570012FF5000000000001 = {
-						CreatedOnToolsVersion = 26.5;
-						TestTargetID = 5CDE08DC2FEA41D600DFAFA7;
+					E2A00000000000000000E002 = {
+						CreatedOnToolsVersion = 26.6;
+						TestTargetID = E2A00000000000000000E001;
 					};
 				};
 			};
-			buildConfigurationList = 5CDE08D82FEA41D600DFAFA7 /* Build configuration list for PBXProject "Echo" */;
+			buildConfigurationList = E2A000000000000000004000 /* Build configuration list for PBXProject "Echo" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
 				Base,
 			);
-			mainGroup = 5CDE08D42FEA41D600DFAFA7;
+			mainGroup = E2A000000000000000003001;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
-				5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */,
-				5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */,
+				E2A000000000000000009001 /* XCLocalSwiftPackageReference "Packages/EchoCore" */,
 			);
 			preferredProjectObjectVersion = 77;
-			productRefGroup = 5CDE08DE2FEA41D600DFAFA7 /* Products */;
+			productRefGroup = E2A000000000000000003002 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				5CDE08DC2FEA41D600DFAFA7 /* Echo */,
-				5CE570012FF5000000000001 /* EchoTests */,
+				E2A00000000000000000E001 /* Echo */,
+				E2A00000000000000000E002 /* AppTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		5CDE08DB2FEA41D600DFAFA7 /* Resources */ = {
+		E2A000000000000000006001 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		5CE570072FF5000000000007 /* Resources */ = {
+		E2A000000000000000006002 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -201,14 +200,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		5CDE08D92FEA41D600DFAFA7 /* Sources */ = {
+		E2A000000000000000005001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		5CE570052FF5000000000005 /* Sources */ = {
+		E2A000000000000000005002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -218,15 +217,15 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		5CE570042FF5000000000004 /* PBXTargetDependency */ = {
+		E2A000000000000000007001 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 5CDE08DC2FEA41D600DFAFA7 /* Echo */;
-			targetProxy = 5C1957642FF7494300B1AB7D /* PBXContainerItemProxy */;
+			target = E2A00000000000000000E001 /* Echo */;
+			targetProxy = E2A00000000000000000C001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		5CDE08E62FEA41D600DFAFA7 /* Debug */ = {
+		E2A000000000000000008001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -279,7 +278,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -289,7 +288,7 @@
 			};
 			name = Debug;
 		};
-		5CDE08E72FEA41D600DFAFA7 /* Release */ = {
+		E2A000000000000000008002 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -336,7 +335,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.5;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
@@ -344,24 +343,19 @@
 			};
 			name = Release;
 		};
-		5CDE08E92FEA41D600DFAFA7 /* Debug */ = {
+		E2A000000000000000008003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Echo/Echo.entitlements;
+				CODE_SIGN_ENTITLEMENTS = App/Echo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/Vendor/webrtc-apm/include",
-					"$(SRCROOT)/Vendor/webrtc-apm/include/webrtc-audio-processing-2",
-				);
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Echo uses the microphone to transcribe your voice during the meeting.";
@@ -369,44 +363,33 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/webrtc-apm/lib";
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = (
-					"-lwebrtc-audio-processing-2",
-					"-lc++",
-				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.Echo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Echo/Echo-Bridging-Header.h";
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
-		5CDE08EA2FEA41D600DFAFA7 /* Release */ = {
+		E2A000000000000000008004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Echo/Echo.entitlements;
+				CODE_SIGN_ENTITLEMENTS = App/Echo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_PREVIEWS = YES;
-				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
-				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/Vendor/webrtc-apm/include",
-					"$(SRCROOT)/Vendor/webrtc-apm/include/webrtc-audio-processing-2",
-				);
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = App/Info.plist;
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Echo uses the microphone to transcribe your voice during the meeting.";
@@ -414,27 +397,21 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Vendor/webrtc-apm/lib";
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
-				OTHER_LDFLAGS = (
-					"-lwebrtc-audio-processing-2",
-					"-lc++",
-				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.Echo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Echo/Echo-Bridging-Header.h";
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
-		5CE570082FF5000000000008 /* Debug */ = {
+		E2A000000000000000008005 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -443,18 +420,19 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.EchoTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.EchoAppTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Echo.app/Contents/MacOS/Echo";
 			};
 			name = Debug;
 		};
-		5CE570092FF5000000000009 /* Release */ = {
+		E2A000000000000000008006 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -463,13 +441,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.EchoTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.sancrisoft.EchoAppTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Echo.app/Contents/MacOS/Echo";
 			};
 			name = Release;
@@ -477,94 +456,52 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		5CDE08D82FEA41D600DFAFA7 /* Build configuration list for PBXProject "Echo" */ = {
+		E2A000000000000000004000 /* Build configuration list for PBXProject "Echo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				5CDE08E62FEA41D600DFAFA7 /* Debug */,
-				5CDE08E72FEA41D600DFAFA7 /* Release */,
+				E2A000000000000000008001 /* Debug */,
+				E2A000000000000000008002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		5CDE08E82FEA41D600DFAFA7 /* Build configuration list for PBXNativeTarget "Echo" */ = {
+		E2A000000000000000004001 /* Build configuration list for PBXNativeTarget "Echo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				5CDE08E92FEA41D600DFAFA7 /* Debug */,
-				5CDE08EA2FEA41D600DFAFA7 /* Release */,
+				E2A000000000000000008003 /* Debug */,
+				E2A000000000000000008004 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		5CE5700A2FF500000000000A /* Build configuration list for PBXNativeTarget "EchoTests" */ = {
+		E2A000000000000000004002 /* Build configuration list for PBXNativeTarget "AppTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				5CE570082FF5000000000008 /* Debug */,
-				5CE570092FF5000000000009 /* Release */,
+				E2A000000000000000008005 /* Debug */,
+				E2A000000000000000008006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
-			requirement = {
-				kind = exactVersion;
-				version = 3.31.4;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		E2A000000000000000009001 /* XCLocalSwiftPackageReference "Packages/EchoCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/EchoCore;
 		};
-		5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/FluidInference/FluidAudio";
-			requirement = {
-				kind = exactVersion;
-				version = 0.15.5;
-			};
-		};
-		5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/huggingface/swift-transformers";
-			requirement = {
-				kind = exactVersion;
-				version = 1.3.3;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		5CB100000000000000000A02 /* MLXLLM */ = {
+		E2A0000000000000000000A1 /* EchoCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
-			productName = MLXLLM;
+			productName = EchoCore;
 		};
-		5CB100000000000000000A03 /* MLXLMCommon */ = {
+		E2A0000000000000000000A9 /* EchoCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
-			productName = MLXLMCommon;
-		};
-		5CB100000000000000000A04 /* MLXEmbedders */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5CB100000000000000000A01 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
-			productName = MLXEmbedders;
-		};
-		5CF100000000000000000A02 /* FluidAudio */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5CF100000000000000000A01 /* XCRemoteSwiftPackageReference "FluidAudio" */;
-			productName = FluidAudio;
-		};
-		5CF200000000000000000A02 /* Hub */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */;
-			productName = Hub;
-		};
-		5CF200000000000000000A03 /* Tokenizers */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5CF200000000000000000A01 /* XCRemoteSwiftPackageReference "swift-transformers" */;
-			productName = Tokenizers;
+			productName = EchoCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
-	rootObject = 5CDE08D52FEA41D600DFAFA7 /* Project object */;
+	rootObject = E2A00000000000000000D001 /* Project object */;
 }
