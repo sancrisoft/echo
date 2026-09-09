@@ -155,19 +155,39 @@ final class SummaryScheduler {
 
         while !isRecording() {
             let onDisk = await model.snapshotExists()
-            let requested = pendingRequest(onDisk: onDisk)
-            // The scan never triggers the multi-gigabyte download on its own.
-            // Only a request the user made does, and only for the meeting
-            // they named.
-            guard requested != nil || onDisk else { return }
+            let requested = pendingRequest()
 
             guard let meta = await nextEligibleMeeting(requested: requested) else { return }
 
-            if meta.id == requested { requestedID = nil }
-            let keepGoing = await summarize(meta)
-            guard keepGoing else { return }
+            // The disk gate is asked about the meeting actually PICKED, not
+            // about whether some request was outstanding. A request the
+            // policy had to defer would otherwise let the scan's own choice
+            // start a multi-gigabyte download for a meeting the user never
+            // named — and the scan is the one trigger that must never do
+            // that.
+            guard onDisk || meta.id == requested else { return }
+
+            let outcome = await summarize(meta)
+            // The request is answered once the meeting has been summarized or
+            // blamed. It deliberately survives a model-level failure: the
+            // meeting was never at fault, nothing was written, and with
+            // automatic summaries off dropping it here is how an explicit
+            // Generate silently vanishes.
+            if meta.id == requested, outcome != .modelUnavailable { requestedID = nil }
+            guard outcome == .continue else { return }
             await library.refresh()
         }
+    }
+
+    /// What one meeting's generation means for the rest of the run.
+    private enum SummaryOutcome: Equatable {
+        /// Written, or blamed on the meeting; move on to the next one.
+        case `continue`
+        /// A recording started, or the run was cancelled.
+        case abandoned
+        /// The model itself is unavailable, so every remaining meeting would
+        /// fail the same way.
+        case modelUnavailable
     }
 
     /// Asks the policy which meeting is next, against a freshly read
@@ -192,7 +212,7 @@ final class SummaryScheduler {
 
     /// The outstanding request, dropped once there is nothing left it could
     /// ask for — the meeting is gone, or it already has its summary.
-    private func pendingRequest(onDisk: Bool) -> UUID? {
+    private func pendingRequest() -> UUID? {
         guard let requestedID else { return nil }
         guard let meta = library.meta(for: requestedID), !meta.hasSummary else {
             self.requestedID = nil
@@ -201,14 +221,13 @@ final class SummaryScheduler {
         return requestedID
     }
 
-    /// Generates and persists one meeting's summary. Returns whether the run
-    /// should continue to the next meeting.
-    private func summarize(_ meta: MeetingMeta) async -> Bool {
+    /// Generates and persists one meeting's summary.
+    private func summarize(_ meta: MeetingMeta) async -> SummaryOutcome {
         guard let record = await library.loadRecord(meta.id), !record.segments.isEmpty else {
             // Nothing to ground a summary in. Not the model's fault and not
             // worth retrying this run.
             failedIDs.insert(meta.id)
-            return true
+            return .continue
         }
 
         onSummarizingChanged(meta.id)
@@ -242,24 +261,24 @@ final class SummaryScheduler {
                 )
             }
         } catch is SummaryAbandoned {
-            return false
+            return .abandoned
         } catch is CancellationError {
-            return false
+            return .abandoned
         } catch let error as SummaryModelError {
             // A model-level failure would fail every remaining meeting too,
             // so the meeting is not blamed and the run ends. The model's own
             // state carries the message and the retry.
             ErrorTrace.record(
                 "Summary model unavailable", error: error, category: "SummaryScheduler")
-            return false
+            return .modelUnavailable
         } catch {
             failedIDs.insert(meta.id)
             ErrorTrace.record(
                 "Summary generation failed", error: error, category: "SummaryScheduler",
                 metadata: ["meeting": meta.id.uuidString])
-            return true
+            return .continue
         }
-        return true
+        return .continue
     }
 
     /// Runs `body` with a loaded engine, under the pass gate.

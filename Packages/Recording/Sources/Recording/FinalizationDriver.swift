@@ -50,7 +50,12 @@ final class FinalizationDriver {
 
     // MARK: - Seams
 
-    private let runPass: @MainActor (UUID, @escaping @Sendable () -> Bool) async -> PassResult
+    /// Runs one pass. The third argument is the progress sink the driver
+    /// hands it, already scoped to this attempt — see `startPass`.
+    private let runPass:
+        @MainActor (
+            UUID, @escaping @Sendable () -> Bool, @escaping @Sendable (Double) -> Void
+        ) async -> PassResult
     /// Runs before the first decode of EVERY pass. Wired to the summary
     /// model's unload: two multi-gigabyte models must never be resident at
     /// once, and a warm summary engine is exactly what a pass would collide
@@ -65,7 +70,10 @@ final class FinalizationDriver {
     private let onStateChanged: @MainActor (Snapshot) -> Void
 
     init(
-        runPass: @escaping @MainActor (UUID, @escaping @Sendable () -> Bool) async -> PassResult,
+        runPass:
+            @escaping @MainActor (
+                UUID, @escaping @Sendable () -> Bool, @escaping @Sendable (Double) -> Void
+            ) async -> PassResult,
         prepareForPass: @escaping @MainActor () async -> Void,
         convergeTerminally: @escaping @MainActor (UUID) async -> Void,
         onBackgroundPassConcluded: @escaping @MainActor (UUID, PassResult) async -> Void,
@@ -208,11 +216,15 @@ final class FinalizationDriver {
 
     // MARK: - Progress
 
-    /// One clamped, monotonic fraction from the running pass. Forward-only
-    /// and scoped to the meeting that is actually decoding, so a straggler
-    /// from a preempted pass cannot move another meeting's bar.
-    func noteProgress(_ fraction: Double, for meetingID: UUID) {
-        guard meetingID == currentMeetingID, fraction > (progress ?? -1) else { return }
+    /// One clamped, monotonic fraction from the running pass.
+    ///
+    /// Forward-only and scoped to the exact ATTEMPT that produced it, not
+    /// merely to the meeting. Scoping to the meeting alone is not enough: a
+    /// retry resets the bar to zero, and a straggler fraction from the
+    /// attempt that just failed carries the same meeting id, so it would jump
+    /// the fresh bar to wherever the failed attempt had got to.
+    private func noteProgress(_ fraction: Double, for pass: PassKey) {
+        guard pass == publishedPass, fraction > (progress ?? -1) else { return }
         progress = fraction
         publish()
     }
@@ -247,10 +259,17 @@ final class FinalizationDriver {
         // closure captures it rather than this object so the decode loop
         // never reaches back into the driver.
         let signal = preemption
+        let key = PassKey(meetingID: meetingID, attempt: attempt)
         Task { @MainActor [weak self] in
             guard let self else { return }
             await self.prepareForPass()
-            let result = await self.runPass(meetingID, { signal.isRaised })
+            let result = await self.runPass(
+                meetingID,
+                { signal.isRaised },
+                { [weak self] fraction in
+                    Task { @MainActor in self?.noteProgress(fraction, for: key) }
+                }
+            )
             self.concludePass(meetingID, result: result)
         }
     }

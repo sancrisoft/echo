@@ -419,10 +419,15 @@ func withSession<T>(
     pass: ScriptedPass = ScriptedPass(),
     summarizer: ScriptedSummarizer? = nil,
     summaryModelOnDisk: Bool = true,
+    summaryEngineFailures: Int = 0,
     _ body: (SessionHarness) async throws -> T
 ) async throws -> T {
     let temp = try TemporaryDirectory(prefix: "RecordingSessionTests")
     defer { temp.remove() }
+
+    // A scripted model-level failure, exhausted after `summaryEngineFailures`
+    // loads so a test can also see what happens once the model comes back.
+    let remainingEngineFailures = Mutex(summaryEngineFailures)
 
     let library = MeetingLibrary(store: MeetingStore(rootDirectory: temp.path("Meetings")))
     let settings = AppSettings(fileURL: temp.path("settings.json"))
@@ -434,6 +439,14 @@ func withSession<T>(
             // the scheduler acquires one before it generates, so the acquire
             // has to succeed there — and nowhere else, because putting real
             // weights in RAM is exactly what a unit test must never do.
+            // The model itself is what went wrong, so no meeting may be
+            // blamed for it.
+            let shouldFail = remainingEngineFailures.withLock { remaining -> Bool in
+                guard remaining > 0 else { return false }
+                remaining -= 1
+                return true
+            }
+            if shouldFail { throw SummaryModelError.loadFailed("the weights would not map") }
             guard summarizer != nil else {
                 Issue.record("The session loaded the summary engine during a recording")
                 throw ScriptedCaptureFailure(reason: "no engine is ever loaded in a unit test")
@@ -676,6 +689,29 @@ final class ScriptedRunner: Sendable {
     var calledMeetingIDs: [UUID] { state.withLock { $0.calledMeetingIDs } }
 }
 
+/// Keeps the progress sink the driver hands each pass, so a test can report a
+/// fraction whenever it likes — including from an attempt that has already
+/// ended, which is the straggler the attempt scoping exists to reject.
+final class ProgressSinks: Sendable {
+
+    private let sinks = Mutex<[@Sendable (Double) -> Void]>([])
+
+    /// Called from inside a `runPass` closure, once per attempt.
+    func capture(_ sink: @escaping @Sendable (Double) -> Void) {
+        sinks.withLock { $0.append(sink) }
+    }
+
+    var count: Int { sinks.withLock { $0.count } }
+
+    /// Reports `fraction` through the sink of the given 1-based attempt.
+    func report(_ fraction: Double, fromAttempt attempt: Int) {
+        let sink = sinks.withLock { sinks -> (@Sendable (Double) -> Void)? in
+            sinks.indices.contains(attempt - 1) ? sinks[attempt - 1] : nil
+        }
+        sink?(fraction)
+    }
+}
+
 /// Holds every pass that reaches it until the test releases them, so a test
 /// can act while one is decoding.
 ///
@@ -739,8 +775,9 @@ final class AttemptCounter: Sendable {
 @MainActor
 func makeDriver(
     runPass:
-        @escaping @MainActor (UUID, @escaping @Sendable () -> Bool) async ->
-        FinalizationDriver.PassResult,
+        @escaping @MainActor (
+            UUID, @escaping @Sendable () -> Bool, @escaping @Sendable (Double) -> Void
+        ) async -> FinalizationDriver.PassResult,
     prepareForPass: @escaping @MainActor () async -> Void = {},
     convergeTerminally: @escaping @MainActor (UUID) async -> Void = { _ in },
     onBackgroundPassConcluded:

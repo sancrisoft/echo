@@ -402,4 +402,100 @@ struct SummaryScheduleTests {
             #expect(harness.session.currentMeetingID == nil)
         }
     }
+    @Test func anIneligibleRequestNeverLetsTheScanFetchTheModel() async throws {
+        // The gate that decides whether the multi-gigabyte download may start
+        // has to be asked about the meeting the policy PICKED, not about
+        // whether some request happened to be outstanding. A request the
+        // policy defers would otherwise hand the scan's own choice a licence
+        // the user never gave it — and the harness fails the test if a
+        // download starts at all.
+        let summarizer = ScriptedSummarizer([.documents([summaryDocument("# Notes", isFinal: true)])])
+        try await withSession(summarizer: summarizer, summaryModelOnDisk: false) { harness in
+            harness.settings.setAutoGenerateSummaries(enabled: true)
+            // Deferred: its transcript is about to be replaced.
+            let deferred = try await plantPendingMeeting(in: harness, minutesAgo: 5)
+            _ = try await plantTranscribedMeeting(
+                in: harness, minutesAgo: 30, text: "the scan would pick me")
+
+            harness.session.requestSummary(deferred)
+            await settle()
+
+            #expect(summarizer.generations == 0)
+        }
+    }
+
+    @Test func anExplicitRequestOutlivesAModelLevelFailure() async throws {
+        // The meeting was never at fault and nothing was written, so the
+        // request has to survive: with automatic summaries off it is the only
+        // thing that will ever ask for this meeting again, and dropping it
+        // here is how a Generate silently vanishes.
+        let summarizer = ScriptedSummarizer([.documents([summaryDocument("# Notes", isFinal: true)])])
+        try await withSession(summarizer: summarizer, summaryEngineFailures: 1) { harness in
+            harness.settings.setAutoGenerateSummaries(enabled: false)
+            let meeting = try await plantTranscribedMeeting(
+                in: harness, minutesAgo: 5, text: "notes please")
+
+            harness.session.requestSummary(meeting)
+            await settle()
+            #expect(summarizer.generations == 0)
+            #expect(harness.library.meta(for: meeting)?.hasSummary == false)
+
+            // The model comes back. Nothing re-requests the meeting, so the
+            // only thing that can summarize it now is the request that was
+            // made before the failure.
+            harness.session.kickSummaryBackfill()
+            await waitUntil("the summary the request asked for") {
+                harness.library.meta(for: meeting)?.hasSummary == true
+            }
+
+            #expect(summarizer.generations == 1)
+        }
+    }
+
+    @Test func aReTranscribeReplacesTheSummaryItInvalidatedEvenWithAutoSummariesOff() async throws {
+        // Re-transcribing throws away notes the user already had, so the
+        // replacement is not optional and not the scan's business: with
+        // automatic summaries off the scan returns nothing, and a meeting
+        // whose summary was deleted here would simply never get another one.
+        let summarizer = ScriptedSummarizer(
+            [.documents([summaryDocument("# Fresh notes", isFinal: true)])])
+        let pass = ScriptedPass([
+            .segments([
+                TranscriptSegment(
+                    channel: .microphone, speaker: .me, text: "said again", start: 0, end: 1)
+            ])
+        ])
+        try await withSession(pass: pass, summarizer: summarizer) { harness in
+            harness.settings.setAutoGenerateSummaries(enabled: false)
+
+            let meeting = try await plantTranscribedMeeting(
+                in: harness, minutesAgo: 5, text: "said once")
+            try await harness.store.attachSummary(markdown: "# Stale notes", to: meeting)
+            // The archive the re-transcribe reads from. It is cloned, never
+            // consumed, so it must survive the whole cycle.
+            for channel in AudioChannel.allCases {
+                try Data("audio".utf8).write(
+                    to: harness.store.directory(for: meeting)
+                        .appending(
+                            path: MeetingStore.preservedAudioFileName(for: channel),
+                            directoryHint: .notDirectory))
+            }
+            await harness.library.refresh()
+            #expect(harness.library.meta(for: meeting)?.hasSummary == true)
+
+            await harness.session.retranscribe(meeting)
+            pass.releaseAll()
+            await waitUntil("the replacement summary") {
+                harness.library.meta(for: meeting)?.hasSummary == true
+                    && summarizer.generations == 1
+            }
+
+            let record = try #require(await harness.library.loadRecord(meeting))
+            #expect(record.summaryMarkdown == "# Fresh notes")
+            #expect(record.segments.map(\.text) == ["said again"])
+            // The archive is untouched: a second re-transcribe must still work.
+            #expect(await harness.store.hasPreservedAudio(for: meeting))
+        }
+    }
+
 }

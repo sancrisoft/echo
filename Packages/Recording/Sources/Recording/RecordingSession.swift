@@ -221,9 +221,10 @@ public final class RecordingSession {
     private var driver: FinalizationDriver {
         if let driverStorage { return driverStorage }
         let created = FinalizationDriver(
-            runPass: { [weak self] meetingID, shouldYield in
+            runPass: { [weak self] meetingID, shouldYield, onProgress in
                 guard let self else { return .failed }
-                return await self.runPass(meetingID, shouldYield: shouldYield)
+                return await self.runPass(
+                    meetingID, shouldYield: shouldYield, onProgress: onProgress)
             },
             prepareForPass: { [weak self] in
                 // Weights are never resident without work, and never two models'
@@ -235,11 +236,17 @@ public final class RecordingSession {
             convergeTerminally: { [weak self] meetingID in
                 await self?.convergeTerminally(meetingID)
             },
-            onBackgroundPassConcluded: { [weak self] _, result in
-                // A resumed or retried pass has no stop path awaiting it, so its
-                // summary is the backfill's job.
-                guard case .replaced = result else { return }
-                self?.summaryScheduler.kick()
+            onBackgroundPassConcluded: { [weak self] meetingID, result in
+                // A resumed or retried pass has no stop path awaiting it, so
+                // its summary is the backfill's job — except when the pass
+                // invalidated a summary the user already had, which the scan
+                // would never replace on its own.
+                guard let self, case .replaced = result else { return }
+                if self.needsSummaryByName.remove(meetingID) != nil {
+                    self.summaryScheduler.request(meetingID)
+                } else {
+                    self.summaryScheduler.kick()
+                }
             },
             onStateChanged: { [weak self] snapshot in
                 self?.finalization = snapshot
@@ -273,6 +280,10 @@ public final class RecordingSession {
     /// lands. In-memory: a relaunch simply leaves the old summary in place
     /// until the user asks again.
     @ObservationIgnored private var retranscribedAwaitingSummary: Set<UUID> = []
+
+    /// Meetings whose replacement summary must be requested by name once
+    /// their pass concludes, rather than left to the scan.
+    @ObservationIgnored private var needsSummaryByName: Set<UUID> = []
 
     // MARK: - Construction
 
@@ -1029,10 +1040,13 @@ public final class RecordingSession {
         do {
             _ = try await library.store.adoptRetainedAudio(staged, for: id)
         } catch {
-            // Adoption is all-or-nothing, so every staged file is still in
-            // the staging tree — which is a named sweep target, cleaned at
-            // the next launch. Nothing is rescued and nothing is deleted from
-            // here.
+            // Adoption is all-or-nothing: anything it had already moved in
+            // has been rolled back out, so no partial channel set can read as
+            // pending and no resumed pass can finalize half a meeting. What
+            // is left in staging goes with the `discard()` below, as it does
+            // on every other exit — the audio is unusable now that the
+            // meeting has converged, and leaving it for the launch sweep
+            // would only postpone the same deletion.
             ErrorTrace.record(
                 "Adopting the retained audio failed", error: error, category: "RecordingSession",
                 metadata: ["meeting": id.uuidString, "channels": String(staged.count)])
@@ -1168,7 +1182,9 @@ public final class RecordingSession {
     /// happens to the files and to `Meetings/` is decided here, and the order
     /// is what makes a crash at any point recoverable.
     private func runPass(
-        _ meetingID: UUID, shouldYield: @escaping @Sendable () -> Bool
+        _ meetingID: UUID,
+        shouldYield: @escaping @Sendable () -> Bool,
+        onProgress: @escaping @Sendable (Double) -> Void
     ) async -> FinalizationDriver.PassResult {
         let store = library.store
         let retained = await store.retainedAudioFiles(for: meetingID)
@@ -1182,13 +1198,8 @@ public final class RecordingSession {
         }
 
         do {
-            let segments = try await runTranscriptionPass(
-                retained,
-                shouldYield,
-                { [weak self] fraction in
-                    Task { @MainActor in self?.driver.noteProgress(fraction, for: meetingID) }
-                }
-            )
+            // The sink comes from the driver, already scoped to this attempt.
+            let segments = try await runTranscriptionPass(retained, shouldYield, onProgress)
 
             // An empty segment set is a legitimate success: the model heard
             // no speech, and that is a finished transcript, not a failure.
@@ -1203,7 +1214,21 @@ public final class RecordingSession {
             // the replacement it was waiting for actually happened. Clearing
             // `hasSummary` is also what re-admits the meeting to the backfill.
             if retranscribedAwaitingSummary.remove(meetingID) != nil {
-                try? await store.removeSummaryArtifacts(for: meetingID)
+                do {
+                    try await store.removeSummaryArtifacts(for: meetingID)
+                    // Asked for BY NAME rather than left to the scan: the
+                    // summary that just became wrong has to be replaced even
+                    // with automatic summaries off, because re-transcribing
+                    // is an explicit action and the notes it invalidated were
+                    // the user's. A bare backfill kick would find nothing to
+                    // do and the meeting would stay summary-less forever.
+                    needsSummaryByName.insert(meetingID)
+                } catch {
+                    ErrorTrace.record(
+                        "Retiring the superseded summary failed", error: error,
+                        category: "RecordingSession",
+                        metadata: ["meeting": meetingID.uuidString])
+                }
             }
 
             await disposeOfRetainedAudio(for: meetingID, store: store)

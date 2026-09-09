@@ -48,7 +48,7 @@ struct FinalizationDriverTests {
         let final = segments()
         let order = OrderLog()
         let driver = makeDriver(
-            runPass: { _, _ in
+            runPass: { _, _, _ in
                 order.append("pass")
                 return .replaced(final)
             },
@@ -72,7 +72,7 @@ struct FinalizationDriverTests {
         let meeting = UUID()
         let final = segments()
         let runner = ScriptedRunner([.failed, .replaced(final)])
-        let driver = makeDriver(runPass: { id, _ in runner.run(id) })
+        let driver = makeDriver(runPass: { id, _, _ in runner.run(id) })
         enterStopPipeline(driver)
 
         driver.requestStopPass(meeting)
@@ -89,7 +89,7 @@ struct FinalizationDriverTests {
         let runner = ScriptedRunner([.failed, .failed])
         let converged = OrderLog()
         let driver = makeDriver(
-            runPass: { id, _ in runner.run(id) },
+            runPass: { id, _, _ in runner.run(id) },
             convergeTerminally: { id in converged.append(id.uuidString) }
         )
         enterStopPipeline(driver)
@@ -116,7 +116,7 @@ struct FinalizationDriverTests {
         let runner = ScriptedRunner([.failed, .failed, .replaced(final)])
         let concluded = OrderLog()
         let driver = makeDriver(
-            runPass: { id, _ in runner.run(id) },
+            runPass: { id, _, _ in runner.run(id) },
             // The driver reports EVERY conclusion here; the session filters
             // to successes, because only a transcript that landed has a
             // summary to kick. Filtered the same way, so the log below means
@@ -157,7 +157,7 @@ struct FinalizationDriverTests {
         let pass = ScriptedPass([.yieldingIfAsked(final), .yieldingIfAsked(final)])
         let concluded = OrderLog()
         let driver = makeDriver(
-            runPass: { _, shouldYield in await passResult(from: pass, shouldYield: shouldYield) },
+            runPass: { _, shouldYield, _ in await passResult(from: pass, shouldYield: shouldYield) },
             // Successes only, as the session filters them: the deferral is
             // also a conclusion, and it is not what this waits for.
             onBackgroundPassConcluded: { id, result in
@@ -195,7 +195,7 @@ struct FinalizationDriverTests {
         let pass = ScriptedPass([.segments(segments())])
         let order = OrderLog()
         let driver = makeDriver(
-            runPass: { _, shouldYield in
+            runPass: { _, shouldYield, _ in
                 let result = await passResult(from: pass, shouldYield: shouldYield)
                 order.append("pass-finished")
                 return result
@@ -222,7 +222,7 @@ struct FinalizationDriverTests {
         let newest = UUID()
         let older = UUID()
         let runner = ScriptedRunner([.replaced(segments()), .replaced(segments())])
-        let driver = makeDriver(runPass: { id, _ in runner.run(id) })
+        let driver = makeDriver(runPass: { id, _, _ in runner.run(id) })
 
         driver.requestResume(of: [newest, older])
         await waitUntil("both resumed passes to run") { !driver.isBusy }
@@ -232,12 +232,18 @@ struct FinalizationDriverTests {
 
     // MARK: - Progress
 
-    @Test func progressIsForwardOnlyAndScopedToTheRunningMeeting() async {
+    @Test func progressIsForwardOnly() async {
         let meeting = UUID()
-        let other = UUID()
         let pass = ScriptedPass([.segments([])])
+        let sinks = ProgressSinks()
         let driver = makeDriver(
-            runPass: { _, shouldYield in await passResult(from: pass, shouldYield: shouldYield) })
+            runPass: { _, shouldYield, onProgress in
+                // The sink is the driver's, handed to the pass. A pass has no
+                // other way to report, which is what makes "whose bar is
+                // this?" unanswerable incorrectly.
+                sinks.capture(onProgress)
+                return await passResult(from: pass, shouldYield: shouldYield)
+            })
 
         driver.requestResume(of: [meeting])
         await waitUntil("the pass to reach its gate") { pass.entered == 1 }
@@ -246,18 +252,16 @@ struct FinalizationDriverTests {
         #expect(driver.currentMeetingID == meeting)
         #expect(driver.progress == 0)
 
-        driver.noteProgress(0.5, for: meeting)
+        sinks.report(0.5, fromAttempt: 1)
+        await waitUntil("the fraction to land") { driver.progress == 0.5 }
+
+        // A bar never runs backwards.
+        sinks.report(0.2, fromAttempt: 1)
+        await settle()
         #expect(driver.progress == 0.5)
 
-        // A straggler from a preempted pass must not move another meeting's
-        // bar, and a bar never runs backwards.
-        driver.noteProgress(0.9, for: other)
-        #expect(driver.progress == 0.5)
-        driver.noteProgress(0.2, for: meeting)
-        #expect(driver.progress == 0.5)
-
-        driver.noteProgress(0.75, for: meeting)
-        #expect(driver.progress == 0.75)
+        sinks.report(0.75, fromAttempt: 1)
+        await waitUntil("the higher fraction to land") { driver.progress == 0.75 }
 
         pass.releaseAll()
         await waitUntil("the pass to conclude") { !driver.isBusy }
@@ -271,8 +275,10 @@ struct FinalizationDriverTests {
         let gate = PassGate()
         let attempts = AttemptCounter()
         let published = SnapshotLog()
+        let sinks = ProgressSinks()
         let driver = makeDriver(
-            runPass: { _, _ in
+            runPass: { _, _, onProgress in
+                sinks.capture(onProgress)
                 let attempt = attempts.next()
                 await gate.enter()
                 return attempt == 1 ? .failed : .replaced([])
@@ -282,8 +288,8 @@ struct FinalizationDriverTests {
 
         driver.requestResume(of: [meeting])
         await waitUntil("attempt 1 to reach its gate") { gate.entered == 1 }
-        driver.noteProgress(0.9, for: meeting)
-        #expect(driver.progress == 0.9)
+        sinks.report(0.9, fromAttempt: 1)
+        await waitUntil("attempt 1's fraction to land") { driver.progress == 0.9 }
 
         gate.releaseAll()  // attempt 1 fails; the retry starts under it
         await waitUntil("attempt 2 to reach its gate") { gate.entered == 2 }
@@ -293,8 +299,16 @@ struct FinalizationDriverTests {
         // the whole of its decode.
         #expect(driver.currentMeetingID == meeting)
         #expect(driver.progress == 0)
-        driver.noteProgress(0.3, for: meeting)
-        #expect(driver.progress == 0.3)
+
+        // The straggler that makes the distinction matter: attempt 1's own
+        // sink firing after attempt 2 has begun. Same meeting, so scoping by
+        // meeting id alone would let it jump the fresh bar back to 90 %.
+        sinks.report(0.95, fromAttempt: 1)
+        await settle()
+        #expect(driver.progress == 0)
+
+        sinks.report(0.3, fromAttempt: 2)
+        await waitUntil("attempt 2's fraction to land") { driver.progress == 0.3 }
         #expect(published.progressValues.contains(0))
 
         gate.releaseAll()
@@ -310,7 +324,7 @@ struct FinalizationDriverTests {
         let attempts = AttemptCounter()
         let resolved = OrderLog()
         let driver = makeDriver(
-            runPass: { _, _ in
+            runPass: { _, _, _ in
                 let attempt = attempts.next()
                 await gate.enter()
                 return attempt == 1 ? .failed : .replaced(final)
@@ -349,7 +363,7 @@ struct FinalizationDriverTests {
         let deferred = UUID()
         let ran = OrderLog()
         let driver = makeDriver(
-            runPass: { id, _ in
+            runPass: { id, _, _ in
                 ran.append(id.uuidString)
                 return .replaced([])
             })
@@ -380,7 +394,7 @@ struct FinalizationDriverTests {
         let meeting = UUID()
         let ran = OrderLog()
         let driver = makeDriver(
-            runPass: { id, _ in
+            runPass: { id, _, _ in
                 ran.append(id.uuidString)
                 return .replaced([])
             })
