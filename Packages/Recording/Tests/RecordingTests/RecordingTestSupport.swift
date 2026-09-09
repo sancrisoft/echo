@@ -28,6 +28,7 @@ import Meetings
 import Summarization
 import Synchronization
 import Testing
+import Transcription
 
 @testable import Recording
 
@@ -356,6 +357,8 @@ struct SessionHarness {
     let settings: AppSettings
     let summaryModel: SummaryModel
     let rig: CaptureRig
+    let pass: ScriptedPass
+    let summarizer: ScriptedSummarizer?
     let session: RecordingSession
 
     var store: MeetingStore { library.store }
@@ -413,6 +416,9 @@ struct SessionHarness {
 @MainActor
 func withSession<T>(
     rig: CaptureRig = CaptureRig(),
+    pass: ScriptedPass = ScriptedPass(),
+    summarizer: ScriptedSummarizer? = nil,
+    summaryModelOnDisk: Bool = true,
     _ body: (SessionHarness) async throws -> T
 ) async throws -> T {
     let temp = try TemporaryDirectory(prefix: "RecordingSessionTests")
@@ -424,18 +430,43 @@ func withSession<T>(
         modelsRoot: temp.path("Models"),
         pauseStateFile: temp.path("summary-download.json"),
         loader: { _ in
-            Issue.record("The session loaded the summary engine during a recording")
-            throw ScriptedCaptureFailure(reason: "no engine is ever loaded in a unit test")
+            // Only a test that scripted the summarizer may hold an engine:
+            // the scheduler acquires one before it generates, so the acquire
+            // has to succeed there — and nowhere else, because putting real
+            // weights in RAM is exactly what a unit test must never do.
+            guard summarizer != nil else {
+                Issue.record("The session loaded the summary engine during a recording")
+                throw ScriptedCaptureFailure(reason: "no engine is ever loaded in a unit test")
+            }
+            return InertTextEngine()
         },
         downloader: { _ in
             Issue.record("The session started a summary-model download during a recording")
         },
-        snapshotExists: { true }
+        snapshotExists: { summaryModelOnDisk }
+    )
+    // Present on disk and never fetched: a session must never wait for a
+    // model, and a unit test must never download one.
+    let transcriptionModel = ParakeetModel(
+        modelsRoot: temp.path("Models"),
+        modelsPresent: { true },
+        downloader: { _ in
+            Issue.record("The session downloaded the transcription model")
+        }
     )
     let session = RecordingSession(
         library: library,
         settings: settings,
         summaryModel: summaryModel,
+        transcriptionModel: transcriptionModel,
+        runTranscriptionPass: { files, yield, progress in
+            try await pass.run(retainedFiles: files, shouldYield: yield, onProgress: progress)
+        },
+        // Nil leaves the real `Summarizer` in place, which is what every
+        // capture-level test wants: it can only be reached through an engine
+        // the loader above refuses to hand out.
+        generateSummary: summarizer?.generate,
+        generateCaption: summarizer?.caption,
         factories: rig.factories()
     )
 
@@ -446,6 +477,8 @@ func withSession<T>(
             settings: settings,
             summaryModel: summaryModel,
             rig: rig,
+            pass: pass,
+            summarizer: summarizer,
             session: session
         )
     )
@@ -479,4 +512,488 @@ func audibleBatch(frames: Int = 4_000, seed: Float = 0.4) -> [Float] {
     (0..<frames).map { index in
         seed * sin(Float(index) * 0.05)
     }
+}
+
+// MARK: - The transcription pass
+
+/// A scripted stand-in for the Parakeet pass.
+///
+/// Outcomes are consumed in order, so "fails twice then succeeds" is one
+/// array. The default is a single empty success, which is a legitimate
+/// outcome — the model heard no speech — and keeps every layer-1 test from
+/// needing to think about finalization at all.
+final class ScriptedPass: Sendable {
+
+    enum Outcome: Sendable {
+        case segments([TranscriptSegment])
+        case failure
+        /// The pass observed the yield signal between decode windows.
+        case preempted
+        /// Reports progress, then observes whatever the yield signal says —
+        /// the real pass's behaviour, so a test can start a recording
+        /// mid-pass and see a deferral rather than a failure.
+        case yieldingIfAsked([TranscriptSegment])
+    }
+
+    private struct State {
+        var outcomes: [Outcome]
+        var meetingCalls = 0
+        var reportedProgress: [Double] = []
+        var entered: Int = 0
+        var release = false
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state: Mutex<State>
+
+    init(_ outcomes: [Outcome] = [.segments([])]) {
+        state = Mutex(State(outcomes: outcomes))
+    }
+
+    /// How many passes ran.
+    var calls: Int { state.withLock { $0.meetingCalls } }
+    /// How many passes are currently held at the gate below.
+    var entered: Int { state.withLock { $0.entered } }
+
+    /// Holds every pass until `releaseAll()`, so a test can act while one is
+    /// decoding.
+    ///
+    /// A continuation gate rather than a polling loop: a pass a test never
+    /// releases then simply stays suspended instead of spinning on
+    /// `Task.yield()` past the end of the test — which, with the temporary
+    /// directory already removed, is a busy loop nobody is waiting for.
+    func holdPasses() { state.withLock { $0.release = false } }
+
+    func releaseAll() {
+        let waiting = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.release = true
+            let waiters = state.waiters
+            state.waiters = []
+            return waiters
+        }
+        for continuation in waiting { continuation.resume() }
+    }
+
+    private func waitForRelease() async {
+        await withCheckedContinuation { continuation in
+            let released = state.withLock { state -> Bool in
+                if state.release { return true }
+                state.waiters.append(continuation)
+                return false
+            }
+            if released { continuation.resume() }
+        }
+    }
+
+    func run(
+        retainedFiles: [AudioChannel: URL],
+        shouldYield: @escaping @Sendable () -> Bool,
+        onProgress: @escaping @Sendable (Double) -> Void
+    ) async throws -> [TranscriptSegment] {
+        let outcome = state.withLock { state -> Outcome in
+            state.meetingCalls += 1
+            state.entered += 1
+            return state.outcomes.isEmpty ? .failure : state.outcomes.removeFirst()
+        }
+        // Suspends until the test releases the gate; no clock and no
+        // polling.
+        await waitForRelease()
+        state.withLock { $0.entered -= 1 }
+
+        switch outcome {
+        case .segments(let segments):
+            onProgress(1)
+            return segments
+        case .failure:
+            throw ScriptedCaptureFailure(reason: "the scripted pass failed")
+        case .preempted:
+            throw TranscriptionError.preempted
+        case .yieldingIfAsked(let segments):
+            onProgress(0.5)
+            if shouldYield() { throw TranscriptionError.preempted }
+            onProgress(1)
+            return segments
+        }
+    }
+}
+
+// MARK: - Recording what a driver did
+
+/// An append-only log of what happened, in the order it happened.
+///
+/// Ordering IS the assertion for most of the driver's rules — the summary
+/// model is released before the first decode, a summary is granted only after
+/// a pass ends — and a captured `var` cannot carry that out of an escaping
+/// closure. `Mutex` rather than an actor for the reason the capture fakes use
+/// one: the writer is the main actor and the reader is the test, and the
+/// contract is `Sendable`, not an isolation domain.
+final class OrderLog: Sendable {
+
+    private let log = Mutex<[String]>([])
+
+    func append(_ entry: String) { log.withLock { $0.append(entry) } }
+
+    var entries: [String] { log.withLock { $0 } }
+    var isEmpty: Bool { log.withLock { $0.isEmpty } }
+}
+
+/// Every snapshot a driver published, in order — the whole of what a surface
+/// would have seen while it worked.
+final class SnapshotLog: Sendable {
+
+    private let log = Mutex<[FinalizationDriver.Snapshot]>([])
+
+    func append(_ snapshot: FinalizationDriver.Snapshot) { log.withLock { $0.append(snapshot) } }
+
+    var snapshots: [FinalizationDriver.Snapshot] { log.withLock { $0 } }
+    var progressValues: [Double?] { snapshots.map(\.progress) }
+}
+
+/// Scripted pass results for the driver, consumed in order, recording every
+/// meeting it was asked about. The shorter cousin of `ScriptedPass`, for the
+/// driver tests that care about admission rather than about what a decode
+/// does at its gate.
+final class ScriptedRunner: Sendable {
+
+    private struct State {
+        var results: [FinalizationDriver.PassResult]
+        var calledMeetingIDs: [UUID] = []
+    }
+
+    private let state: Mutex<State>
+
+    init(_ results: [FinalizationDriver.PassResult]) {
+        state = Mutex(State(results: results))
+    }
+
+    func run(_ id: UUID) -> FinalizationDriver.PassResult {
+        state.withLock { state in
+            state.calledMeetingIDs.append(id)
+            return state.results.isEmpty ? .failed : state.results.removeFirst()
+        }
+    }
+
+    var calledMeetingIDs: [UUID] { state.withLock { $0.calledMeetingIDs } }
+}
+
+/// Holds every pass that reaches it until the test releases them, so a test
+/// can act while one is decoding.
+///
+/// Continuation-based rather than yield-based, because a driver test needs to
+/// know a pass has ARRIVED (`entered`) as well as to let it go: a spin loop
+/// would let the pass finish before the test could act.
+final class PassGate: Sendable {
+
+    private struct State {
+        var waiters: [CheckedContinuation<Void, Never>] = []
+        var entered = 0
+    }
+
+    private let state = Mutex(State())
+
+    /// How many passes have reached the gate over the gate's whole life —
+    /// never decremented, so "the second attempt started" is `entered == 2`.
+    var entered: Int { state.withLock { $0.entered } }
+
+    func enter() async {
+        await withCheckedContinuation { continuation in
+            state.withLock { state in
+                state.entered += 1
+                state.waiters.append(continuation)
+            }
+        }
+    }
+
+    /// Releases everything waiting now. A pass that arrives afterwards waits
+    /// again, which is what makes "release attempt 1, catch attempt 2"
+    /// expressible.
+    func releaseAll() {
+        let released = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            let waiters = state.waiters
+            state.waiters = []
+            return waiters
+        }
+        for waiter in released { waiter.resume() }
+    }
+}
+
+/// Counts calls, so a scripted pass can answer differently per attempt
+/// without capturing a `var`.
+final class AttemptCounter: Sendable {
+
+    private let count = Mutex(0)
+
+    /// The 1-based number of this call.
+    func next() -> Int {
+        count.withLock { count in
+            count += 1
+            return count
+        }
+    }
+
+    var value: Int { count.withLock { $0 } }
+}
+
+/// A `FinalizationDriver` with every seam defaulted to a no-op, so each test
+/// scripts only the one it is about.
+@MainActor
+func makeDriver(
+    runPass:
+        @escaping @MainActor (UUID, @escaping @Sendable () -> Bool) async ->
+        FinalizationDriver.PassResult,
+    prepareForPass: @escaping @MainActor () async -> Void = {},
+    convergeTerminally: @escaping @MainActor (UUID) async -> Void = { _ in },
+    onBackgroundPassConcluded:
+        @escaping @MainActor (UUID, FinalizationDriver.PassResult) async ->
+        Void = { _, _ in },
+    onStateChanged: @escaping @MainActor (FinalizationDriver.Snapshot) -> Void = { _ in }
+) -> FinalizationDriver {
+    FinalizationDriver(
+        runPass: runPass,
+        prepareForPass: prepareForPass,
+        convergeTerminally: convergeTerminally,
+        onBackgroundPassConcluded: onBackgroundPassConcluded,
+        onStateChanged: onStateChanged
+    )
+}
+
+/// Runs a `ScriptedPass` as one of the driver's passes, mapping its outcome
+/// exactly the way `RecordingSession.runPass` does: a `preempted` throw is a
+/// deferral, anything else a failure. Lets a driver test drive the real yield
+/// signal instead of being told what the pass decided.
+func passResult(
+    from pass: ScriptedPass, shouldYield: @escaping @Sendable () -> Bool
+) async -> FinalizationDriver.PassResult {
+    do {
+        let segments = try await pass.run(
+            retainedFiles: [:], shouldYield: shouldYield, onProgress: { _ in })
+        return .replaced(segments)
+    } catch TranscriptionError.preempted {
+        return .preempted
+    } catch {
+        return .failed
+    }
+}
+
+/// Yields a bounded number of times so queued work can land.
+///
+/// Only for the assertions that are negative — "no pass ran", "the awaiter is
+/// still suspended". Those cannot be waited FOR, and a sleep would make them
+/// wall-clock assertions; a fixed number of cooperative turns is the honest
+/// version of "nothing was going to happen anyway".
+func settle(turns: Int = 200) async {
+    for _ in 0..<turns { await Task.yield() }
+}
+
+// MARK: - The summarization side
+
+/// The engine the summary model hands out in a scheduling test.
+///
+/// It is never asked to stream: `ScriptedSummarizer` produces the documents
+/// directly and ignores the engine it is given. This exists only so
+/// `acquireEngine()` succeeds, because the scheduler acquires before it
+/// generates and a failed acquire would short-circuit the very path under
+/// test. Streaming from it at all means a real `Summarizer` slipped in.
+struct InertTextEngine: TextGenerating {
+
+    func stream(
+        system: String, user: String, params: GenerationParams
+    )
+        -> AsyncThrowingStream<String, Error>
+    {
+        Issue.record("A scheduling test drove a real generation")
+        return AsyncThrowingStream { $0.finish() }
+    }
+}
+
+/// A scripted stand-in for the summarizer: one script per generation, each
+/// saying which documents the stream yields and how it ends.
+///
+/// Which meeting the scheduler picked is only visible in the transcript it
+/// handed over — the seam takes segments, not an id — so every generation's
+/// segments are kept in order.
+final class ScriptedSummarizer: Sendable {
+
+    enum Script: Sendable {
+        /// Yields each document and completes cleanly. Only a clean finish
+        /// may be persisted.
+        case documents([SummaryDocument])
+        /// Yields each document and then throws: the model died mid-stream,
+        /// which must leave nothing behind.
+        case cutShort([SummaryDocument])
+    }
+
+    private struct State {
+        var scripts: [Script]
+        var transcripts: [[TranscriptSegment]] = []
+        var yielded = 0
+        var terminations = 0
+        var captions = 0
+        /// Yield this many documents, then wait for `releaseAll()`. The only
+        /// way to act — start a recording — in the middle of a generation.
+        var holdAfter: Int?
+        var release = false
+    }
+
+    private let state: Mutex<State>
+    private let captionText: String?
+
+    init(_ scripts: [Script], caption: String? = nil) {
+        state = Mutex(State(scripts: scripts))
+        captionText = caption
+    }
+
+    /// One entry per generation, in the order the scheduler ran them.
+    var transcripts: [[TranscriptSegment]] { state.withLock { $0.transcripts } }
+    var generations: Int { state.withLock { $0.transcripts.count } }
+    /// Documents handed to the consumer so far.
+    var yielded: Int { state.withLock { $0.yielded } }
+    /// Streams that ended — cleanly, or torn down by a consumer that gave up.
+    /// The anchor an abandoned generation can be waited for on.
+    var terminations: Int { state.withLock { $0.terminations } }
+    var captions: Int { state.withLock { $0.captions } }
+
+    func holdAfterDocument(_ count: Int) {
+        state.withLock { state in
+            state.holdAfter = count
+            state.release = false
+        }
+    }
+
+    func releaseAll() { state.withLock { $0.release = true } }
+
+    var generate: SummaryGenerating {
+        { [self] segments, _ in
+            let script = state.withLock { state -> Script in
+                state.transcripts.append(segments)
+                return state.scripts.isEmpty ? .documents([]) : state.scripts.removeFirst()
+            }
+            return makeStream(script)
+        }
+    }
+
+    var caption: CaptionGenerating {
+        // `[self]` rather than capturing the `Mutex` itself: it is
+        // non-copyable, so a capture list would consume it.
+        { [self] _, _ in
+            state.withLock { $0.captions += 1 }
+            return captionText
+        }
+    }
+
+    private func makeStream(_ script: Script) -> AsyncThrowingStream<SummaryDocument, Error> {
+        let documents: [SummaryDocument]
+        let endsInFailure: Bool
+        switch script {
+        case .documents(let scripted):
+            documents = scripted
+            endsInFailure = false
+        case .cutShort(let scripted):
+            documents = scripted
+            endsInFailure = true
+        }
+
+        let (stream, continuation) = AsyncThrowingStream<SummaryDocument, Error>.makeStream()
+        let producer = Task { [self] in
+            for document in documents {
+                await waitIfHeld()
+                continuation.yield(document)
+                state.withLock { $0.yielded += 1 }
+            }
+            if endsInFailure {
+                continuation.finish(
+                    throwing: ScriptedCaptureFailure(reason: "the generation was cut short"))
+            } else {
+                continuation.finish()
+            }
+        }
+        continuation.onTermination = { [self] _ in
+            state.withLock { $0.terminations += 1 }
+            // A consumer that gives up must stop the generation: the real
+            // engine's contract, and what keeps a held producer from
+            // outliving its test.
+            producer.cancel()
+        }
+        return stream
+    }
+
+    /// Yielding rather than sleeping, like `ScriptedPass`'s gate: the test
+    /// releases, and the producer notices on its next turn.
+    private func waitIfHeld() async {
+        while state.withLock({ state in
+            guard let holdAfter = state.holdAfter else { return false }
+            return state.yielded >= holdAfter && !state.release
+        }) {
+            if Task.isCancelled { return }
+            await Task.yield()
+        }
+    }
+}
+
+/// A summary document, with only the two fields the scheduler reads.
+func summaryDocument(
+    _ markdown: String, isFinal: Bool, modelName: String = "Scripted 1B"
+) -> SummaryDocument {
+    SummaryDocument(markdown: markdown, modelName: modelName, isFinal: isFinal)
+}
+
+// MARK: - Meetings planted on disk
+
+/// Plants a meeting still pending transcription: saved, no provenance, with
+/// retained audio beside it — exactly what quitting mid-pass leaves behind,
+/// and the only shape the launch scan auto-resumes.
+///
+/// The audio is a few bytes nobody decodes: the scripted pass never opens the
+/// files, and it is their PRESENCE that makes the meeting pending.
+@MainActor
+@discardableResult
+func plantPendingMeeting(in harness: SessionHarness, minutesAgo: Int) async throws -> UUID {
+    let id = UUID()
+    let startedAt = Date(timeIntervalSince1970: 1_700_000_000 - Double(minutesAgo) * 60)
+    let meta = MeetingMeta(
+        id: id,
+        title: MeetingMeta.autoTitle(startedAt: startedAt),
+        startedAt: startedAt,
+        endedAt: startedAt.addingTimeInterval(60),
+        segmentCount: 0,
+        hasSummary: false
+    )
+    try await harness.store.save(MeetingRecord(meta: meta, segments: []))
+    for channel in AudioChannel.allCases {
+        let url = harness.store.directory(for: id)
+            .appending(
+                path: MeetingStore.retainedAudioFileName(for: channel), directoryHint: .notDirectory)
+        try Data("audio".utf8).write(to: url)
+    }
+    await harness.library.refresh()
+    return id
+}
+
+/// Plants a finished, summary-less meeting: a transcript, `finalPass`
+/// provenance and no audio — what the backfill scan exists to find. The
+/// transcript text identifies it, because the summarizer seam is handed
+/// segments rather than a meeting id.
+@MainActor
+@discardableResult
+func plantTranscribedMeeting(
+    in harness: SessionHarness, minutesAgo: Int, text: String
+) async throws -> UUID {
+    let id = UUID()
+    let startedAt = Date(timeIntervalSince1970: 1_700_000_000 - Double(minutesAgo) * 60)
+    let segments = [
+        TranscriptSegment(channel: .microphone, speaker: .me, text: text, start: 0, end: 1)
+    ]
+    let meta = MeetingMeta(
+        id: id,
+        title: text,
+        startedAt: startedAt,
+        endedAt: startedAt.addingTimeInterval(60),
+        segmentCount: segments.count,
+        hasSummary: false,
+        transcriptProvenance: TranscriptProvenance(
+            source: .finalPass, modelName: ParakeetModel.modelID)
+    )
+    try await harness.store.save(MeetingRecord(meta: meta, segments: segments))
+    await harness.library.refresh()
+    return id
 }

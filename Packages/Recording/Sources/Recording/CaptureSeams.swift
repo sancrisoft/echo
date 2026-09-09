@@ -25,6 +25,8 @@
 
 import Audio
 import CoreAudio
+import EchoCore
+import Foundation
 
 /// The microphone side of a session.
 protocol MicCapturing: Sendable {
@@ -105,6 +107,20 @@ extension MicrophoneCapture: MicCapturing {}
 extension SystemAudioCapture: SystemCapturing {}
 extension InputDeviceMonitor: InputDeviceWatching {}
 extension OutputRouteMonitor: OutputRouteWatching {}
+
+/// Decodes one meeting's retained audio into its final transcript.
+///
+/// A seam for the same reason the capture sources are: the real pass loads a
+/// 480 MB Core ML model and decodes minutes of audio, and what Recording owns
+/// is not the decode but what surrounds it — the admission gate, the retry
+/// budget, the atomic replace and the audio's disposal. Those are what the
+/// tests are about.
+typealias TranscriptionPassRunning =
+    @Sendable (
+        _ retainedFiles: [AudioChannel: URL],
+        _ shouldYield: @escaping @Sendable () -> Bool,
+        _ onProgress: @escaping @Sendable (Double) -> Void
+    ) async throws -> [TranscriptSegment]
 
 /// Builds the two sources and the echo-cancellation engine a session needs.
 ///

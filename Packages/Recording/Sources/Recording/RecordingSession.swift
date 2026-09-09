@@ -39,7 +39,42 @@ public final class RecordingSession {
     // MARK: - What the UI reads
 
     /// What is happening right now. The only lifecycle truth in the app.
-    public private(set) var phase: RecordingPhase = .idle
+    ///
+    /// Composed rather than assigned, because three owners contribute to it:
+    /// this object drives capture, the finalization driver publishes the
+    /// running pass, and the summary scheduler publishes the meeting being
+    /// summarized. Assigning one field from three places is how a phase ends
+    /// up briefly wrong — a flash of `.idle` between a pass finishing and its
+    /// summary starting is exactly the gap that made "summarizing" invisible
+    /// in v1.
+    ///
+    /// Capture wins: whatever post-stop work is in flight, a live recording
+    /// is what the user is doing.
+    public var phase: RecordingPhase {
+        switch capturePhase {
+        case .recording(let startedAt, let scope):
+            return .recording(startedAt: startedAt, scope: scope)
+        case .stopping:
+            return .stopping
+        case .idle:
+            if let meetingID = summarizingMeetingID {
+                return .summarizing(meetingID: meetingID)
+            }
+            if let meetingID = finalization.meetingID {
+                return .finalizing(meetingID: meetingID, progress: finalization.progress ?? 0)
+            }
+            return .idle
+        }
+    }
+
+    /// Meetings waiting for a pass, front first. Published by the driver, not
+    /// re-derived here.
+    public var queuedMeetingIDs: [UUID] { finalization.queued }
+
+    /// Meetings whose finalization gave up this run. Their audio is kept and
+    /// only the user's Retry opens a new cycle; the set is in-memory, so a
+    /// relaunch offers them again.
+    public var terminalFailureMeetingIDs: Set<UUID> { finalization.terminalFailures }
 
     /// The meeting this session's post-stop work is about, if any. Derived
     /// from `phase`, never stored: a second field would be a second truth.
@@ -65,11 +100,44 @@ public final class RecordingSession {
             .map { RecordingNotice(kind: $0.key, message: $0.value) }
     }
 
+    /// The capture half of the lifecycle — the only part this object drives
+    /// imperatively.
+    private enum CapturePhase: Equatable {
+        case idle
+        case recording(startedAt: Date, scope: CaptureScope)
+        case stopping
+
+        var isRecording: Bool {
+            if case .recording = self { return true }
+            return false
+        }
+
+        var startedAt: Date? {
+            if case .recording(let startedAt, _) = self { return startedAt }
+            return nil
+        }
+
+        /// Non-nil only once the system tap is actually up, which is what
+        /// makes it usable as "system capture is established" — the rebuild
+        /// scheduler needs that, not "a scope was requested".
+        var captureScope: CaptureScope? {
+            if case .recording(_, let scope) = self { return scope }
+            return nil
+        }
+    }
+
+    private var capturePhase: CapturePhase = .idle
+    private var finalization: FinalizationDriver.Snapshot = .idle
+    private var summarizingMeetingID: UUID?
+
     // MARK: - Collaborators
 
     private let library: MeetingLibrary
     private let settings: AppSettings
     private let summaryModel: SummaryModel
+    private let runTranscriptionPass: TranscriptionPassRunning
+    private let generateSummary: SummaryGenerating
+    private let generateCaption: CaptionGenerating
     private let factories: CaptureFactories
 
     // MARK: - Session-scoped state
@@ -131,15 +199,80 @@ public final class RecordingSession {
     /// not reference `self` before every stored property has a value; nothing
     /// is created until the first session, so construction still performs no
     /// side effect.
-    @ObservationIgnored private lazy var inputHealth = InputHealthTracker { [weak self] generation, effect in
+    @ObservationIgnored private lazy var inputHealth: InputHealthTracker = InputHealthTracker {
+        [weak self] generation, effect in
         Task { @MainActor in self?.applyInputHealthEffect(effect, generation: generation) }
     }
 
     /// Chunk-level gate decisions for the health classifier. It does NOT
     /// transcribe: nothing produces words during a recording.
-    @ObservationIgnored private lazy var liveMonitor = LiveInputMonitor(
+    @ObservationIgnored private lazy var liveMonitor: LiveInputMonitor = LiveInputMonitor(
         gateDiagnostics: FanOutGateDiagnosticsSink([OSLogGateDiagnosticsSink(), inputHealth])
     )
+
+    /// Decides when a pass may run and runs it.
+    ///
+    /// Built on first use rather than in `init`, for the reason the two
+    /// above are: its seams close over this object. Not `lazy`, because a
+    /// `lazy` initializer is treated as a default argument and Swift 6 will
+    /// not let one be main-actor isolated while the closures inside it are.
+    @ObservationIgnored private var driverStorage: FinalizationDriver?
+
+    private var driver: FinalizationDriver {
+        if let driverStorage { return driverStorage }
+        let created = FinalizationDriver(
+            runPass: { [weak self] meetingID, shouldYield in
+                guard let self else { return .failed }
+                return await self.runPass(meetingID, shouldYield: shouldYield)
+            },
+            prepareForPass: { [weak self] in
+                // Weights are never resident without work, and never two models'
+                // worth at once: the summary engine goes before the first decode
+                // of every pass, warm or not.
+                guard let model = self?.summaryModel else { return }
+                await model.unload()
+            },
+            convergeTerminally: { [weak self] meetingID in
+                await self?.convergeTerminally(meetingID)
+            },
+            onBackgroundPassConcluded: { [weak self] _, result in
+                // A resumed or retried pass has no stop path awaiting it, so its
+                // summary is the backfill's job.
+                guard case .replaced = result else { return }
+                self?.summaryScheduler.kick()
+            },
+            onStateChanged: { [weak self] snapshot in
+                self?.finalization = snapshot
+            }
+        )
+        driverStorage = created
+        return created
+    }
+
+    @ObservationIgnored private var summarySchedulerStorage: SummaryScheduler?
+
+    private var summaryScheduler: SummaryScheduler {
+        if let summarySchedulerStorage { return summarySchedulerStorage }
+        let created = SummaryScheduler(
+            library: library,
+            settings: settings,
+            model: summaryModel,
+            driver: driver,
+            generate: generateSummary,
+            caption: generateCaption,
+            isRecording: { [weak self] in self?.capturePhase.isRecording ?? false },
+            onSummarizingChanged: { [weak self] meetingID in
+                self?.summarizingMeetingID = meetingID
+            }
+        )
+        summarySchedulerStorage = created
+        return created
+    }
+
+    /// Meetings whose summary must be regenerated once their re-transcription
+    /// lands. In-memory: a relaunch simply leaves the old summary in place
+    /// until the user asks again.
+    @ObservationIgnored private var retranscribedAwaitingSummary: Set<UUID> = []
 
     // MARK: - Construction
 
@@ -150,11 +283,41 @@ public final class RecordingSession {
         library: MeetingLibrary,
         settings: AppSettings,
         summaryModel: SummaryModel,
+        transcriptionModel: ParakeetModel,
+        runTranscriptionPass: TranscriptionPassRunning? = nil,
+        generateSummary: SummaryGenerating? = nil,
+        generateCaption: CaptionGenerating? = nil,
         factories: CaptureFactories = .live
     ) {
         self.library = library
         self.settings = settings
         self.summaryModel = summaryModel
+        // The model is only ever reached through the pass, so it is bound
+        // into the default here rather than stored: nothing else in a session
+        // has any business asking a transcription model a question.
+        self.runTranscriptionPass =
+            runTranscriptionPass ?? { retainedFiles, shouldYield, onProgress in
+                try await TranscriptionPass.run(
+                    retainedFiles: retainedFiles,
+                    model: transcriptionModel,
+                    shouldYield: shouldYield,
+                    onProgress: onProgress
+                )
+            }
+        // The summarizer carries the model's display name into every
+        // document it writes, so a meeting records what wrote its notes
+        // without asking a second object. Bound into the defaults for the
+        // reason the pass is: what Recording owns is the SCHEDULING, and a
+        // test of the scheduling should not have to drive real prompts.
+        let summarizer = Summarizer(modelName: SummaryModel.modelDisplayName)
+        self.generateSummary =
+            generateSummary ?? { segments, engine in
+                await summarizer.generate(from: segments, using: engine)
+            }
+        self.generateCaption =
+            generateCaption ?? { document, engine in
+                await summarizer.caption(for: document, using: engine)
+            }
         self.factories = factories
     }
 
@@ -167,7 +330,8 @@ public final class RecordingSession {
             summaryModel: SummaryModel(
                 modelsRoot: dataRoot.models,
                 pauseStateFile: dataRoot.summaryDownloadStateFile
-            )
+            ),
+            transcriptionModel: ParakeetModel(modelsRoot: dataRoot.models)
         )
     }
 
@@ -183,7 +347,7 @@ public final class RecordingSession {
     /// Whether `generation` is still the newest session AND capture is live.
     /// Anything that may only touch a running session asks this.
     private func isCapturing(_ generation: Int) -> Bool {
-        isCurrentSession(generation) && phase.isRecording
+        isCurrentSession(generation) && capturePhase.isRecording
     }
 
     // MARK: - Start
@@ -199,8 +363,8 @@ public final class RecordingSession {
     }
 
     /// Links one lifecycle call onto the chain and waits for it. The body runs
-    /// only after every earlier call has finished, so `phase` is never read by
-    /// one of them while another is midway through changing it.
+    /// only after every earlier call has finished, so `capturePhase` is never
+    /// read by one of them while another is midway through changing it.
     private func serialized(_ body: @escaping @MainActor () async -> Void) async {
         let previous = sessionTask
         let task = Task { @MainActor in
@@ -212,12 +376,13 @@ public final class RecordingSession {
     }
 
     private func performStart(scope requestedScope: CaptureScope) async {
-        switch phase {
+        switch capturePhase {
         case .recording, .stopping:
             // Already live, or mid-teardown: a second gesture is a no-op, not
-            // a second session.
+            // a second session. Post-stop work does not block a new one — a
+            // recording that starts mid-pass preempts it.
             return
-        case .idle, .finalizing, .summarizing:
+        case .idle:
             break
         }
 
@@ -229,6 +394,12 @@ public final class RecordingSession {
 
         sessionGeneration += 1
         let generation = sessionGeneration
+        // Signalled before any capture setup, so a pass that is decoding
+        // right now begins yielding immediately rather than one decode window
+        // into the new session. Balanced by exactly one
+        // `noteRecordingStopped()` — every path out of a started session goes
+        // through `teardown`.
+        driver.noteRecordingStarted()
         clearAllNotices()
 
         // Staged under a hidden sibling of the meeting folders, on the same
@@ -251,7 +422,7 @@ public final class RecordingSession {
 
         micLevels.reset()
         systemLevels.reset()
-        phase = .recording(startedAt: Date(), scope: requestedScope)
+        capturePhase = .recording(startedAt: Date(), scope: requestedScope)
         startInputDeviceHandling()
 
         do {
@@ -273,7 +444,8 @@ public final class RecordingSession {
 
             // Fixed for the whole session: a running session never silently
             // widens, not even through a device rebuild.
-            phase = .recording(startedAt: phase.startedAt ?? Date(), scope: effective)
+            capturePhase = .recording(
+                startedAt: capturePhase.startedAt ?? Date(), scope: effective)
 
             // Recording is the implicit request for this meeting's summary,
             // so fetch the model's FILES during the session. Download only —
@@ -473,7 +645,7 @@ public final class RecordingSession {
         systemRestartTask = Task { @MainActor [weak self] in
             _ = await previous?.value
             guard let self, !Task.isCancelled, self.isCapturing(generation),
-                let scope = self.phase.captureScope, let aec = self.switchingStage
+                let scope = self.capturePhase.captureScope, let aec = self.switchingStage
             else { return }
 
             self.systemGapTracker?.beginEpisode()
@@ -484,7 +656,8 @@ public final class RecordingSession {
             do {
                 let effective = try await self.startSystemCapture(requested: scope, aec: aec)
                 guard self.isCapturing(generation) else { return }
-                self.phase = .recording(startedAt: self.phase.startedAt ?? Date(), scope: effective)
+                self.capturePhase = .recording(
+                    startedAt: self.capturePhase.startedAt ?? Date(), scope: effective)
             } catch {
                 ErrorTrace.record(
                     "System capture rebuild failed", error: error, category: "RecordingSession")
@@ -700,7 +873,7 @@ public final class RecordingSession {
     /// the PoC's hand-off from the popover to the window feel broken.
     public func stop() async {
         await serialized {
-            guard self.phase.isRecording else { return }
+            guard self.capturePhase.isRecording else { return }
             await self.teardown(persisting: true)
         }
     }
@@ -737,11 +910,15 @@ public final class RecordingSession {
         await liveMonitor.stop()
         inputHealth.endSession()
 
-        let startedAt = phase.startedAt ?? Date()
-        let scope = phase.captureScope
+        let startedAt = capturePhase.startedAt ?? Date()
+        let scope = capturePhase.captureScope
         let frames = deliveredFrames
 
-        phase = .stopping
+        capturePhase = .stopping
+        // Lowers the preemption signal and opens this meeting's post-stop
+        // pipeline. Balanced by exactly one `notePostStopWorkFinished()` on
+        // each of the three paths below.
+        driver.noteRecordingStopped()
         micLevels.reset()
         systemLevels.reset()
         clearAllNotices()
@@ -751,7 +928,8 @@ public final class RecordingSession {
 
         guard persisting else {
             if let writer { await writer.discard() }
-            phase = .idle
+            capturePhase = .idle
+            driver.notePostStopWorkFinished()
             return
         }
 
@@ -771,12 +949,35 @@ public final class RecordingSession {
         }
 
         guard let meetingID else {
-            phase = .idle
+            capturePhase = .idle
+            driver.notePostStopWorkFinished()
             return
         }
-        // The retained audio IS the pending marker; the phase only says so.
-        phase = .finalizing(meetingID: meetingID, progress: 0)
+
+        // Idle first, so the composed phase can report what the driver is
+        // about to publish. The retained audio IS the pending marker; the
+        // phase only says so.
+        capturePhase = .idle
+        driver.requestStopPass(meetingID)
         await library.refresh()
+
+        // Fire and forget: `stop()` returns once the meeting is on disk, so
+        // no surface sits blocked behind minutes of transcription.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome = await self.driver.awaitStopOutcome(for: meetingID)
+            if case .replaced = outcome {
+                // Awaited inside the pipeline on purpose: deferred passes
+                // resume behind this meeting's pass AND its summary.
+                await self.summaryScheduler.summarizeAfterFinalization(meetingID)
+            }
+            // `.failed` is terminal, so there is no transcript to summarize;
+            // `.deferred` means a new recording took over and the summary
+            // follows THAT pass.
+            self.driver.notePostStopWorkFinished()
+            // A stop is also a natural catch-up point for everything else.
+            self.summaryScheduler.kick()
+        }
     }
 
     /// Closes the retention files, persists the meeting, and adopts the audio
@@ -919,7 +1120,7 @@ public final class RecordingSession {
     /// path, and a meter that moves when nothing is captured would make a
     /// broken microphone look fine.
     private func pushLevel(_ level: Double, on channel: AudioChannel) {
-        guard phase.isRecording else { return }
+        guard capturePhase.isRecording else { return }
         let now = ContinuousClock.now
         switch channel {
         case .microphone: micLevels.append(level, at: now)
@@ -957,6 +1158,171 @@ public final class RecordingSession {
 
     private func clearAllNotices() {
         noticeMessages.removeAll()
+    }
+
+    // MARK: - Finalization
+
+    /// Decodes one meeting's retained audio and replaces its transcript.
+    ///
+    /// The pass itself neither deletes audio nor writes anything: what
+    /// happens to the files and to `Meetings/` is decided here, and the order
+    /// is what makes a crash at any point recoverable.
+    private func runPass(
+        _ meetingID: UUID, shouldYield: @escaping @Sendable () -> Bool
+    ) async -> FinalizationDriver.PassResult {
+        let store = library.store
+        let retained = await store.retainedAudioFiles(for: meetingID)
+        guard !retained.isEmpty else {
+            // The pending marker vanished under us — nothing to decode, and
+            // retrying cannot help.
+            ErrorTrace.record(
+                "A pass was admitted for a meeting with no retained audio",
+                category: "RecordingSession", metadata: ["meeting": meetingID.uuidString])
+            return .failed
+        }
+
+        do {
+            let segments = try await runTranscriptionPass(
+                retained,
+                shouldYield,
+                { [weak self] fraction in
+                    Task { @MainActor in self?.driver.noteProgress(fraction, for: meetingID) }
+                }
+            )
+
+            // An empty segment set is a legitimate success: the model heard
+            // no speech, and that is a finished transcript, not a failure.
+            try await store.replaceTranscript(
+                segments,
+                provenance: TranscriptProvenance(
+                    source: .finalPass, modelName: ParakeetModel.modelID),
+                for: meetingID
+            )
+
+            // After the replace, never before: the summary is retired where
+            // the replacement it was waiting for actually happened. Clearing
+            // `hasSummary` is also what re-admits the meeting to the backfill.
+            if retranscribedAwaitingSummary.remove(meetingID) != nil {
+                try? await store.removeSummaryArtifacts(for: meetingID)
+            }
+
+            await disposeOfRetainedAudio(for: meetingID, store: store)
+            await library.refresh()
+            return .replaced(segments)
+        } catch TranscriptionError.preempted {
+            // A deferral, not a failure: the audio is untouched and the
+            // meeting stays pending.
+            return .preempted
+        } catch {
+            ErrorTrace.record(
+                "Transcription pass failed — the retained audio is kept", error: error,
+                category: "RecordingSession", metadata: ["meeting": meetingID.uuidString])
+            return .failed
+        }
+    }
+
+    /// What happens to the audio after a successful pass.
+    private func disposeOfRetainedAudio(for meetingID: UUID, store: MeetingStore) async {
+        #if DEBUG
+            // Takes precedence over the product preservation below: with both
+            // armed the audio lands under the debug names, and the rename
+            // then finds nothing.
+            if LaunchEnvironment.current.keepsRetainedAudio {
+                _ = await store.preserveRetainedAudioAsDebugFixture(for: meetingID)
+            }
+        #endif
+        // Read at pass-success time rather than at record time, so a toggle
+        // flipped mid-pass affects that pass.
+        if settings.keepRecordingsAfterTranscription {
+            _ = await store.preserveRetainedAudio(for: meetingID)
+        }
+        // Always, and last. Named targets only — never a directory sweep — so
+        // siblings and sidecars are untouched, and after a preserve rename it
+        // harmlessly finds nothing.
+        await store.deleteRetainedAudio(for: meetingID)
+    }
+
+    /// Retries are exhausted for this run.
+    ///
+    /// Exactly one atomic meta write and nothing beside it, which is what
+    /// makes the terminal transition crash-safe: a crash BEFORE it leaves the
+    /// meeting pending, so the next launch converges again; after it, the
+    /// scan reads the failure and never auto-resumes. The retained audio is
+    /// KEPT — it is what the user's Retry works from.
+    private func convergeTerminally(_ meetingID: UUID) async {
+        do {
+            try await library.store.recordTerminalProvenance(
+                for: meetingID,
+                provenance: TranscriptProvenance(
+                    source: .terminalFailure, modelName: ParakeetModel.modelID)
+            )
+        } catch {
+            // Best effort: a failure here leaves the meeting pending, and the
+            // next launch converges it again.
+            ErrorTrace.record(
+                "Recording the terminal provenance failed", error: error,
+                category: "RecordingSession", metadata: ["meeting": meetingID.uuidString])
+        }
+        await library.refresh()
+    }
+
+    // MARK: - Launch and user actions
+
+    /// Cleans up what a quit or a crash left behind and re-enqueues the
+    /// meetings still waiting for words. Called once by the composition root.
+    ///
+    /// The sweeps are skipped while a session runs: its staging tree is live.
+    /// Pending meetings still enqueue and simply defer until the stop, and
+    /// any orphan is re-swept at the next launch.
+    public func resumePendingFinalizations() async {
+        let store = library.store
+        if !capturePhase.isRecording {
+            await store.sweepRetentionStaging()
+            await store.sweepFinalPassAudioOrphans()
+        }
+        // Newest first: request order is queue order.
+        driver.requestResume(of: await store.pendingFinalizationMeetingIDs())
+    }
+
+    /// The user pressed Retry on a meeting whose finalization gave up.
+    ///
+    /// A fresh bounded cycle, at the front of the queue — but it bypasses no
+    /// admission gate, so it starts only when nothing is recording and no
+    /// summary is streaming. Bounded within every cycle, user-paced across
+    /// cycles, never an automatic loop.
+    public func retryTranscription(_ meetingID: UUID) {
+        driver.requestManualRetry(meetingID)
+    }
+
+    /// Re-transcribes a meeting from the recording it preserved.
+    ///
+    /// The archive is never consumed: the pass reads a CLONE written under
+    /// the retained names, so the existing pending machinery runs unmodified
+    /// and `audio-*` survives however the pass ends. A meeting that already
+    /// had a summary regenerates it on success — re-transcribing is an
+    /// explicit action, so the summary it invalidates is replaced even with
+    /// automatic summaries off.
+    public func retranscribe(_ meetingID: UUID) async {
+        let store = library.store
+        guard await store.hasPreservedAudio(for: meetingID) else { return }
+        guard await store.cloneAudioForRetranscription(for: meetingID) else { return }
+        if library.meta(for: meetingID)?.hasSummary == true {
+            retranscribedAwaitingSummary.insert(meetingID)
+        }
+        driver.requestManualRetry(meetingID)
+    }
+
+    /// The user asked for this meeting's summary. It front-runs the scan,
+    /// works with automatic summaries off, and is the one trigger allowed to
+    /// fetch a model that is not on disk yet.
+    public func requestSummary(_ meetingID: UUID) {
+        summaryScheduler.request(meetingID)
+    }
+
+    /// Re-runs the summary scan. The window calls this when it opens, and the
+    /// composition root when a model download completes.
+    public func kickSummaryBackfill() {
+        summaryScheduler.kick()
     }
 
     // MARK: - Summary model prefetch
