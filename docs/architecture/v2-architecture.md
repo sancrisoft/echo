@@ -182,12 +182,17 @@ names inside a package are free to change.
 - `AppIdentity`: `bundleIdentifier`, `logSubsystem`, `version` (`short`, `build`, `display`).
 
 **Audio**
-- `AudioFormat.canonical` (16 kHz mono Float32) and buffer helpers.
-- `MicrophoneCapture`, `SystemAudioCapture`: `start(...)`, `stop()`, `onSamples`, `onLevel`, `requestPermission()`/`primePermission()`, `DeliveryStats`.
-- `CaptureScope` (`.everything` | `.app(ProcessSelector)`), `ProcessSelector` (display name + bundle-ID prefixes + scopeable).
-- `EchoCanceller` (the switching stage), `EchoHandlingMode`, `EchoModeMachine`, `OutputRouteMonitor`, `OutputRouteClass`.
-- `InputDeviceMonitor`, `InputDeviceLifecycleMachine`, `InputHealthTracker`, `InputHealthNotice`.
-- `CaptureGapTracker`, `RetainedAudioWriter`, `AppBundleIdentity`.
+- `AudioConstants` (`sampleRate` 16 kHz, `channels` 1, `captureFormat`), `AudioLevelMeter.level(from:)`, `AudioDownmixer.toMono(_:)`, `BufferResampler`. The names are the PoC's, not this document's earlier sketch of `AudioFormat.canonical`: they are what the ported tests and the measured comments refer to. `captureFormat` is an `AVAudioFormat?` rather than a force-unwrapped value, and `AudioConstants.sampleRate` is deliberately a second declaration of the 16 kHz that `TranscriptionPass.sampleRate` also carries — EchoCore takes something only when three packages need it, and today two do. Recording is the third; that is when to lift it.
+- `MicrophoneCapture(onSamples:onLevel:onRawBuffer:)` with `start() async throws` / `stop()` / `requestPermission()`, and `SystemAudioCapture(onSamples:onLevel:)` with `start(scope:) throws` / `stop()` / `primePermission()` / `deliveryStats()` / `DeliveryStats` / `CaptureError`. The callbacks are constructor parameters, not settable properties: both classes are `Sendable` and their callbacks run on the AVAudioEngine render thread and the Core Audio IO queue, so what those threads read has to be immutable. `SystemAudioCapture.start` is synchronous — the PoC's `async` came from a protocol requirement, and the protocol is gone (see below). `onRawBuffer` is the pre-downmix hook the DEBUG fixture recorder needs.
+- `CaptureScope` (`.everything` | `.app(ProcessSelector)`) with `scopedApp`, `ProcessSelector` (display name + ONE bundle-ID prefix + `scopeable` + `matches(bundleID:appBundleID:)`), `ScopedProcessResolution` (`ProcessEntry`, `includeSet(for:in:)`, `followUpdate(for:current:processes:)`). `ProcessSelector` is the capture-side half of the PoC's `CallApp`, which cannot come down here because `CallDetection` sits above this package; detection maps its catalog onto selectors, and the matcher stays one implementation so detection and scoping cannot disagree about what an app is. One prefix, not a list — the PoC matches on one and so does the catalog. `CaptureScope` has NO `indicatorLabel`: "Everything" / "Zoom only" is copy, `Meetings.CaptureScopeRecord.scopedDisplayLabel` already renders the persisted form, and the live label belongs to whichever surface draws it (ADR-003). The `CaptureScope` → `CaptureScopeRecord` mapping needs both packages, so it belongs to Recording.
+- `AECStage` (the seam: `processMicSamples`, `feedFarEnd`, `reset`), `PassthroughAECStage`, `WebRTCAECStage` (`isHealthy`, `onEngineEvent`, `init(failedEngine:)`), `SwitchingAECStage` (`currentMode`, `setMode(_:)`). `SwitchingAECStage` is what this document earlier called `EchoCanceller`; the protocol is kept because the switching stage genuinely consumes `any AECStage`. Both stages hold their state behind a `Mutex` rather than an actor: the mic path must return its processed samples to the same real-time callback that handed them over, which an actor hop cannot do.
+- `OutputRouteClass`, `EchoHandlingMode`, `EchoModeMachine` (+ `Event`, `Effect`), `EchoDegradationNotice`, `EchoBleedProbe` (+ `Verdict`). The offline echo-cancellation pre-pass is NOT here: it reads `Transcription.EnergyEnvelope` as well as this package's AEC stage, and no package below `Recording` sees both, so putting it here would mean a second copy of a measured type. It is disabled and unfinished in any case.
+- `InputDeviceMonitor(onDefaultInputChange:)` (+ `currentDefaultInputDevice()`, `start()`, `stop()`), `InputDeviceLifecycleMachine` (+ `Event`, `Action`, `DeviceID`), `InputDeviceNotice`; `OutputRouteMonitor(onRouteChange:onDefaultOutputDeviceChange:)` (+ `currentRoute()`, `start()`, `stop()`), `OutputRouteClassifier`. Both monitors register their Core Audio listeners on their own serial queues; the PoC used the main queue and `MainActor.assumeIsolated`, both artefacts of its main-actor default isolation.
+- `InputHealthClassifier` (+ `Event`, `Effect`, the tunable thresholds), `InputHealthTracker(onEffect:)` (+ `beginSession(generation:)`, `endSession()`), `InputHealthNotice`, `FanOutGateDiagnosticsSink`; `GateTerm`, `GateVerdict`, `GateDecisionRecord`, `GateDiagnosticsSink`, `OSLogGateDiagnosticsSink`; `LiveInputMonitor` (actor: `start`, `stop`, `ingest(_:from:)`, `noteCaptureGap(seconds:on:)`), `AudioStats`. The gate-diagnostics types arrive with the monitors because the classifier and the live monitor are both built on them. The classifier emits notices as VALUES and never touches the audio path — structurally, since `Effect` has no case that could; where a notice is shown is #118's decision, not this package's.
+- `CaptureGapTracker` (`beginEpisode(now:)`, `noteDelivery(batchDuration:now:)`), `RetainedAudioWriter` (actor: `append`, `noteGap`, `finish`, `discard`, `currentAccounting`, `isDisabled`), `AppBundleIdentity`. `CaptureGapTracker` was lifted out of the PoC's `RecordingController`, which this rebuild replaces. `RetainedAudioWriter.init(directory:fileName:)` takes the retained file's name as a seam because the audio name families belong to `Meetings`, which sits above this package; Recording passes `MeetingStore.retainedAudioFileName`.
+- `FixtureRecorder` (actor, `#if DEBUG`) with `FixtureScenario`, `FixtureInfo`, `InputDeviceFacts`, `InputDeviceFactsReader`, and both `writeWAV` overloads — the one sanctioned way to record a fixture, with no AEC in its path on purpose. The PoC's `@Observable @MainActor` is gone: phase changes leave through a callback, because an engine package has no views.
+- No `AudioCaptureSource` protocol. The PoC declared one and nothing ever consumed it polymorphically; its only effect was to force the two capture sources to share a surface they do not share.
+- No `@Observable` and no `@MainActor`. The observable façade over a session is `RecordingSession`, in Recording.
 
 **Transcription**
 - `ParakeetModel` (actor; `state`, `initialize(deferWhile:)`, `readyModelDirectory()`, the identity constants `modelID`/`modelDisplayName`/`modelDisplaySize`/`attribution`, `modelDirectory(in:)` and `resolvedModelDirectory(in:)`). Built with an injected `modelsRoot` plus optional `modelsPresent`/`downloader`/`deferPollInterval` seams, so the lifecycle is testable without a 480 MB download. The two directory accessors differ on purpose: FluidAudio discards the last component of the directory it is handed and appends its own `Repo.folderName`, so `modelDirectory(in:)` is what the library is passed and `resolvedModelDirectory(in:)` is where the bytes land.
@@ -274,10 +279,12 @@ methods called by the owner, not observation chains.
 click Record (menu bar · window · island)
   → RecordingSession.start(scope:)
       primes permissions (mic, then system) on the first gesture
-      builds EchoCanceller, monitors, gap trackers, RetainedAudioWriter (staging dir)
+      builds SwitchingAECStage, monitors, gap trackers, RetainedAudioWriter (staging dir)
       MicrophoneCapture / SystemAudioCapture callbacks:
          levels  → RecordingSession (main actor)
-         samples → EchoCanceller (sync) → RetainedAudioWriter (actor)
+         mic     → SwitchingAECStage.processMicSamples (sync) → RetainedAudioWriter (actor)
+         system  → RetainedAudioWriter (actor), and a read-only copy to feedFarEnd
+                   (a scoped session runs a second, global tap for that copy alone)
 click Stop
   → RecordingSession.stop()
       tears capture down in order; writer.finish()
@@ -445,8 +452,11 @@ PoC's tests for that module with it):
 2. `ModelDelivery`, then `Transcription` and `Summarization` (engine ports;
    pure machines and measured constants carried as-is, isolation fixed).
 3. `Audio` (the vendored WebRTC library moves from `Vendor/webrtc-apm` into
-   `Packages/Audio/Vendor/WebRTCAPM.xcframework` with its headers in a C target;
-   the root `Vendor/` directory is deleted then).
+   `Packages/Audio/Vendor/WebRTCAPM.xcframework`, declared as a binary target;
+   the one ObjC++ seam becomes the `WebRTCAECBridge` C target, which reads both
+   upstream header roots from inside the xcframework so the repository carries
+   one copy of the headers and one of the archive. `Vendor/webrtc-apm` keeps
+   `VERSION` and `licenses/`, and the root `Vendor/` directory is deleted).
 4. `Recording` — the session facade; at this point the app records,
    transcribes and summarizes.
 5. `CallDetection`, `Updates`, `Island`.

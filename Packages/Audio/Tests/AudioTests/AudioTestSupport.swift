@@ -29,6 +29,22 @@ import AVFoundation
 import Audio
 import EchoCoreTestSupport
 import Foundation
+import Synchronization
+
+/// Collecting gate-diagnostics sink for the suites that assert on gate
+/// decisions. The pipeline actor calls `record` from its own executor while
+/// the test reads from elsewhere, so access is mutex-guarded: the sink
+/// contract requires thread safety, not isolation.
+final class CollectingGateSink: GateDiagnosticsSink {
+
+    private let storage = Mutex<[GateDecisionRecord]>([])
+
+    func record(_ record: GateDecisionRecord) {
+        storage.withLock { $0.append(record) }
+    }
+
+    var records: [GateDecisionRecord] { storage.withLock { $0 } }
+}
 
 enum AudioTestSupport {
 

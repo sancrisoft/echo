@@ -18,9 +18,9 @@
 //
 //  An `actor`: it owns the take's phase and sequences two capture sources,
 //  and v1's `@Observable @MainActor` was a consequence of the DEBUG picker
-//  view that drove it. This package has no views (ADR-002 forbids
-//  `@Observable` here), so phase changes leave through a callback and the
-//  surface that renders them owns the observable.
+//  view that drove it. An observable façade belongs to whichever package
+//  renders it and must not become a second copy of the state (ADR-003), so
+//  phase changes leave through a callback instead.
 //
 
 #if DEBUG
@@ -166,15 +166,18 @@
         /// Reports every phase change, for a harness that renders progress.
         private let onPhase: (@Sendable (Phase) -> Void)?
 
-        /// How the output route is named in `info.json`. Injected: route
-        /// classification arrives with echo handling, and a metadata string is
-        /// all the recorder needs — a caller supplies
-        /// `{ String(describing: OutputRouteMonitor().currentRoute()) }`.
+        /// How the output route is named in `info.json` — which hardware the
+        /// take was recorded on. Injected rather than read inline so a caller
+        /// replaying a take can name the route it belongs to, and so this
+        /// stayed buildable in the capture layer, before route
+        /// classification existed.
         private let routeDescription: @Sendable () -> String
 
         public init(
             onPhase: (@Sendable (Phase) -> Void)? = nil,
-            routeDescription: @escaping @Sendable () -> String = { "unknown" }
+            routeDescription: @escaping @Sendable () -> String = {
+                String(describing: OutputRouteMonitor().currentRoute())
+            }
         ) {
             self.onPhase = onPhase
             self.routeDescription = routeDescription

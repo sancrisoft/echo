@@ -33,6 +33,12 @@ Packages/<Name>/     one local Swift package per capability
   Package.swift
   Sources/<Name>/    flat: one file per concept
   Tests/<Name>Tests/
+Packages/Audio/
+  Sources/WebRTCAECBridge/   the one ObjC++ seam over the AEC (SPM has no
+                             bridging header), public header in include/
+  Vendor/                    WebRTCAPM.xcframework (the binary target) plus
+                             webrtc-apm/{VERSION,licenses}; VERSION says how
+                             the xcframework is regenerated
 docs/architecture/   v2-discovery.md · v2-architecture.md · adr/
 docs/design/         local only (gitignored): the redesign as a written spec
 .design/             local only (gitignored): the design canvas working copy
@@ -49,7 +55,7 @@ Makefile             the commands
 | `Meetings` | `MeetingStore` (the only thing that touches `Meetings/`), `MeetingLibrary`, `MeetingMeta`/`MeetingRecord`, `LegacyMeetingSummary`, `StorageBreakdown`, `MeetingExport`, `MeetingListSelection` | EchoCore |
 | `DesignSystem` | `EchoColor`, `EchoFont`, `EchoSpacing`/`EchoRadius`/`EchoLayout`, primitives (`EchoButtonStyle`, `StatusBadge`, `MetaStrip`, `EmptyState`, `SelectableRowChrome`), `DesignGallery` | — |
 | `Workspace` | the main window: `WorkspaceWindow`, `WorkspaceModel`, sidebar, document, trash, settings screen, `MarkdownDocument`/`MarkdownView`, `MeetingGrouping`, `MeetingStatus`, `MeetingActions` (panels, pasteboard, Finder) | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem |
-| `Audio` *(pending)* | capture, AEC, device/route/health monitors, retention encoding, `CaptureScope`, `AppBundleIdentity`; vendored WebRTC | EchoCore |
+| `Audio` | `MicrophoneCapture`/`SystemAudioCapture` (`Sendable` classes, callbacks at init), `AudioConstants`/`AudioLevelMeter`/`AudioDownmixer`/`BufferResampler`, `CaptureRateGuard`, `CaptureGapTracker`, `CaptureScope`/`ProcessSelector`/`ScopedProcessResolution`, `AppBundleIdentity`, `RetainedAudioWriter` (actor, file naming injected), `AECStage`/`PassthroughAECStage`/`WebRTCAECStage`/`SwitchingAECStage`, `OutputRouteClass`/`EchoHandlingMode`/`EchoModeMachine`/`EchoDegradationNotice`, `EchoBleedProbe`, `InputDeviceMonitor`/`InputDeviceLifecycleMachine`/`InputDeviceNotice`, `OutputRouteMonitor`/`OutputRouteClassifier`, `InputHealthClassifier`/`InputHealthTracker`/`InputHealthNotice`/`FanOutGateDiagnosticsSink`, `GateTerm`/`GateVerdict`/`GateDecisionRecord`/`GateDiagnosticsSink`, `LiveInputMonitor`/`AudioStats`, `FixtureRecorder` (DEBUG); vendored WebRTC APM | EchoCore |
 | `ModelDelivery` | `SnapshotDownloader`/`SnapshotSpec`, `ResumableFileDownload`, `DownloadProgress` (the one clamp), `DownloadRetry`, `SnapshotDownloadTally`/`SnapshotDownloadBudget`, `SnapshotManifest`, `DownloadPauseStore`, `RetiredModelCleanup`, `DiskSpace` | EchoCore, swift-transformers (`Hub`) |
 | `Transcription` | `ParakeetModel` (identity, readiness, download), `TranscriptionPass` (the post-stop batch pass, segment shaping, `spanLevels`), `EnergyEnvelope`, `PassProgress`, `PassEvent`, `TranscriptionError`, `EchoDedupPolicy` | EchoCore, ModelDelivery, FluidAudio |
 | `Summarization` | `TextGenerating`/`GenerationParams` (the engine seam and its presets), `Summarizer` (routing, prompts, NDJSON facts, caption), `SummaryDocument`/`SummaryPhase`, `SummaryFacts` (`ChunkMapResult`/`MergedFacts`/`SummaryMerge`), `NDJSONLineValidator`, `TranscriptChunking`, `MLXTextEngine`, `SummaryModel` (identity, state, download/pause/load/unload), `SummarizationError`/`SummaryModelError` | EchoCore, ModelDelivery, mlx-swift-lm, mlx-swift, swift-transformers (`Tokenizers`) |
