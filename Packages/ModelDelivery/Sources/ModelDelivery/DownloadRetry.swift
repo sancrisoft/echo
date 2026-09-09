@@ -51,6 +51,8 @@ public enum DownloadRetry {
     ) async throws -> T {
         var attempt = 1
         while true {
+            // A caller who cancelled between attempts gets no new attempt.
+            try Task.checkCancellation()
             let tracker = ProgressTracker()
             // Unstructured on purpose: the watchdog must be able to cancel
             // the download without the failure tearing down the caller.
@@ -69,7 +71,15 @@ public enum DownloadRetry {
             }
 
             do {
-                let value = try await download.value
+                // An unstructured Task does not inherit cancellation, so the
+                // caller's cancel has to be forwarded by hand — without this,
+                // a pause records its intent, cancels nothing, and the
+                // transfer runs to completion behind a paused UI.
+                let value = try await withTaskCancellationHandler {
+                    try await download.value
+                } onCancel: {
+                    download.cancel()
+                }
                 watchdog.cancel()
                 return value
             } catch {
@@ -79,7 +89,8 @@ public enum DownloadRetry {
                 // conditions are required: `wasStalled` alone would retry an
                 // operation that threw a genuine error in the same instant the
                 // watchdog happened to fire, and `isOurCancellation` alone
-                // would retry a user-initiated pause.
+                // would retry a user-initiated pause — which arrives here as a
+                // cancellation the watchdog never asked for.
                 guard tracker.wasStalled, isOurCancellation(error) else { throw error }
                 guard attempt < attempts else { throw ModelDeliveryError.downloadStalled }
                 attempt += 1

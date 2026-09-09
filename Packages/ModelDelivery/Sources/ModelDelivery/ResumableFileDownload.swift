@@ -221,6 +221,9 @@ private final class Sink: NSObject, URLSessionDataDelegate, Sendable {
         var failure: (any Error)?
         var finished = false
         var onFinish: (@Sendable (Result<Void, any Error>) -> Void)?
+        /// Set when the task finished before anyone was waiting, so the
+        /// result is not lost between `setFinish` and the delegate callback.
+        var result: Result<Void, any Error>?
     }
 
     private let state: Mutex<State>
@@ -237,9 +240,26 @@ private final class Sink: NSObject, URLSessionDataDelegate, Sendable {
         self.progress = progress
     }
 
-    /// Set before the task starts; the stored closure is called exactly once.
+    /// Set before the task starts; the closure is called exactly once. Call
+    /// this at most once per sink — a second waiter would be stored in a slot
+    /// the delegate has already emptied and would never be called. `transfer`
+    /// builds a fresh sink for every request, which is what upholds that.
+    ///
+    /// A task cancelled before it is resumed — the caller was already
+    /// cancelled when the transfer began — can complete before this runs. The
+    /// delegate then parks its result here rather than dropping it, because a
+    /// dropped result strands the continuation and hangs the transfer forever
+    /// with nothing to diagnose.
     func setFinish(_ finish: @escaping @Sendable (Result<Void, any Error>) -> Void) {
-        state.withLock { $0.onFinish = finish }
+        let pending: Result<Void, any Error>? = state.withLock {
+            guard let result = $0.result else {
+                $0.onFinish = finish
+                return nil
+            }
+            $0.result = nil
+            return result
+        }
+        if let pending { finish(pending) }
     }
 
     func urlSession(
@@ -303,27 +323,39 @@ private final class Sink: NSObject, URLSessionDataDelegate, Sendable {
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
-        let outcome: (finish: (@Sendable (Result<Void, any Error>) -> Void)?, recorded: (any Error)?)? =
-            state.withLock {
-                guard !$0.finished else { return nil }
-                $0.finished = true
-                try? $0.handle.synchronize()
-                try? $0.handle.close()
-                let finish = $0.onFinish
-                $0.onFinish = nil
-                return (finish, $0.failure)
-            }
-        guard let outcome else { return }
+        // Deciding the result, taking the waiter and parking an unclaimed
+        // result all happen in ONE critical section. Split across two, a
+        // `setFinish` interleaving between them would see no parked result,
+        // store its closure into a slot nobody reads again, and strand the
+        // continuation.
+        let delivery: (finish: @Sendable (Result<Void, any Error>) -> Void, result: Result<Void, any Error>)? =
+            state.withLock { state in
+                guard !state.finished else { return nil }
+                state.finished = true
+                try? state.handle.synchronize()
+                try? state.handle.close()
 
-        // A status we refused (`recorded`) reads as a URLError.cancelled
-        // here because WE cancelled the task — report the real reason, not
-        // the cancellation it wore on the way out.
-        if let recorded = outcome.recorded {
-            outcome.finish?(.failure(recorded))
-        } else if let error {
-            outcome.finish?(.failure((error as? URLError)?.code == .cancelled ? CancellationError() : error))
-        } else {
-            outcome.finish?(.success(()))
-        }
+                // A status we refused (`failure`) reads as a URLError.cancelled
+                // here because WE cancelled the task — report the real reason,
+                // not the cancellation it wore on the way out.
+                let result: Result<Void, any Error>
+                if let recorded = state.failure {
+                    result = .failure(recorded)
+                } else if let error {
+                    result = .failure((error as? URLError)?.code == .cancelled ? CancellationError() : error)
+                } else {
+                    result = .success(())
+                }
+
+                guard let onFinish = state.onFinish else {
+                    // Nobody is waiting yet; `setFinish` delivers it.
+                    state.result = result
+                    return nil
+                }
+                state.onFinish = nil
+                return (onFinish, result)
+            }
+        // Called outside the lock: the continuation resume must not run under it.
+        if let delivery { delivery.finish(delivery.result) }
     }
 }

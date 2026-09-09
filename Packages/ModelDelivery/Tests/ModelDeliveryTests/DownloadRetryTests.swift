@@ -17,6 +17,11 @@
 //  body waits on its own cancellation rather than on a clock, so only the
 //  production watchdog watches time, at an injected polling rate.
 //
+//  The caller's own cancellation — a user pause — is asserted at the
+//  production stall and watchdog values, where 60 s of silence is unreachable
+//  by a test that finishes in milliseconds: nothing but the pause can end the
+//  operation, so a passing run cannot be the watchdog in disguise.
+//
 
 import Foundation
 import Synchronization
@@ -246,6 +251,127 @@ struct DownloadRetryTests {
         #expect(attempts.count == 1)
         #expect(retries.attemptNumbers.isEmpty)
     }
+
+    // MARK: - The caller's own cancellation
+
+    /// A pause cancels the caller, and the operation runs in an unstructured
+    /// task that does not inherit that cancellation — it has to be forwarded by
+    /// hand. Unforwarded, the pause cancels nothing: the transfer runs to
+    /// completion behind a paused UI and the caller returns its value.
+    ///
+    /// Production stall and watchdog values on purpose, so the watchdog cannot
+    /// be what stops the operation — `attempts.count == 1` proves it never
+    /// fired, leaving the caller's cancel as the only thing that could have.
+    /// They are also what keeps a regression readable: unforwarded, the
+    /// operation waits for a cancellation that never comes, and the watchdog
+    /// ends the run three minutes later with `.downloadStalled` instead of
+    /// hanging it. Slow to fail, but it does fail.
+    @Test("the caller's cancellation reaches the operation")
+    func callersCancellationReachesTheOperation() async {
+        let attempts = AttemptCounter()
+        let started = Signal()
+        let sawCancellation = Signal()
+        let ranToCompletion = Signal()
+
+        let caller = Task { () -> String in
+            try await DownloadRetry.withStallRetry { _ -> String in
+                _ = attempts.next()
+                started.send()
+                do {
+                    // Nothing but a cancellation ends this wait.
+                    try await waitUntilCancelled()
+                } catch {
+                    sawCancellation.send()
+                    throw error
+                }
+                ranToCompletion.send()
+                return "done"
+            }
+        }
+
+        // The rendezvous: the operation is provably running before it is
+        // cancelled, so the cancel cannot land before the attempt starts.
+        await started.wait()
+        caller.cancel()
+        let outcome = await caller.result
+
+        #expect(sawCancellation.isSent)
+        #expect(!ranToCompletion.isSent)
+        #expect(throws: CancellationError.self) { try outcome.get() }
+        #expect(attempts.count == 1)
+    }
+
+    /// The other half of the same defect. At the catch site a paused caller
+    /// looks exactly like a stalled one, and retrying it would re-run the
+    /// download the user just paused, so `onRetry` has to stay silent. The
+    /// default three attempts, so there is a retry available to be wrongly
+    /// taken.
+    @Test("a cancelled caller is never retried")
+    func aCancelledCallerIsNeverRetried() async {
+        let attempts = AttemptCounter()
+        let retries = RetryLog()
+        let started = Signal()
+
+        let caller = Task { () -> String in
+            try await DownloadRetry.withStallRetry(
+                onRetry: { attempt in retries.record(attempt) },
+                operation: { _ -> String in
+                    _ = attempts.next()
+                    started.send()
+                    try await waitUntilCancelled()
+                    return "done"
+                }
+            )
+        }
+
+        await started.wait()
+        caller.cancel()
+        let outcome = await caller.result
+
+        #expect(retries.attemptNumbers.isEmpty)
+        #expect(attempts.count == 1)
+        #expect(throws: CancellationError.self) { try outcome.get() }
+    }
+
+    /// The check at the top of the retry loop. `onRetry` runs on the caller's
+    /// own task, in the gap between the attempt that stalled and the one about
+    /// to start, so cancelling from inside it lands exactly there — no clock
+    /// decides when the cancellation arrives.
+    @Test("a caller cancelled between attempts starts no new attempt")
+    func aCallerCancelledBetweenAttemptsStartsNoNewAttempt() async {
+        let attempts = AttemptCounter()
+        let retries = RetryLog()
+        let ready = Signal()
+        let callerBox = Mutex<Task<String, any Error>?>(nil)
+
+        let caller = Task { () -> String in
+            // Held until the box holds this task, so `onRetry` can reach it.
+            await ready.wait()
+            return try await DownloadRetry.withStallRetry(
+                attempts: 3,
+                stallTimeout: 0.05,
+                watchdogInterval: 0.01,
+                onRetry: { attempt in
+                    retries.record(attempt)
+                    let pending = callerBox.withLock { $0 }
+                    pending?.cancel()
+                },
+                operation: { _ -> String in
+                    _ = attempts.next()
+                    try await waitUntilCancelled()
+                    return "unreachable"
+                }
+            )
+        }
+        callerBox.withLock { $0 = caller }
+        ready.send()
+
+        await #expect(throws: CancellationError.self) { try await caller.value }
+        // The first attempt stalled and a second was announced; the
+        // cancellation stopped it before it could run.
+        #expect(retries.attemptNumbers == [2])
+        #expect(attempts.count == 1)
+    }
 }
 
 // MARK: - Helpers
@@ -279,6 +405,46 @@ private final class RetryLog: Sendable {
     }
 
     var attemptNumbers: [Int] { attempts.withLock { $0 } }
+}
+
+/// A one-shot signal: `send()` releases every `wait()`, in either order, and
+/// `isSent` answers without waiting at all.
+///
+/// The rendezvous a cancellation test needs. A test that cancels has to know
+/// the operation is already running, and asking a clock that question would
+/// make the answer a race.
+private final class Signal: Sendable {
+
+    private struct State {
+        var isSent = false
+        var waiters: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    var isSent: Bool { state.withLock { $0.isSent } }
+
+    func send() {
+        let waiters: [CheckedContinuation<Void, Never>] = state.withLock {
+            guard !$0.isSent else { return [] }
+            $0.isSent = true
+            let pending = $0.waiters
+            $0.waiters = []
+            return pending
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let alreadySent: Bool = state.withLock {
+                guard !$0.isSent else { return true }
+                $0.waiters.append(continuation)
+                return false
+            }
+            if alreadySent { continuation.resume() }
+        }
+    }
 }
 
 /// Suspends until the surrounding task is cancelled, then throws

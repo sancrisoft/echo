@@ -12,10 +12,15 @@
 //    than the real repo: these cases (server ignores Range, 416, short body,
 //    5xx) are exactly the ones a real download won't reproduce on demand.
 //
-//  Nothing here waits on a clock. The server can be gated mid-body, so a test
-//  that needs a transfer to be provably incomplete says so with a signal rather
-//  than by pacing bytes against a stopwatch, and every partial lives in a
-//  `TemporaryDirectory` that is removed with the test.
+//  Nothing here waits on a clock, with one exception: a transfer that must
+//  RETURN is raced against a bounded backstop, because the failure it guards
+//  against is a stranded continuation, and a stranded continuation would
+//  otherwise hang the whole run instead of failing one test. The backstop
+//  measures nothing — it only turns a hang into a message. Everything else is
+//  a signal: the server can be gated mid-body, so a test that needs a transfer
+//  to be provably incomplete says so rather than pacing bytes against a
+//  stopwatch, and every partial lives in a `TemporaryDirectory` that is
+//  removed with the test.
 //
 
 import EchoCoreTestSupport
@@ -319,6 +324,44 @@ struct ResumableFileDownloadTests {
         }
     }
 
+    /// A caller already cancelled when the transfer begins must still come
+    /// back. The URLSession task is cancelled before it is resumed, so the
+    /// delegate can finish it before anyone is waiting on the result — and a
+    /// result dropped there strands the checked continuation. The transfer
+    /// never returns, with no error, no bytes and nothing to diagnose; parking
+    /// the result until someone waits is what makes a pause come back.
+    ///
+    /// The one bounded wait in this file guards it: the healthy path returns in
+    /// milliseconds, and the backstop exists so a regression fails loudly
+    /// instead of hanging the run. It sequences nothing.
+    @Test("a transfer cancelled before it starts comes back instead of hanging")
+    func transferCancelledBeforeItStartsComesBack() async throws {
+        let body = Self.payload(bytes: 64 * 1024)
+        let server = try await LocalHTTPServer.start(body: body, behavior: .rangeAware)
+        defer { server.stop() }
+
+        try await Self.withScratchFile { partial in
+            let url = try server.url
+            let released = Latch()
+            let transfer = Task { () -> Int64 in
+                // Held until the cancellation is in place, so the fetch is
+                // provably already cancelled when it reaches the network.
+                await released.wait()
+                return try await ResumableFileDownload.fetch(
+                    from: url,
+                    expectedBytes: Int64(body.count),
+                    into: partial,
+                    progress: { _ in }
+                )
+            }
+            transfer.cancel()
+            released.signal()
+
+            let outcome = await Self.outcome(of: transfer)
+            #expect(outcome == .cancelled)
+        }
+    }
+
     // MARK: - Helpers
 
     /// Runs `body` against a partial file inside a fresh temp directory, then
@@ -327,6 +370,43 @@ struct ResumableFileDownloadTests {
         let temp = try TemporaryDirectory(prefix: "ResumableFileDownloadTests")
         defer { temp.remove() }
         return try await body(temp.path("weights.safetensors.partial"))
+    }
+
+    /// How long the backstop waits before a transfer counts as hung. Generous
+    /// on purpose — it is not measuring anything, only keeping a stranded
+    /// continuation from taking the whole run down with it, so a loaded machine
+    /// has no way to trip it.
+    private static let hangBackstop = Duration.seconds(15)
+
+    /// How `transfer` ended, or nil when it never ended at all.
+    private static func outcome(of transfer: Task<Int64, any Error>) async -> TransferOutcome? {
+        let settled = Mutex<TransferOutcome?>(nil)
+        let answered = Latch()
+
+        let waiter = Task {
+            do {
+                let bytes = try await transfer.value
+                settled.withLock { $0 = .returned(bytes) }
+            } catch is CancellationError {
+                settled.withLock { $0 = .cancelled }
+            } catch {
+                settled.withLock { $0 = .failed(String(describing: error)) }
+            }
+            answered.signal()
+        }
+        let backstop = Task {
+            try? await Task.sleep(for: hangBackstop)
+            answered.signal()
+        }
+        await answered.wait()
+        backstop.cancel()
+        waiter.cancel()
+
+        let outcome = settled.withLock { $0 }
+        if outcome == nil {
+            Issue.record("The cancelled transfer never returned: its continuation was stranded.")
+        }
+        return outcome
     }
 
     /// Deterministic, incompressible-enough payload; the byte pattern makes a
@@ -342,6 +422,15 @@ struct ResumableFileDownloadTests {
 }
 
 // MARK: - Test doubles
+
+/// How a transfer ended, flattened to something `Equatable` so the assertion is
+/// one comparison and a regression prints what came back instead of the fact
+/// that a `Result` was not the one expected.
+private enum TransferOutcome: Equatable, Sendable {
+    case cancelled
+    case returned(Int64)
+    case failed(String)
+}
 
 /// Collects progress samples off URLSession's delegate queue.
 private final class Samples: Sendable {

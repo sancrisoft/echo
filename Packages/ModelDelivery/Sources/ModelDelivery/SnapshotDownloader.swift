@@ -102,6 +102,31 @@ public struct SnapshotDownloader: Sendable {
         partialDownloadDirectory.appending(path: name + ".partial", directoryHint: .notDirectory)
     }
 
+    // MARK: - The weight-file decision
+
+    /// What a weight file already sitting in the snapshot directory means for
+    /// this attempt.
+    ///
+    /// Pure so the arithmetic is table-testable with no network, in the same
+    /// spirit as `ResumableFileDownload.resumeDecision`. It has one caller too
+    /// many to inline: the tally's opening balance and the transfer loop's
+    /// skip branch MUST agree, because a file counted by one and committed by
+    /// the other is counted twice — and on a sharded repo that saturates the
+    /// fraction, which is also the stall heartbeat, so a healthy download is
+    /// cancelled as a stall and eventually fails.
+    enum WeightDisposition: Equatable, Sendable {
+        /// Present at its published size. It belongs in the opening balance
+        /// and must not be committed again.
+        case alreadyCommitted(bytes: Int64)
+        /// Absent, partial, or of some other size — transfer it.
+        case transfer
+    }
+
+    static func disposition(onDiskBytes: Int64, expectedBytes: Int64?) -> WeightDisposition {
+        guard let expectedBytes, onDiskBytes == expectedBytes else { return .transfer }
+        return .alreadyCommitted(bytes: expectedBytes)
+    }
+
     // MARK: - What is already on disk
 
     /// Whether a complete snapshot is already on disk: manifest AND
@@ -271,10 +296,18 @@ public struct SnapshotDownloader: Sendable {
             configBytes: configBytes,
             weightBytes: weights.reduce(Int64(0)) { $0 + Int64($1.metadata.size ?? 0) }
         )
-        // Weight bytes an earlier attempt already committed: counted from the
-        // start so a resumed download's bar continues instead of restarting.
+        // Weight files an earlier attempt already committed at their published
+        // size: counted from the start so a resumed download's bar continues
+        // instead of restarting. The same decision the loop below uses, so the
+        // opening balance and the skip branch can never disagree.
         let alreadyCommitted = weights.reduce(Int64(0)) { total, weight in
-            total + ResumableFileDownload.byteCount(at: snapshotDirectory.appending(path: weight.name))
+            switch Self.disposition(
+                onDiskBytes: ResumableFileDownload.byteCount(at: snapshotDirectory.appending(path: weight.name)),
+                expectedBytes: weight.metadata.size.map(Int64.init)
+            ) {
+            case .alreadyCommitted(let bytes): return total + bytes
+            case .transfer: return total
+            }
         }
         let tally = SnapshotDownloadTally(budget: budget, committedWeightBytes: alreadyCommitted)
         report(tally.fraction)
@@ -292,13 +325,17 @@ public struct SnapshotDownloader: Sendable {
             let destination = snapshotDirectory.appending(path: weight.name)
             let expected = weight.metadata.size.map(Int64.init)
 
-            // Already committed at the published size: leave it alone (this is
-            // what makes a re-run after a partial snapshot cheap) but make sure
-            // the Hub sidecar is there, since a file this package wrote is
-            // otherwise invisible to the Hub's own resume bookkeeping.
-            if let expected, ResumableFileDownload.byteCount(at: destination) == expected {
+            if case .alreadyCommitted = Self.disposition(
+                onDiskBytes: ResumableFileDownload.byteCount(at: destination),
+                expectedBytes: expected
+            ) {
+                // Leave it alone — this is what makes a re-run after a partial
+                // snapshot cheap — but make sure the Hub sidecar is there,
+                // since a file this package wrote is otherwise invisible to the
+                // Hub's own resume bookkeeping. No commit: the opening balance
+                // already counts these bytes.
                 try writeHubSidecar(for: weight.name, metadata: weight.metadata)
-                report(tally.commitWeightFile(bytes: expected))
+                report(tally.fraction)
                 continue
             }
 
