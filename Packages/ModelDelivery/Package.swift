@@ -24,8 +24,13 @@ let package = Package(
         // the models/<org>/<repo> layout this package downloads into. It is a
         // swift-transformers product, not a swift-huggingface one.
         .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.3.3"),
-        // Pinned to the version the PoC measured this transport against.
-        // swift-transformers asks for `from: "0.8.1"`, which floats past it.
+        // `Hub` is built on this, and swift-transformers asks for it as
+        // `from: "0.8.1"` — which floats to a version the PoC never measured.
+        // Pinned to the measured one. The target below takes a dependency on
+        // its product even though no file imports it: a package dependency no
+        // target consumes is pruned from the graph, so without that edge this
+        // `exact` would bind only when ModelDelivery is the root package and
+        // would be silently ignored by everyone who depends on it.
         .package(url: "https://github.com/huggingface/swift-huggingface.git", exact: "0.9.0"),
     ],
     targets: [
@@ -34,6 +39,9 @@ let package = Package(
             dependencies: [
                 .product(name: "EchoCore", package: "EchoCore"),
                 .product(name: "Hub", package: "swift-transformers"),
+                // Not imported anywhere: this edge is what makes the `exact`
+                // pin above survive into a consuming package's graph.
+                .product(name: "HuggingFace", package: "swift-huggingface"),
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
