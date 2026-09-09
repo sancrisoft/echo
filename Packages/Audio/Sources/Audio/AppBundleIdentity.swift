@@ -77,9 +77,12 @@ public enum AppBundleIdentity {
     private static func executablePath(ofPID pid: pid_t) -> String? {
         // PROC_PIDPATHINFO_MAXSIZE (4 * MAXPATHLEN) — the size `proc_pidpath`
         // documents as always sufficient; it is not exposed to Swift.
-        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
-        return String(cString: buffer)
+        var buffer = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        // The return value is the path's length, so the bytes are decoded to
+        // exactly that and never scanned for a terminator.
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(decoding: buffer.prefix(Int(length)), as: UTF8.self)
     }
 
     // MARK: - Cache
