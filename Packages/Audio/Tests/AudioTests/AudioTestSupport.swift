@@ -9,6 +9,11 @@
 //  true device signal), and asking whether a scenario recorded that optional
 //  extra at all.
 //
+//  It also holds what the echo-cancellation suites need on top of that: a
+//  scenario's channel pair, the signal measures their assertions are written
+//  in, and the replay loop that drives an `AECStage` at the real capture
+//  cadence.
+//
 //  Nothing here records, nothing touches capture hardware, and nothing writes
 //  outside a `TemporaryDirectory`. Fixture reads are read-only and gated by
 //  the caller on `Fixtures.available(_:)` or `micNativeAvailable(_:)`.
@@ -101,5 +106,74 @@ enum AudioTestSupport {
         FileManager.default.fileExists(
             atPath: Fixtures.url(scenario: scenario, file: "mic-native.wav").path
         )
+    }
+
+    /// Both channels of a scenario, canonical 16 kHz mono. A scenario is only
+    /// ever a complete pair, so callers gate on `Fixtures.available(_:)`
+    /// first and this loader does not check again.
+    static func loadPair(_ scenario: String) throws -> (mic: [Float], system: [Float]) {
+        (
+            mic: try loadWAV(at: Fixtures.url(scenario: scenario, file: "mic.wav")),
+            system: try loadWAV(at: Fixtures.url(scenario: scenario, file: "system.wav"))
+        )
+    }
+}
+
+/// The signal measures the echo-cancellation suites assert on. Mean-square
+/// energy and rms are kept apart on purpose: the double-talk criterion
+/// compares energies, the speech gates compare rms and peak, and squaring
+/// twice by accident would move a threshold silently.
+enum SignalMetrics {
+
+    static func rms(_ samples: ArraySlice<Float>) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sum: Float = 0
+        for sample in samples { sum += sample * sample }
+        return (sum / Float(samples.count)).squareRoot()
+    }
+
+    static func rms(_ samples: [Float]) -> Float { rms(samples[...]) }
+
+    static func peak(_ samples: ArraySlice<Float>) -> Float {
+        samples.reduce(0) { max($0, abs($1)) }
+    }
+
+    static func peak(_ samples: [Float]) -> Float { peak(samples[...]) }
+
+    /// Mean-square energy — what the double-talk preservation criterion
+    /// compares.
+    static func energy(_ samples: ArraySlice<Float>) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sum: Float = 0
+        for sample in samples { sum += sample * sample }
+        return sum / Float(samples.count)
+    }
+}
+
+/// Replays a fixture pair through an `AECStage` in interleaved 10 ms chunks,
+/// mirroring the real capture cadence. Far end is fed first in each step: in
+/// production the reference copy is taken from the system stream before its
+/// bleed reaches the mic.
+enum AECFixtureRunner {
+
+    /// 10 ms at 16 kHz — the engine's own frame, and the cadence the capture
+    /// callbacks deliver.
+    static let chunkSize = 160
+
+    static func process(mic: [Float], system: [Float], through stage: any AECStage) -> [Float] {
+        var output: [Float] = []
+        output.reserveCapacity(mic.count)
+        var offset = 0
+        let total = max(mic.count, system.count)
+        while offset < total {
+            if offset < system.count {
+                stage.feedFarEnd(Array(system[offset..<min(offset + chunkSize, system.count)]))
+            }
+            if offset < mic.count {
+                output += stage.processMicSamples(Array(mic[offset..<min(offset + chunkSize, mic.count)]))
+            }
+            offset += chunkSize
+        }
+        return output
     }
 }

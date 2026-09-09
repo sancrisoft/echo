@@ -25,10 +25,44 @@ let package = Package(
         .package(path: "../EchoCore"),
     ],
     targets: [
+        // The vendored WebRTC audio-processing module (AEC3), arm64 macOS,
+        // static. Vendor/webrtc-apm/VERSION records the upstream tag, the
+        // commit, how the archive was built and how to regenerate this
+        // xcframework from it.
+        .binaryTarget(name: "WebRTCAPM", path: "Vendor/WebRTCAPM.xcframework"),
+
+        // The one seam between Swift and C++. SPM has no bridging headers, so
+        // the ObjC++ implementation is its own target with a public header in
+        // include/, and the Swift target imports it as a module. No WebRTC
+        // type appears in that header.
+        //
+        // Both header roots the upstream pkg-config demands are on the search
+        // path, taken from inside the xcframework so the repository carries
+        // exactly one copy of the headers and one copy of the archive: the
+        // public headers include each other as "api/…" and "rtc_base/…"
+        // (relative to webrtc-audio-processing-2/) and abseil's as "absl/…"
+        // (relative to its parent). The macos-arm64 slice is named directly
+        // because Echo is Apple-Silicon-only; a second slice would need this
+        // and the Package's platform list changed together.
+        .target(
+            name: "WebRTCAECBridge",
+            dependencies: ["WebRTCAPM"],
+            cxxSettings: [
+                .headerSearchPath("../../Vendor/WebRTCAPM.xcframework/macos-arm64/Headers"),
+                .headerSearchPath(
+                    "../../Vendor/WebRTCAPM.xcframework/macos-arm64/Headers/webrtc-audio-processing-2"
+                ),
+                // The consumer cflag upstream's pkg-config specifies. The
+                // implementation defines it too, so a build that reaches the
+                // translation unit some other way still compiles.
+                .define("WEBRTC_POSIX"),
+            ]
+        ),
         .target(
             name: "Audio",
             dependencies: [
                 .product(name: "EchoCore", package: "EchoCore"),
+                "WebRTCAECBridge",
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -41,5 +75,6 @@ let package = Package(
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
-    ]
+    ],
+    cxxLanguageStandard: .gnucxx20
 )
