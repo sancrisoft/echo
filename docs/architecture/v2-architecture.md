@@ -190,9 +190,12 @@ names inside a package are free to change.
 - `CaptureGapTracker`, `RetainedAudioWriter`, `AppBundleIdentity`.
 
 **Transcription**
-- `ParakeetModel` (actor; `state`, `initialize(deferWhile:)`, `readyModelDirectory()`).
-- `TranscriptionPass.run(retainedFiles:model:shouldYield:onProgress:) -> [TranscriptSegment]`, `PassProgress`, `TranscriptionError`.
+- `ParakeetModel` (actor; `state`, `initialize(deferWhile:)`, `readyModelDirectory()`, the identity constants `modelID`/`modelDisplayName`/`modelDisplaySize`/`attribution`, `modelDirectory(in:)` and `resolvedModelDirectory(in:)`). Built with an injected `modelsRoot` plus optional `modelsPresent`/`downloader`/`deferPollInterval` seams, so the lifecycle is testable without a 480 MB download. The two directory accessors differ on purpose: FluidAudio discards the last component of the directory it is handed and appends its own `Repo.folderName`, so `modelDirectory(in:)` is what the library is passed and `resolvedModelDirectory(in:)` is where the bytes land.
+- `TranscriptionPass.run(retainedFiles:model:shouldYield:onProgress:onEvent:) -> [TranscriptSegment]`, plus the shaping surface the tables exercise (`segments(from:text:duration:channel:silenceStarts:)`, `spanLevels(of:envelopes:)`, `readSamples(at:)`, `canStartSegment`, `carriesAWord`, `wordBoundary`) and the measured constants (`sampleRate`, `segmentGapSeconds`, `silenceSplitSeconds`, `maxSegmentSeconds`, `yieldPollInterval`).
+- `PassProgress` (the one clamped, monotonic fraction), `EnergyEnvelope` (`rms`, `silenceStarts`, `longestDominantRun`, `frameSeconds`, `silenceFloor`), `TranscriptionError`.
+- `PassEvent` — the structured replay sink (`channelDecoded`, `segmentProduced`, `segmentSuppressed`), carrying ids, spans and scores only. It replaces the PoC's `(String) -> Void` diagnostic sink, whose every line contained transcript text by construction; a harness that wants words reads them from the segments it already holds.
 - `EchoDedupPolicy` (also used by tests and diagnostics).
+- `TranscriptChunk`, `ChunkAssembler`, `TranscriptChunker`, `ChunkingConfig`, `TokenEstimating`/`HeuristicTokenEstimator`. **Ownership is unresolved.** §2 assigns transcript chunking to Summarization, and the ports of §11 landed it here because issue #87 groups it with dedup as one shaping layer. Summarization may not import Transcription (siblings), so as it stands the only consumer cannot reach it: either the file moves to Summarization when that package lands, or the graph gains that edge. Nothing depends on it yet, so the choice is still free.
 
 **Summarization**
 - `SummaryModel` (actor; `state`, download/pause/resume, `withEngine`).

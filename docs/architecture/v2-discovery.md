@@ -302,7 +302,11 @@ Grouped by what they cost, not by file.
     from nine files; ~195 lines of screenshot harness in `DashboardView.body`;
     a fixture recorder with `NSOpenPanel` in the popover.
 11. **Model delivery is asymmetric.** The resumable transport, tally, manifest
-    and disk floor are LLM-only; Parakeet gets file-count progress. The Parakeet
+    and disk floor are LLM-only; Parakeet rides FluidAudio's own transport. Its
+    progress is byte-weighted there too — read at the pinned 0.15.5 during the
+    Transcription port — and degrades to a per-file count only when the repo
+    listing carries no sizes, which is the one case where a slow link can look
+    idle to the stall watchdog on a healthy transfer. The Parakeet
     `modelDirectory` constant names a folder (`…-coreml`) that never exists.
 12. **Repository hygiene.** `.gitignore` line 36 concatenates two patterns
     (missing newline), so `meetings_sample/` — real meeting transcripts — and a
