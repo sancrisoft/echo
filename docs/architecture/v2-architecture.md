@@ -195,11 +195,11 @@ names inside a package are free to change.
 - `PassProgress` (the one clamped, monotonic fraction), `EnergyEnvelope` (`rms`, `silenceStarts`, `longestDominantRun`, `frameSeconds`, `silenceFloor`), `TranscriptionError`.
 - `PassEvent` — the structured replay sink (`channelDecoded`, `segmentProduced`, `segmentSuppressed`), carrying ids, spans and scores only. It replaces the PoC's `(String) -> Void` diagnostic sink, whose every line contained transcript text by construction; a harness that wants words reads them from the segments it already holds.
 - `EchoDedupPolicy` (also used by tests and diagnostics).
-- `TranscriptChunk`, `ChunkAssembler`, `TranscriptChunker`, `ChunkingConfig`, `TokenEstimating`/`HeuristicTokenEstimator`. **Ownership is unresolved.** §2 assigns transcript chunking to Summarization, and the ports of §11 landed it here because issue #87 groups it with dedup as one shaping layer. Summarization may not import Transcription (siblings), so as it stands the only consumer cannot reach it: either the file moves to Summarization when that package lands, or the graph gains that edge. Nothing depends on it yet, so the choice is still free.
 
 **Summarization**
 - `SummaryModel` (actor; `state`, download/pause/resume, `withEngine`).
 - `Summarizer.generate(from:language:) -> AsyncThrowingStream<SummaryDocument, Error>`, `SummaryDocument` (markdown, facts snapshot, model name), `Summarizer.caption(for:)`, `SummarizationError`.
+- `TranscriptChunk`, `ChunkAssembler`, `TranscriptChunker`, `ChunkingConfig`, `TokenEstimating`/`HeuristicTokenEstimator`. Ownership resolved as §2 always had it: chunking is the map route's input stage and its only consumer is the summarizer. The Transcription port landed it there first because issue #87 grouped it with dedup as one shaping layer, and a sibling cannot be imported, so the file moved here when this package opened rather than the graph gaining an edge for one struct.
 
 **ModelDelivery**
 - `SnapshotDownloader(modelsRoot:spec:diskFloor:)`: `snapshotDirectory`, `manifestFileURL`, `partialDownloadDirectory`, `snapshotExists()`, `partialDownloadBytes()`, `download(progress:)`; `SnapshotSpec` (repo id, weight/config globs, manifest and partial-directory names), `SnapshotDownloadPhase`.

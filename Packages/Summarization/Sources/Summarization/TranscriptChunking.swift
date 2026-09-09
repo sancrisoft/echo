@@ -1,6 +1,6 @@
 //
 //  TranscriptChunking.swift
-//  Transcription
+//  Summarization
 //
 //  Deterministic, pure-Swift assembly of the ordered `TranscriptSegment`
 //  stream into overlapping, token-bounded chunks.
