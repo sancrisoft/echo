@@ -486,8 +486,13 @@ public actor SummaryModel {
     /// relative to the 4B weights. This is not a memory ceiling — none exists —
     /// it is the one thing about MLX's memory that CAN be bounded, and it is set
     /// on every load because it is a global.
+    ///
+    /// 20 MB is the measured value and is carried unchanged; only the spelling
+    /// moved. `GPU.set(cacheLimit:)`, which the PoC calls, is deprecated in
+    /// mlx-swift 0.31.6 in favour of this property, and is implemented as a
+    /// one-line forwarder to it — so this is the same call, without the warning.
     static let liveLoader: SummaryEngineLoader = { directory in
-        MLX.GPU.set(cacheLimit: 20 * 1024 * 1024)
+        MLX.Memory.cacheLimit = 20 * 1024 * 1024
         let container = try await LLMModelFactory.shared.loadContainer(
             from: directory,
             using: SummaryTokenizerLoader()
