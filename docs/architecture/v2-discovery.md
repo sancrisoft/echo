@@ -3,7 +3,8 @@
 Date: 2026-09-08. Source: the `main` branch at `68632af` (v0.0.13), the GitHub
 issues #44–#156, the internal design (not in the repository), and the local
 planning board under `.conduct/` (gitignored). Every file reference below points
-at `main`; read it with `git show main:<path>`.
+at `main`; read it with `git show origin/main:<path>` after a
+`git fetch origin main`, so a stale local ref cannot answer in its place.
 
 This document separates **what the product does** from **how the PoC does it**,
 so that v2 can be designed from the product and not from the code. It is not an

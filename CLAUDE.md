@@ -14,9 +14,12 @@ is the channel, never diarization. Everything stays on the Mac under one data
 folder, `~/Library/Application Support/Echo`, which v1 and v2 share unchanged.
 
 The v2 rebuild lives on this branch. The shipping PoC (v1) lives on `main`; read
-its code with `git show main:Echo/<File>.swift` when porting, never copy it
-blindly. `docs/architecture/v2-discovery.md` §7 lists the behaviors and measured
-constants a port must preserve, with their reasons.
+its code with `git fetch origin main && git show origin/main:Echo/<File>.swift`
+when porting, never copy it blindly. Always the remote ref, never the local
+`main`: `git show` resolves a ref offline, so a local `main` left a few commits
+behind hands you stale sources and says nothing — you find out when the port
+disagrees with production. `docs/architecture/v2-discovery.md` §7 lists the
+behaviors and measured constants a port must preserve, with their reasons.
 
 ## Repository map
 

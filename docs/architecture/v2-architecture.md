@@ -420,7 +420,9 @@ Adopted in ADR-004.
 ## 11. Transition from the PoC
 
 The v2 branch does not carry the PoC sources. `main` keeps shipping and receiving
-hotfixes; `git show main:Echo/<File>.swift` is how a port reads the original.
+hotfixes; `git fetch origin main && git show origin/main:Echo/<File>.swift` is how
+a port reads the original — the remote ref, so a stale local `main` cannot
+silently feed a port the wrong sources.
 
 Order of work after the foundation (each item creates its package and brings the
 PoC's tests for that module with it):
