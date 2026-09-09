@@ -9,6 +9,7 @@
 
 import DesignSystem
 import EchoCore
+import Recording
 import SwiftUI
 import Workspace
 
@@ -51,6 +52,7 @@ struct EchoApp: App {
                 .environment(composition.library)
                 .environment(composition.settings)
                 .environment(composition.workspace)
+                .environment(composition.session)
                 .preferredColorScheme(colorSchemeOverride)
                 .snapshotIfRequested(composition)
         }
