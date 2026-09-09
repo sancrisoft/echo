@@ -206,15 +206,27 @@ public actor SummaryModel {
     /// composition root calls this at launch. A busy state is left alone — an
     /// in-flight download's fraction is more truthful than anything on disk.
     ///
-    /// Precedence is `ready` > `paused` > `partiallyDownloaded`: a complete
-    /// snapshot makes a stale pause irrelevant, and a pause outranks the
-    /// partial files it left behind, because the UI must offer Resume rather
-    /// than silently auto-resuming.
+    /// Precedence is `ready` > `failed` > `paused` > `partiallyDownloaded`: a
+    /// complete snapshot makes a stale pause or a stale error irrelevant, a
+    /// failure the user has not acted on outlives a refresh, and a pause
+    /// outranks the partial files it left behind, because the UI must offer
+    /// Resume rather than silently auto-resuming.
+    ///
+    /// `failed` ranking above the at-rest answers is the non-obvious one. Disk
+    /// cannot tell that the last attempt failed, so resolving from disk alone
+    /// would replace the message and its Retry affordance with a bare "not
+    /// downloaded" — and architecture section 7 puts an expected failure on this
+    /// state precisely so the UI has copy to show and an action to offer. The
+    /// notice clears when the user acts (`resumeDownload`, or a retry that
+    /// succeeds) or when the snapshot turns out to be complete after all.
     public func refreshState() {
         guard !state.isBusy else { return }
         if snapshotExistsCheck() {
             state = .ready
-        } else if pauseStore.isPaused {
+            return
+        }
+        if case .failed = state { return }
+        if pauseStore.isPaused {
             state = .paused
         } else {
             state = partialBytesCheck() != nil ? .partiallyDownloaded : .notDownloaded
@@ -441,8 +453,15 @@ public actor SummaryModel {
 
     /// Clears the paused intent. The caller re-runs `ensureDownloaded`, which
     /// resumes from the files already on disk.
+    ///
+    /// Resuming IS the user acting on a failure, so a failure notice is dropped
+    /// here — this is the one place besides a completed snapshot that clears
+    /// one. `refreshState` deliberately preserves it, so without this a user
+    /// who hit Resume after a failed attempt would keep staring at the old
+    /// error until the next transfer overwrote it.
     public func resumeDownload() {
         pauseStore.setPaused(false)
+        if case .failed = state { state = .notDownloaded }
         refreshState()
     }
 

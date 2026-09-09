@@ -348,4 +348,77 @@ struct SummaryModelPauseResumeTests {
         #expect(await model.state == .failed(expected.localizedDescription))
         #expect(await model.state != .paused)
     }
+
+    /// A failure notice has to survive until the user acts on it.
+    ///
+    /// Architecture section 7, tier 2: an expected failure becomes state on the
+    /// owning observable "with copy the UI can show and an action where one
+    /// exists (Retry, Resume)". `refreshState()` resolves the AT-REST state
+    /// from disk, and the disk cannot tell that the last attempt failed — so a
+    /// refresh must not be allowed to quietly replace the message and the Retry
+    /// affordance with a bare "not downloaded".
+    @Test("refreshing the at-rest state does not erase a failure the user has not acted on")
+    func refreshDoesNotEraseAFailure() async throws {
+        let temporary = try TemporaryDirectory(prefix: "SummaryModelPauseResumeTests")
+        defer { temporary.remove() }
+        let snapshot = SnapshotFlag(onDisk: false)
+        let model = makeModel(
+            in: temporary, downloader: FailingDownloader().download, snapshot: snapshot,
+            pauseStore: InMemoryPauseStore())
+
+        do { try await model.ensureDownloaded() } catch {}
+        let failure = await model.state
+        guard case .failed = failure else {
+            Issue.record("expected a failed state to refresh over, got \(failure)")
+            return
+        }
+
+        await model.refreshState()
+
+        #expect(await model.state == failure)  // the message and its Retry survive
+    }
+
+    /// The one thing that DOES clear a failure without the user retrying: the
+    /// snapshot turning out to be complete. Disk is the truth when it has
+    /// something to say, and a stale error about a model that is now on disk
+    /// would be the lie in the other direction.
+    @Test("a completed snapshot clears a stale failure on refresh")
+    func completeSnapshotClearsAFailure() async throws {
+        let temporary = try TemporaryDirectory(prefix: "SummaryModelPauseResumeTests")
+        defer { temporary.remove() }
+        let snapshot = SnapshotFlag(onDisk: false)
+        let model = makeModel(
+            in: temporary, downloader: FailingDownloader().download, snapshot: snapshot,
+            pauseStore: InMemoryPauseStore())
+
+        do { try await model.ensureDownloaded() } catch {}
+        snapshot.setExists(true)
+
+        await model.refreshState()
+
+        #expect(await model.state == .ready)
+    }
+
+    /// The other thing that clears a failure: the user asking for the download
+    /// to proceed. Resume is an action on the notice, so the notice goes.
+    @Test("resuming clears a failure the user is acting on")
+    func resumeClearsAFailure() async throws {
+        let temporary = try TemporaryDirectory(prefix: "SummaryModelPauseResumeTests")
+        defer { temporary.remove() }
+        let snapshot = SnapshotFlag(onDisk: false)
+        let model = makeModel(
+            in: temporary, downloader: FailingDownloader().download, snapshot: snapshot,
+            pauseStore: InMemoryPauseStore())
+
+        do { try await model.ensureDownloaded() } catch {}
+        guard case .failed = await model.state else {
+            Issue.record("expected a failed state to resume from")
+            return
+        }
+
+        await model.resumeDownload()
+
+        #expect(await model.state == .notDownloaded)  // the notice is gone
+        #expect(await model.isDownloadPaused == false)
+    }
 }
