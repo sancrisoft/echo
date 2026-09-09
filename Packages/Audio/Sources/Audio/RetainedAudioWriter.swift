@@ -26,11 +26,8 @@
 import AVFoundation
 import EchoCore
 import Foundation
-import os
 
 public actor RetainedAudioWriter {
-
-    private static let log = Logger(subsystem: AppIdentity.logSubsystem, category: "RetainedAudioWriter")
 
     /// AAC-LC mono 16 kHz at ~32 kbps: compressed speech-rate audio, bounded
     /// at roughly tens of MB per hour per channel — never raw WAV.
@@ -201,7 +198,15 @@ public actor RetainedAudioWriter {
     private func disable(reporting error: Error) {
         guard !isDisabled else { return }
         isDisabled = true
-        Self.log.error("Audio retention disabled for this session: \(String(describing: error), privacy: .public)")
+        // Through ErrorTrace, not a bare Logger: this is the tier-1 failure
+        // shape — a subordinate side effect disabling itself — and it is the
+        // one that costs a meeting its transcript, so it has to leave a trace
+        // in Logs/ and not only a line in the unified log.
+        ErrorTrace.record(
+            "Audio retention disabled for this session",
+            error: error,
+            category: "RetainedAudioWriter"
+        )
         let staged = files.mapValues(\.url)
         files.removeAll()
         for url in staged.values {
