@@ -363,6 +363,13 @@ public actor Summarizer {
                 throw SummarizationError.modelUnavailable(error.localizedDescription)
             }
 
+            // A cancelled stream ENDS, it does not throw: AsyncThrowingStream
+            // terminates and its iterator returns nil, so the loop above exits
+            // normally and `accumulated` looks like a document the model
+            // finished. Without this check a cancelled generation returns a
+            // truncated summary with no error — measured, not theorized.
+            try Task.checkCancellation()
+
             let document = SummaryText.sanitizedMarkdown(accumulated)
             if !document.isEmpty { return document }
             if attempt == 0 {
@@ -408,6 +415,11 @@ public actor Summarizer {
         } catch {
             throw SummarizationError.modelUnavailable(error.localizedDescription)
         }
+
+        // Same reason as in `generateMarkdown`: a cancelled stream ends rather
+        // than throwing, so without this a cancelled map returns the facts it
+        // happened to have parsed as if the part were fully extracted.
+        try Task.checkCancellation()
 
         // Every entry is newline-terminated by protocol, but flush a trailing
         // object in case the stream ends without one.
