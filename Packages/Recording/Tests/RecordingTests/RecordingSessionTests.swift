@@ -83,6 +83,35 @@ struct RecordingSessionLifecycleTests {
         }
     }
 
+    @Test func aStopIssuedDuringBringUpStillEndsTheSession() async throws {
+        // Both calls are async and bring-up takes seconds in production — a
+        // cold system tap and its private aggregate device are not cheap — so
+        // the two WILL overlap in the field. Serialized, the Stop waits for
+        // the start and then tears it down; unserialized, the Stop finds a
+        // phase that is not yet `.recording`, returns as a no-op, and leaves
+        // the microphone and the tap running with no session behind them.
+        let rig = CaptureRig()
+        try await withSession(rig: rig) { harness in
+            async let starting: Void = harness.session.start()
+            // Stop only once the start is genuinely in flight — otherwise the
+            // two child tasks can run in either order and "stop before start"
+            // is a different, uninteresting case.
+            await waitUntil("the session to begin bringing capture up") {
+                !rig.microphones.isEmpty
+            }
+            await harness.session.stop()
+            await starting
+
+            // Serialized, the Stop waited and tore down everything the start
+            // built. Unserialized, the start goes on to bring the system tap
+            // up AFTER the teardown has already run past it, and that tap is
+            // still running here with nobody holding it.
+            #expect(harness.session.phase == .idle)
+            #expect(rig.microphone?.stops == 1)
+            #expect(rig.systemCapture?.stops == 1)
+        }
+    }
+
     @Test func stoppingWhileIdleDoesNothing() async throws {
         try await withSession { harness in
             await harness.session.stop()

@@ -102,6 +102,18 @@ public final class RecordingSession {
     @ObservationIgnored private var deliveredFrames: ChannelFrameCounter?
     @ObservationIgnored private var retainedWriter: RetainedAudioWriter?
 
+    /// The chain that keeps `start` and `stop` from interleaving.
+    ///
+    /// Both are `async` and both take seconds — a cold system tap and its
+    /// private aggregate device are not cheap — so without this a Stop landing
+    /// mid-bring-up tears down what exists at that instant while the start
+    /// goes on building the rest, and the leftovers keep capturing with no
+    /// session behind them. Worse, a Start after that Stop would have the
+    /// older call assign its sources over the newer session's. Serializing
+    /// the two entry points removes the whole class: a Stop during a start
+    /// simply waits for it, which is also the honest answer to "stop what?".
+    @ObservationIgnored private var sessionTask: Task<Void, Never>?
+
     @ObservationIgnored private var micRestartTask: Task<Void, Never>?
     @ObservationIgnored private var systemRestartTask: Task<Void, Never>?
 
@@ -183,6 +195,23 @@ public final class RecordingSession {
     /// was actually established, which can be wider (a scoped tap that fails
     /// collapses to `.everything`, visibly).
     public func start(scope requestedScope: CaptureScope = .everything) async {
+        await serialized { await self.performStart(scope: requestedScope) }
+    }
+
+    /// Links one lifecycle call onto the chain and waits for it. The body runs
+    /// only after every earlier call has finished, so `phase` is never read by
+    /// one of them while another is midway through changing it.
+    private func serialized(_ body: @escaping @MainActor () async -> Void) async {
+        let previous = sessionTask
+        let task = Task { @MainActor in
+            await previous?.value
+            await body()
+        }
+        sessionTask = task
+        await task.value
+    }
+
+    private func performStart(scope requestedScope: CaptureScope) async {
         switch phase {
         case .recording, .stopping:
             // Already live, or mid-teardown: a second gesture is a no-op, not
@@ -484,6 +513,12 @@ public final class RecordingSession {
     }
 
     private func stopOutputDeviceHandling() async {
+        // Disarmed before the awaits below, mirroring the input side: a route
+        // change landing mid-teardown would otherwise schedule a tap rebuild
+        // that still sees `.recording` and outlives the session it rebuilt
+        // for. `stopEchoHandling` stops it again, harmlessly — the monitor
+        // only unregisters a listener it still holds.
+        outputRouteWatcher?.stop()
         systemRestartTask?.cancel()
         _ = await systemRestartTask?.value
         systemRestartTask = nil
@@ -528,9 +563,18 @@ public final class RecordingSession {
                 let processed = aec.processMicSamples(samples)
                 frames?.add(processed.count, to: .microphone)
                 // ONE task per callback carrying the gap and the samples
-                // together, never one per operation: the clock realignment
-                // has to land immediately before the first post-gap samples,
-                // and actor seriality is what guarantees that.
+                // together, never one per operation. That is what keeps a
+                // gap's clock realignment attached to the batch that closed
+                // it, so the two can never be separated by another callback's
+                // work.
+                //
+                // It does NOT order one callback against the next: unstructured
+                // tasks reach an actor in whatever order the executor gives
+                // them, and actor isolation only promises mutual exclusion.
+                // The measured shape is the PoC's and is carried unchanged
+                // (ADR-006); reordering between batches is a known cost of it,
+                // and changing the hand-off needs a measurement, not an
+                // opinion.
                 Task {
                     if let gap {
                         await monitor.noteCaptureGap(seconds: gap, on: .microphone)
@@ -565,6 +609,8 @@ public final class RecordingSession {
                 // reference; it never writes into it.
                 if feedsFarEnd { aec.feedFarEnd(samples) }
                 frames?.add(samples.count, to: .system)
+                // One task per callback, gap and samples together — see the
+                // microphone path for what that does and does not guarantee.
                 Task {
                     if let gap {
                         await monitor.noteCaptureGap(seconds: gap, on: .system)
@@ -653,8 +699,10 @@ public final class RecordingSession {
     /// summary run afterwards: a Stop that blocked for minutes is what made
     /// the PoC's hand-off from the popover to the window feel broken.
     public func stop() async {
-        guard phase.isRecording else { return }
-        await teardown(persisting: true)
+        await serialized {
+            guard self.phase.isRecording else { return }
+            await self.teardown(persisting: true)
+        }
     }
 
     /// The one teardown. `persisting: false` is the aborted-start path: the
