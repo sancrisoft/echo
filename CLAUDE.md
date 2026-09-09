@@ -59,7 +59,7 @@ Makefile             the commands
 | `ModelDelivery` | `SnapshotDownloader`/`SnapshotSpec`, `ResumableFileDownload`, `DownloadProgress` (the one clamp), `DownloadRetry`, `SnapshotDownloadTally`/`SnapshotDownloadBudget`, `SnapshotManifest`, `DownloadPauseStore`, `RetiredModelCleanup`, `DiskSpace` | EchoCore, swift-transformers (`Hub`) |
 | `Transcription` | `ParakeetModel` (identity, readiness, download), `TranscriptionPass` (the post-stop batch pass, segment shaping, `spanLevels`), `EnergyEnvelope`, `PassProgress`, `PassEvent`, `TranscriptionError`, `EchoDedupPolicy` | EchoCore, ModelDelivery, FluidAudio |
 | `Summarization` | `TextGenerating`/`GenerationParams` (the engine seam and its presets), `Summarizer` (routing, prompts, NDJSON facts, caption), `SummaryDocument`/`SummaryPhase`, `SummaryFacts` (`ChunkMapResult`/`MergedFacts`/`SummaryMerge`), `NDJSONLineValidator`, `TranscriptChunking`, `MLXTextEngine`, `SummaryModel` (identity, state, download/pause/load/unload), `SummarizationError`/`SummaryModelError` | EchoCore, ModelDelivery, mlx-swift-lm, mlx-swift, swift-transformers (`Tokenizers`) |
-| `Recording` *(pending)* | `RecordingSession` facade, finalization machine, summary scheduling | EchoCore, Audio, Transcription, Summarization, ModelDelivery, Meetings |
+| `Recording` | `RecordingSession` (`@Observable @MainActor`: `phase`, `levels`, `notices`, `currentMeetingID`, `queuedMeetingIDs`, `terminalFailureMeetingIDs`, `start`/`stop`, `retryTranscription`/`retranscribe`/`requestSummary`, `resumePendingFinalizations`/`kickSummaryBackfill`), `RecordingPhase`, `RecordingNotice`, `CaptureLevels`, `FinalizationMachine`, `SummaryBackfillPolicy`; internally `FinalizationDriver`, `SummaryScheduler`, `LevelWindow`/`ChannelFrameCounter`, the `CaptureScope` → `CaptureScopeRecord` mapping, and the capture/pass/summary seams the tests drive | EchoCore, Audio, Transcription, Summarization, ModelDelivery, Meetings |
 | `CallDetection` *(pending)* | mic-activity monitor, catalogs, `CallSessionMachine` | EchoCore, Audio |
 | `Updates` *(pending)* | release feed, checker, updater | EchoCore |
 | `Island` *(pending)* | the floating panel and its controller | EchoCore, CallDetection, Recording, DesignSystem |
@@ -74,14 +74,23 @@ rationale is in `docs/architecture/v2-architecture.md` §2 and ADR-001.
 packages never import each other. Engine packages never import SwiftUI, and
 AppKit only for process identity in files the boundary script allowlists.
 
+`App` also imports, directly, any engine package whose launch side effect it
+owns — today `ModelDelivery`, for the retired-model cleanup. That is the
+arrow above, not an exception to it: the composition root is where launch
+work lives (architecture §6). What it may not do is link a package it does
+not itself call; everything Recording pulls in resolves through Recording's
+own manifest.
+
 ## Finding code
 
 - Ask "who owns this?" and open that package's `Sources/` folder. Files are
   named after the concept they hold (`MeetingStore.swift`, `WorkspaceModel.swift`).
 - `grep -rn "public " Packages/<Name>/Sources` shows a package's API.
-- Side effects: disk is in `MeetingStore` (and later the audio writer and model
-  downloaders); the pasteboard, save panels and Finder are in
-  `Workspace/MeetingActions.swift`; launch-time work is in
+- Side effects: disk is in `MeetingStore` (meetings), `RetainedAudioWriter`
+  (a session's staged audio), `SnapshotDownloader`/`ResumableFileDownload`
+  (model files) and `ErrorTraceLog` (logs); the network is in `ModelDelivery`
+  alone; audio devices are in `Audio`; the pasteboard, save panels and Finder
+  are in `Workspace/MeetingActions.swift`; launch-time work is in
   `App/AppComposition.swift` — nowhere else.
 - Every `ECHO_*` environment variable is a property of
   `EchoCore/LaunchEnvironment.swift`. No other file reads the environment.
