@@ -18,12 +18,19 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../EchoCore"),
+        .package(path: "../ModelDelivery"),
+        // Parakeet TDT 0.6B v3 through its Core ML port: the model files, the
+        // batch decode and its own transport. Pinned to the version this
+        // pass's segment shaping and decoder settings were measured against.
+        .package(url: "https://github.com/FluidInference/FluidAudio", exact: "0.15.5"),
     ],
     targets: [
         .target(
             name: "Transcription",
             dependencies: [
                 .product(name: "EchoCore", package: "EchoCore"),
+                .product(name: "ModelDelivery", package: "ModelDelivery"),
+                .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
@@ -33,6 +40,7 @@ let package = Package(
                 "Transcription",
                 .product(name: "EchoCore", package: "EchoCore"),
                 .product(name: "EchoCoreTestSupport", package: "EchoCore"),
+                .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
