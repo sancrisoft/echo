@@ -22,7 +22,15 @@ these notices to be kept with every copy:
 
   FluidAudio (Apache License 2.0)
 
+  Onest (SIL Open Font License 1.1)
+    Copyright 2021 The Onest Project Authors
+
+  DM Mono (SIL Open Font License 1.1)
+    Copyright 2020 The DM Mono Project Authors
+
 The full text of the vendored WebRTC and abseil licenses is in
-Packages/Audio/Vendor/webrtc-apm/licenses/. THIRD_PARTY_NOTICES.md lists every package and
+Packages/Audio/Vendor/webrtc-apm/licenses/, and of the two fonts' licenses in
+Packages/DesignSystem/Sources/DesignSystem/Resources/Fonts/, beside the font
+files themselves and inside Echo.app. THIRD_PARTY_NOTICES.md lists every package and
 model Echo bundles or downloads, with its license and copyright notice, and
 ships with each release next to Echo.app.

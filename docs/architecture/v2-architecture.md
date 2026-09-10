@@ -260,7 +260,7 @@ names inside a package are free to change.
 - `UpdateChecker` (`@Observable @MainActor`), `ReleaseVersion`, `GitHubReleaseFeed`, `UpdateInstaller`.
 
 **DesignSystem**
-- `EchoColor` (semantic tokens for both appearances: surfaces, the two hairlines `divider` and `border`, seven text steps, accent and its wash, recording), `EchoFont` (the scale), `EchoSpacing`, `EchoRadius`, `EchoLayout` (the window's fixed dimensions), primitives (`EchoButtonStyle` roles, `StatusBadge`, `MetaStrip`/`MetaItem`, `EmptyState`, `SelectableRowChrome`), `DesignGallery` (DEBUG). The token enums are `nonisolated`. A level meter arrives with Recording.
+- `EchoColor` (semantic tokens for both appearances: surfaces, the two hairlines `divider` and `border`, seven text steps, accent and its wash, recording), `EchoFont` (the scale over the two bundled typefaces, and the launch-time registration the composition root calls), `EchoSpacing`, `EchoRadius`, `EchoLayout` (the window's fixed dimensions), primitives (`EchoButtonStyle` roles, `StatusBadge`, `MetaStrip`/`MetaItem`, `EmptyState`, `SelectableRowChrome`), `DesignGallery` (DEBUG). The token enums are `nonisolated`. A level meter arrives with Recording.
 
 **Workspace**
 - `WorkspaceWindow(dataRoot:)` (root view), `WorkspaceModel` (`@Observable @MainActor`: `section`, `selectedMeetingID`, `selectedTrashedID`, `documentTab`, `searchText`, `sortOrder`, the selection rules), `MeetingSortOrder`, `MeetingFilter`, `MeetingDateGroup`, `MeetingStatus.resolve`, `MarkdownDocument.parse`, `MarkdownRendering`, `MarkdownView`.

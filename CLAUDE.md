@@ -39,6 +39,10 @@ Packages/Audio/
   Vendor/                    WebRTCAPM.xcframework (the binary target) plus
                              webrtc-apm/{VERSION,licenses}; VERSION says how
                              the xcframework is regenerated
+Packages/DesignSystem/
+  Sources/DesignSystem/Resources/Fonts/   the two typefaces (OFL) plus their
+                             licence texts; they ship inside Echo.app
+  Vendor/fonts/VERSION       where each font came from, its hash, how to refresh
 docs/architecture/   v2-discovery.md · v2-architecture.md · adr/
 docs/design/         local only (gitignored): the redesign as a written spec
 .design/             local only (gitignored): the design canvas working copy

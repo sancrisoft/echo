@@ -17,13 +17,43 @@ import SwiftUI
             ScrollView {
                 VStack(alignment: .leading, spacing: EchoSpacing.xl) {
                     Text("Type").font(EchoFont.sectionTitle)
-                    Text("Document title").font(EchoFont.documentTitle)
-                    Text("Section title").font(EchoFont.sectionTitle)
-                    Text("Body — a summary paragraph that reads at 14.5 with generous leading.")
-                        .font(EchoFont.body).lineSpacing(EchoFont.bodyLineSpacing)
-                    Text("Row · 13/500").font(EchoFont.row)
-                    Text("micro label").font(EchoFont.micro)
-                    Text("00:12:41 · 5,512 words").font(EchoFont.mono())
+                    VStack(alignment: .leading, spacing: EchoSpacing.s) {
+                        Text("Document title")
+                            .font(EchoFont.documentTitle)
+                            .tracking(EchoFont.documentTitleTracking)
+                        Text("Section title")
+                            .font(EchoFont.sectionTitle)
+                            .tracking(EchoFont.sectionTitleTracking)
+                        Text("Body — a summary paragraph, with the leading the design gives it.")
+                            .font(EchoFont.body).lineSpacing(EchoFont.bodyLineSpacing)
+                        Text("Bold inside prose").font(EchoFont.bodyBold)
+                        HStack(spacing: EchoSpacing.l) {
+                            Text("Property label").font(EchoFont.propertyLabel)
+                                .foregroundStyle(EchoColor.textTertiary)
+                            Text("Property value").font(EchoFont.propertyValue)
+                                .foregroundStyle(EchoColor.textValue)
+                        }
+                        HStack(spacing: EchoSpacing.l) {
+                            Text("Row").font(EchoFont.row).foregroundStyle(EchoColor.textSecondary)
+                            Text("Row, selected").font(EchoFont.rowSelected)
+                            Text("Echo").font(EchoFont.appName).tracking(EchoFont.appNameTracking)
+                            Text("Meetings").font(EchoFont.sectionLabel)
+                                .tracking(EchoFont.sectionLabelTracking)
+                                .foregroundStyle(EchoColor.textTertiary)
+                            Text("Today").font(EchoFont.groupHeader)
+                                .foregroundStyle(EchoColor.textQuaternary)
+                        }
+                        HStack(spacing: EchoSpacing.l) {
+                            Text("Export").font(EchoFont.control)
+                            Text("Summary").font(EchoFont.controlSelected)
+                            Text("Summarized").font(EchoFont.statusPill)
+                                .foregroundStyle(EchoColor.accent)
+                            Text("micro label").font(EchoFont.micro)
+                        }
+                        Text("00:12:41 · 5,512 words · ⌘K · parakeet-tdt-0.6b-v3")
+                            .font(EchoFont.mono(11.5))
+                        Text("00:12:41").font(EchoFont.mono(19, weight: .medium))
+                    }
 
                     Text("Color").font(EchoFont.sectionTitle)
                     Text("Surfaces").font(EchoFont.micro).foregroundStyle(EchoColor.textTertiary)
@@ -94,6 +124,11 @@ import SwiftUI
                 }
                 .padding(EchoSpacing.xl)
             }
+            // In the app the composition root registers the typefaces at
+            // launch. A preview has no launch, so the gallery — the tool the
+            // design is reviewed in — asks for them itself. Idempotent, and
+            // the only reason this view has a task at all.
+            .task { EchoFont.registerBundledTypefaces() }
         }
 
         private func swatch(_ name: String, _ color: Color) -> some View {

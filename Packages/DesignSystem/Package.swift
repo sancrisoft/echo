@@ -14,6 +14,11 @@ let package = Package(
     targets: [
         .target(
             name: "DesignSystem",
+            // Onest and DM Mono travel with the package that names them, not
+            // with the app: any host of this package — the gallery, a preview,
+            // these tests — gets the design's typefaces or a traced failure,
+            // never a silent fallback nobody can fix from here.
+            resources: [.copy("Resources/Fonts")],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
                 .defaultIsolation(MainActor.self),

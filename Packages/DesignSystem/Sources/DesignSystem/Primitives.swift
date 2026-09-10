@@ -146,7 +146,7 @@ public struct MetaStrip: View {
                     Image(systemName: item.symbol)
                         .font(.system(size: 11))
                     Text(item.text)
-                        .font(EchoFont.rowDetail)
+                        .font(EchoFont.control)
                         .monospacedDigit()
                 }
                 .foregroundStyle(EchoColor.textSecondary)

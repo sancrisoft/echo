@@ -9,6 +9,7 @@
 //  stay inert scaffolding that touches no data folder (ADR-004).
 //
 
+import DesignSystem
 import EchoCore
 import Foundation
 import Meetings
@@ -66,6 +67,19 @@ final class AppComposition {
         guard !TestHost.isActive else { return }
 
         ErrorTrace.configure(log: errorLog)
+
+        // The design's typefaces, registered with the process before anything
+        // draws. Registration is a launch effect, not something a font token
+        // does on first use, so it happens exactly once and here. A failure is
+        // survivable — `EchoFont` falls back to the system faces the design
+        // names as its fallback — but it is never silent.
+        for failure in EchoFont.registerBundledTypefaces().failures {
+            ErrorTrace.record(
+                "A bundled typeface did not register; the interface falls back to the system face",
+                category: "EchoFont",
+                metadata: ["file": failure.file, "reason": failure.reason]
+            )
+        }
 
         // Bound the error trace log's disk footprint. Detached at utility
         // priority so it never competes with startup on the main thread.

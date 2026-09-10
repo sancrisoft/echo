@@ -148,7 +148,7 @@ struct SettingsScreen: View {
         Section("About") {
             LabeledContent("Version", value: AppIdentity.version.display)
             Text("Audio, transcripts and notes stay on this Mac. Nothing is uploaded anywhere.")
-                .font(EchoFont.rowDetail)
+                .font(EchoFont.control)
                 .foregroundStyle(EchoColor.textSecondary)
         }
     }
