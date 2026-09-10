@@ -116,6 +116,7 @@ nonisolated let palette: [Token] = [
     .init("textTertiary", EchoColor.textTertiary, light: 0x8A8D92, dark: 0x74767B),
     .init("textQuaternary", EchoColor.textQuaternary, light: 0xA2A5AA, dark: 0x54575B),
     .init("textFaint", EchoColor.textFaint, light: 0xB2B5BA, dark: 0x45484C),
+    .init("breadcrumbSlash", EchoColor.breadcrumbSlash, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("accent", EchoColor.accent, light: 0x1673C0, dark: 0x3B9CF6),
     .init(
         "accentWash", EchoColor.accentWash, light: 0x1673C0, dark: 0x3B9CF6,
@@ -235,10 +236,20 @@ struct IslandPaletteTests {
 
     /// The island is black on every appearance, so these tokens are checked
     /// once per appearance and expected to be the same both times.
-    @Test("the island does not follow the appearance")
+    ///
+    /// This list is what the enum *declares*. It cannot tell you what a
+    /// control actually draws: a primitive that reaches past this namespace
+    /// for a token that does follow the appearance passes here and still puts
+    /// a light-mode colour on a black shell. What the island draws is covered
+    /// by rendering it — "nothing the island draws changes with the system
+    /// appearance" in `PrimitiveTests`. Add a token here; add the control that
+    /// uses it there.
+    @Test("the island's own tokens do not follow the appearance")
     func islandIsAlwaysDark() throws {
         let tokens: [(String, Color)] = [
             ("shell", EchoColor.Island.shell),
+            ("accent", EchoColor.Island.accent),
+            ("recording", EchoColor.Island.recording),
             ("controlFill", EchoColor.Island.controlFill),
             ("chipFill", EchoColor.Island.chipFill),
             ("controlLabel", EchoColor.Island.controlLabel),
@@ -261,6 +272,8 @@ struct IslandPaletteTests {
     @Test("the opaque island tokens draw the design's value")
     func islandValues() throws {
         let tokens: [(String, Color, UInt32)] = [
+            ("accent", EchoColor.Island.accent, 0x3B9CF6),
+            ("recording", EchoColor.Island.recording, 0xED4A49),
             ("controlLabel", EchoColor.Island.controlLabel, 0xE4E5E8),
             ("quietLabel", EchoColor.Island.quietLabel, 0x83878D),
             ("glyph", EchoColor.Island.glyph, 0x9DA1A7),
@@ -270,11 +283,14 @@ struct IslandPaletteTests {
             ("gaugeNeutralLabel", EchoColor.Island.gaugeNeutralLabel, 0x6E7176),
         ]
         for (name, color, hex) in tokens {
-            let drawn = try resolve(color, in: .darkAqua)
-            let expected = channels(of: hex, opacity: 1)
-            #expect(abs(drawn.red - expected.red) < tolerance, "red channel of \(name)")
-            #expect(abs(drawn.green - expected.green) < tolerance, "green channel of \(name)")
-            #expect(abs(drawn.blue - expected.blue) < tolerance, "blue channel of \(name)")
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                let drawn = try resolve(color, in: appearance)
+                let expected = channels(of: hex, opacity: 1)
+                let context = "\(name) in \(appearance.rawValue)"
+                #expect(abs(drawn.red - expected.red) < tolerance, "red channel of \(context)")
+                #expect(abs(drawn.green - expected.green) < tolerance, "green channel of \(context)")
+                #expect(abs(drawn.blue - expected.blue) < tolerance, "blue channel of \(context)")
+            }
         }
     }
 

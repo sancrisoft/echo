@@ -82,6 +82,7 @@ import SwiftUI
                     swatch("tertiary", EchoColor.textTertiary)
                     swatch("quaternary", EchoColor.textQuaternary)
                     swatch("faint", EchoColor.textFaint)
+                    swatch("slash", EchoColor.breadcrumbSlash)
                 }
 
                 Text("Roles").font(EchoFont.micro).foregroundStyle(EchoColor.textTertiary)
@@ -91,6 +92,11 @@ import SwiftUI
                     swatch("recording", EchoColor.recording)
                     swatch("selection", EchoColor.selection)
                     swatch("hover", EchoColor.hover)
+                    // Beside the two above on purpose: the window's shift with
+                    // the appearance and the island's do not, and the sheet is
+                    // where that is meant to be visible.
+                    swatch("island accent", EchoColor.Island.accent)
+                    swatch("island red", EchoColor.Island.recording)
                 }
 
                 Text("Buttons").font(EchoFont.sectionTitle)

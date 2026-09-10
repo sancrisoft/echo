@@ -218,6 +218,43 @@ struct PrimitiveTests {
                 != size(of: Button(label) {}.buttonStyle(.echoPrimary)).height)
     }
 
+    // MARK: The island does not follow the appearance
+
+    @Test("nothing the island draws changes with the system appearance")
+    func islandIsAppearanceProof() throws {
+        // The shell is black on a light Mac too, so every colour reaching it
+        // has to be fixed. Rendering each control twice and comparing the two
+        // renders with each other covers what a primitive actually draws,
+        // which enumerating `EchoColor.Island`'s members cannot: a control
+        // that reaches for a token from outside the island still passes that
+        // list. Nothing here reads a colour off a pixel — the two images are
+        // only ever compared with one another.
+        let controls: [(String, AnyView)] = [
+            ("primary capsule", AnyView(Button(label) {}.buttonStyle(.islandPrimary))),
+            ("secondary capsule", AnyView(Button(label) {}.buttonStyle(.islandSecondary))),
+            ("quiet capsule", AnyView(Button(label) {}.buttonStyle(.islandQuiet))),
+            (
+                "icon button",
+                AnyView(
+                    Button {
+                    } label: {
+                        Image(systemName: "xmark")
+                    }.buttonStyle(.islandIcon))
+            ),
+            ("value chip", AnyView(ValueChip("A value") {})),
+            ("accent gauge", AnyView(LevelGauge("Level", level: 0.6, tone: .accent).frame(width: 120))),
+            ("neutral gauge", AnyView(LevelGauge("Level", level: 0.6, tone: .neutral).frame(width: 120))),
+        ]
+        for (name, control) in controls {
+            let onBlack = control.padding().background(EchoColor.Island.shell)
+            let light = try image(of: onBlack.environment(\.colorScheme, .light))
+            let dark = try image(of: onBlack.environment(\.colorScheme, .dark))
+            #expect(
+                light.dataProvider?.data == dark.dataProvider?.data,
+                "the \(name) draws a colour that follows the appearance, over a shell that does not")
+        }
+    }
+
     // MARK: For the eye
 
     @Test("the gallery renders in both appearances")

@@ -184,14 +184,14 @@ public struct LevelGauge: View {
 
     private var labelColor: Color {
         switch tone {
-        case .accent: EchoColor.accent
+        case .accent: EchoColor.Island.accent
         case .neutral: EchoColor.Island.gaugeNeutralLabel
         }
     }
 
     private var fillColor: Color {
         switch tone {
-        case .accent: EchoColor.accent
+        case .accent: EchoColor.Island.accent
         case .neutral: EchoColor.Island.gaugeNeutral
         }
     }

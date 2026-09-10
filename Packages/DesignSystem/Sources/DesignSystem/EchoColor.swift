@@ -80,6 +80,11 @@ public nonisolated enum EchoColor {
     public static let textQuaternary = Color(light: 0xA2A5AA, dark: 0x54575B)
     public static let textFaint = Color(light: 0xB2B5BA, dark: 0x45484C)
 
+    /// The "/" between the parts of a breadcrumb. Fainter than any word on
+    /// screen: it separates rather than says anything, so it sits a step past
+    /// the last of the text steps rather than among them.
+    public static let breadcrumbSlash = Color(light: 0xC4C7CB, dark: 0x3A3D41)
+
     // MARK: Roles
 
     /// Cobalt: selection, links, the one primary action. Darker in light mode
@@ -125,6 +130,21 @@ public nonisolated enum EchoColor {
 
         /// The shell, and the ears either side of the cutout.
         public static let shell = Color.black
+
+        /// The accent, as the island draws it: a gauge's fill and its label,
+        /// the spinner, the hairline of progress along the bottom edge.
+        ///
+        /// Not `EchoColor.accent`. That one darkens in light mode to hold its
+        /// contrast on white, and the island has no white to hold it against —
+        /// on a light Mac it would put the paper-facing cobalt on black. This
+        /// is the value the artboards draw over the shell, in both.
+        public static let accent = Color(hex: 0x3B9CF6)
+
+        /// The recording red, as the island draws it: the blinking dot, the
+        /// glyph on the record capsule, the countdown ring. Pinned for the
+        /// same reason as `accent` — `EchoColor.recording` follows the
+        /// appearance because the sidebar's dot sits on a surface that does.
+        public static let recording = Color(hex: 0xED4A49)
 
         /// Behind a primary or secondary capsule. Both share it: only the
         /// weight of the label separates them, so nothing on the island reads
