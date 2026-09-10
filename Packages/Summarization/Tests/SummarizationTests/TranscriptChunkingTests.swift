@@ -1,15 +1,15 @@
 //
 //  TranscriptChunkingTests.swift
-//  TranscriptionTests
+//  SummarizationTests
 //
-//  SPEC-02: deterministic transcript chunking. Constructed text segments only
-//  (TranscriptDedupTests precedent) — no audio fixtures.
+//  SPEC-02: deterministic transcript chunking. Constructed text segments
+//  only — the assembler is pure, so it needs no audio and no model.
 //
 
 import EchoCore
 import Foundation
+import Summarization
 import Testing
-import Transcription
 
 // MARK: - Token estimator
 

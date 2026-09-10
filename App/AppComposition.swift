@@ -12,6 +12,8 @@
 import EchoCore
 import Foundation
 import Meetings
+import ModelDelivery
+import Recording
 import Workspace
 
 @MainActor
@@ -30,6 +32,12 @@ final class AppComposition {
     /// The meeting library: disk is the truth, this is the main-actor cache.
     let library: MeetingLibrary
 
+    /// The one truth about a recording: phase, live levels, notices, the
+    /// meeting being worked on, and the actions. Injected even though nothing
+    /// renders it yet — the record gesture arrives with the island, and the
+    /// design has the menu bar item expand the island rather than record.
+    let session: RecordingSession
+
     /// The main window's navigation state.
     let workspace: WorkspaceModel
 
@@ -45,6 +53,7 @@ final class AppComposition {
         dataRoot = environment.dataRootOverride.map(DataRoot.init(url:)) ?? .standard
         settings = AppSettings(dataRoot: dataRoot)
         library = MeetingLibrary(dataRoot: dataRoot)
+        session = RecordingSession(library: library, settings: settings, dataRoot: dataRoot)
         workspace = WorkspaceModel()
         windowOpener = WindowOpener()
         errorLog = ErrorTraceLog(directory: dataRoot.logs)
@@ -74,6 +83,24 @@ final class AppComposition {
             await library.foldLegacySummaries()
             await library.purgeExpiredTrash()
             await library.backfillWordCounts()
+        }
+
+        // Models this build no longer uses, deleted by name. Detached at
+        // utility priority beside the log prune: it is pure reclamation, it
+        // must never delay a launch, and nothing waits on its result.
+        Task.detached(priority: .utility) { [dataRoot] in
+            RetiredModelCleanup.run(modelsRoot: dataRoot.models)
+        }
+
+        // Pick up where a quit or a crash left off. The two staging sweeps
+        // run inside this call, before the enqueue, because the order matters
+        // and keeping it inside the session is what makes it impossible to
+        // get wrong from out here. Then the first summary scan — one of its
+        // four triggers, the other three being each Stop, the window opening,
+        // and a model download finishing.
+        Task { [session] in
+            await session.resumePendingFinalizations()
+            session.kickSummaryBackfill()
         }
     }
 

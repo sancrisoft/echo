@@ -23,6 +23,6 @@ these notices to be kept with every copy:
   FluidAudio (Apache License 2.0)
 
 The full text of the vendored WebRTC and abseil licenses is in
-Vendor/webrtc-apm/licenses/. THIRD_PARTY_NOTICES.md lists every package and
+Packages/Audio/Vendor/webrtc-apm/licenses/. THIRD_PARTY_NOTICES.md lists every package and
 model Echo bundles or downloads, with its license and copyright notice, and
 ships with each release next to Echo.app.
