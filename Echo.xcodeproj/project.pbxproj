@@ -11,6 +11,8 @@
 		E2A0000000000000000000B2 /* Meetings in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A2 /* Meetings */; };
 		E2A0000000000000000000B3 /* DesignSystem in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A3 /* DesignSystem */; };
 		E2A0000000000000000000B4 /* Workspace in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A4 /* Workspace */; };
+		E2A0000000000000000000B5 /* Recording in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A5 /* Recording */; };
+		E2A0000000000000000000B6 /* ModelDelivery in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A6 /* ModelDelivery */; };
 		E2A0000000000000000000B9 /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A9 /* EchoCore */; };
 /* End PBXBuildFile section */
 
@@ -64,6 +66,8 @@
 				E2A0000000000000000000B2 /* Meetings in Frameworks */,
 				E2A0000000000000000000B3 /* DesignSystem in Frameworks */,
 				E2A0000000000000000000B4 /* Workspace in Frameworks */,
+				E2A0000000000000000000B5 /* Recording in Frameworks */,
+				E2A0000000000000000000B6 /* ModelDelivery in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -120,6 +124,8 @@
 				E2A0000000000000000000A2 /* Meetings */,
 				E2A0000000000000000000A3 /* DesignSystem */,
 				E2A0000000000000000000A4 /* Workspace */,
+				E2A0000000000000000000A5 /* Recording */,
+				E2A0000000000000000000A6 /* ModelDelivery */,
 			);
 			productName = Echo;
 			productReference = E2A00000000000000000F001 /* Echo.app */;
@@ -182,6 +188,8 @@
 				E2A000000000000000009002 /* XCLocalSwiftPackageReference "Packages/Meetings" */,
 				E2A000000000000000009003 /* XCLocalSwiftPackageReference "Packages/DesignSystem" */,
 				E2A000000000000000009004 /* XCLocalSwiftPackageReference "Packages/Workspace" */,
+				E2A000000000000000009005 /* XCLocalSwiftPackageReference "Packages/Recording" */,
+				E2A000000000000000009006 /* XCLocalSwiftPackageReference "Packages/ModelDelivery" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E2A000000000000000003002 /* Products */;
@@ -514,6 +522,14 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/Workspace;
 		};
+		E2A000000000000000009005 /* XCLocalSwiftPackageReference "Packages/Recording" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/Recording;
+		};
+		E2A000000000000000009006 /* XCLocalSwiftPackageReference "Packages/ModelDelivery" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ModelDelivery;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -532,6 +548,20 @@
 		E2A0000000000000000000A4 /* Workspace */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = Workspace;
+		};
+		E2A0000000000000000000A5 /* Recording */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Recording;
+		};
+		/* ModelDelivery is a DIRECT import of the app target, not a transitive
+		   link: `AppComposition.start()` runs the retired-model cleanup, which
+		   is a launch-time side effect the composition root owns. Every other
+		   package Recording pulls in (Audio, Transcription, Summarization,
+		   Meetings) is resolved through Recording's own manifest and must NOT
+		   be listed here. */
+		E2A0000000000000000000A6 /* ModelDelivery */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ModelDelivery;
 		};
 		E2A0000000000000000000A9 /* EchoCore */ = {
 			isa = XCSwiftPackageProductDependency;

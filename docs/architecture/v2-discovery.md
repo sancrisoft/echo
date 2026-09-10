@@ -238,9 +238,9 @@ stack since 2026-06-29. It must not survive into v2.
 | Dependency | Used for | Notes |
 |---|---|---|
 | FluidAudio 0.15.5 (Apache-2.0) | `AsrModels`, `AsrManager`, `ASRConfig`, `TdtDecoderState` | Batch transcription; chunks long audio internally at ~15 s windows; `melChunkContext: false` + `dualDecodeArbitration: true` fixed Spanish→English drift |
-| mlx-swift 0.31.6, mlx-swift-lm 3.31.4 (MIT) | Load and run Qwen3.5 4B | Metal shaders compiled at build time (needs the Metal toolchain); `MLX.GPU.set(cacheLimit:)`; no memory ceiling exists, memory is bounded by admission |
-| swift-huggingface 0.9.0 (`Hub`) | Repo metadata, config snapshot, local repo layout | `HubApi(downloadBase:, cache: nil)` is mandatory; the async download API never fires its delegate on this OS, which is why Echo owns its transport |
-| swift-transformers 1.3.3 (`Tokenizers`) | Tokenizer for ChatML | `applyChatTemplate` deliberately throws; the template is built in code |
+| mlx-swift 0.31.6, mlx-swift-lm 3.31.4 (MIT) | Load and run Qwen3.5 4B | `MLX.GPU.set(cacheLimit:)`; no memory ceiling exists, memory is bounded by admission. mlx-swift-lm also pulls **swift-syntax 602–604** (603.0.2 today) for a macro target reached only through its `MLXHuggingFace` product, which `MLXLLM`/`MLXLMCommon` do not use — resolved but never built. mlx-swift asks for `.upToNextMinor(from: 0.31.4)`, so a package importing `MLX` directly pins it. Measured 2026-09-09 on the v2 package: 27 s to resolve, 34 s to build the graph cold; no Metal toolchain is needed to BUILD at this pin, only to run a generation |
+| swift-transformers 1.3.3 (`Hub`) | Repo metadata, config snapshot, local repo layout | `HubApi` is a swift-transformers product, not a swift-huggingface one; it pulls swift-huggingface 0.9.0 transitively (`from: "0.8.1"`, so a v2 package pins it). `HubApi(downloadBase:, cache: nil)` is mandatory; the async download API never fires its delegate on this OS, which is why Echo owns its transport |
+| swift-transformers 1.3.3 (`Tokenizers`) | Tokenizer for ChatML | Same package as `Hub` above. `applyChatTemplate` deliberately throws; the template is built in code |
 | webrtc-audio-processing v2.1 (BSD-3) + abseil | AEC3 | Static arm64 library, one ObjC++ seam, AEC3 only with seven features explicitly off |
 | Models | Parakeet (CC-BY-4.0, attribution shown in-app), Qwen3.5 4B OptiQ (Apache-2.0) | Downloaded at runtime, never redistributed |
 | GitHub | Release feed, install script, Update Now | The only network endpoints besides Hugging Face |
@@ -302,7 +302,11 @@ Grouped by what they cost, not by file.
     from nine files; ~195 lines of screenshot harness in `DashboardView.body`;
     a fixture recorder with `NSOpenPanel` in the popover.
 11. **Model delivery is asymmetric.** The resumable transport, tally, manifest
-    and disk floor are LLM-only; Parakeet gets file-count progress. The Parakeet
+    and disk floor are LLM-only; Parakeet rides FluidAudio's own transport. Its
+    progress is byte-weighted there too — read at the pinned 0.15.5 during the
+    Transcription port — and degrades to a per-file count only when the repo
+    listing carries no sizes, which is the one case where a slow link can look
+    idle to the stall watchdog on a healthy transfer. The Parakeet
     `modelDirectory` constant names a folder (`…-coreml`) that never exists.
 12. **Repository hygiene.** `.gitignore` line 36 concatenates two patterns
     (missing newline), so `meetings_sample/` — real meeting transcripts — and a
@@ -553,9 +557,10 @@ reason must travel with the code into v2.
 | Backchannel merge | 10 s gap, ≤ 3 distinct words | vocabulary, not repetition |
 | Single-pass budget | 8 000 tokens | matches `hardMaxTokens`; lost-in-the-middle beyond |
 | Chunking | target 6 000, hard max 8 000, overlap 600, long gap 20 s, turn gap 8 s, min 800 | SPEC-02 |
-| Generation (Markdown) | temp 0.4, topP 0.95, max 4096, rep 1.05, freq 0, pres 0, penalty window 64 | checkbox prefixes were being penalized |
-| Generation (NDJSON) | temp 0.3, topP 0.9, max 3072, rep 1.1, freq 0.6, pres 0.3 | |
-| Caption | max 64 tokens, temp 0.2, source stripped before a 1 200-char cap | |
+| Generation (Markdown) | temp 0.4, topP 0.95, max 4096, rep 1.05, freq 0, pres 0 | checkbox prefixes were being penalized |
+| Generation (NDJSON) | temp 0.3, topP 0.9, max 3072, rep 1.1, freq 0.6, pres 0.3 | the preset defaults |
+| Penalty window (all three penalties, EVERY generation) | 64 | MLX defaults them to 20; 64 is the retired runtime's default, and the window the NDJSON values 1.1/0.6/0.3 were tuned against. Not a property of a preset — it lives in the engine's parameter mapping, so the Markdown and caption generations run with it too |
+| Caption | max 64 tokens, temp 0.2, and topP 0.9 / rep 1.1 / freq 0.6 / pres 0.3 INHERITED from the NDJSON defaults; source stripped before a 1 200-char cap; stream broken at 400 chars; caption capped at 160 (157 + ellipsis) | one sentence never needs more; the inherited half was measured with the rest |
 | Language detection | stride ~3 000 chars across the meeting, confidence ≥ 0.6 | greeting must not mislabel the meeting |
 | Idle release | 60 s | ADR-008 |
 | Disk floor | 6 GB | sized for the 4B, not the retired 12B |

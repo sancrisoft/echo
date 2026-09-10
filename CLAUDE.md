@@ -33,6 +33,12 @@ Packages/<Name>/     one local Swift package per capability
   Package.swift
   Sources/<Name>/    flat: one file per concept
   Tests/<Name>Tests/
+Packages/Audio/
+  Sources/WebRTCAECBridge/   the one ObjC++ seam over the AEC (SPM has no
+                             bridging header), public header in include/
+  Vendor/                    WebRTCAPM.xcframework (the binary target) plus
+                             webrtc-apm/{VERSION,licenses}; VERSION says how
+                             the xcframework is regenerated
 docs/architecture/   v2-discovery.md · v2-architecture.md · adr/
 docs/design/         local only (gitignored): the redesign as a written spec
 .design/             local only (gitignored): the design canvas working copy
@@ -49,11 +55,11 @@ Makefile             the commands
 | `Meetings` | `MeetingStore` (the only thing that touches `Meetings/`), `MeetingLibrary`, `MeetingMeta`/`MeetingRecord`, `LegacyMeetingSummary`, `StorageBreakdown`, `MeetingExport`, `MeetingListSelection` | EchoCore |
 | `DesignSystem` | `EchoColor`, `EchoFont`, `EchoSpacing`/`EchoRadius`/`EchoLayout`, primitives (`EchoButtonStyle`, `StatusBadge`, `MetaStrip`, `EmptyState`, `SelectableRowChrome`), `DesignGallery` | — |
 | `Workspace` | the main window: `WorkspaceWindow`, `WorkspaceModel`, sidebar, document, trash, settings screen, `MarkdownDocument`/`MarkdownView`, `MeetingGrouping`, `MeetingStatus`, `MeetingActions` (panels, pasteboard, Finder) | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem |
-| `Audio` *(pending)* | capture, AEC, device/route/health monitors, retention encoding, `CaptureScope`, `AppBundleIdentity`; vendored WebRTC | EchoCore |
-| `ModelDelivery` *(pending)* | resumable download, progress clamp, retry, manifest, retired cleanup | EchoCore |
-| `Transcription` *(pending)* | Parakeet model + pass, segment shaping, dedup | EchoCore, ModelDelivery |
-| `Summarization` *(pending)* | MLX engine, model lifecycle, pipeline, prompts, chunking | EchoCore, ModelDelivery |
-| `Recording` *(pending)* | `RecordingSession` facade, finalization machine, summary scheduling | EchoCore, Audio, Transcription, Summarization, ModelDelivery, Meetings |
+| `Audio` | `MicrophoneCapture`/`SystemAudioCapture` (`Sendable` classes, callbacks at init), `AudioConstants`/`AudioLevelMeter`/`AudioDownmixer`/`BufferResampler`, `CaptureRateGuard`, `CaptureGapTracker`, `CaptureScope`/`ProcessSelector`/`ScopedProcessResolution`, `AppBundleIdentity`, `RetainedAudioWriter` (actor, file naming injected), `AECStage`/`PassthroughAECStage`/`WebRTCAECStage`/`SwitchingAECStage`, `OutputRouteClass`/`EchoHandlingMode`/`EchoModeMachine`/`EchoDegradationNotice`, `EchoBleedProbe`, `InputDeviceMonitor`/`InputDeviceLifecycleMachine`/`InputDeviceNotice`, `OutputRouteMonitor`/`OutputRouteClassifier`, `InputHealthClassifier`/`InputHealthTracker`/`InputHealthNotice`/`FanOutGateDiagnosticsSink`, `GateTerm`/`GateVerdict`/`GateDecisionRecord`/`GateDiagnosticsSink`, `LiveInputMonitor`/`AudioStats`, `FixtureRecorder` (DEBUG); vendored WebRTC APM | EchoCore |
+| `ModelDelivery` | `SnapshotDownloader`/`SnapshotSpec`, `ResumableFileDownload`, `DownloadProgress` (the one clamp), `DownloadRetry`, `SnapshotDownloadTally`/`SnapshotDownloadBudget`, `SnapshotManifest`, `DownloadPauseStore`, `RetiredModelCleanup`, `DiskSpace` | EchoCore, swift-transformers (`Hub`) |
+| `Transcription` | `ParakeetModel` (identity, readiness, download), `TranscriptionPass` (the post-stop batch pass, segment shaping, `spanLevels`), `EnergyEnvelope`, `PassProgress`, `PassEvent`, `TranscriptionError`, `EchoDedupPolicy` | EchoCore, ModelDelivery, FluidAudio |
+| `Summarization` | `TextGenerating`/`GenerationParams` (the engine seam and its presets), `Summarizer` (routing, prompts, NDJSON facts, caption), `SummaryDocument`/`SummaryPhase`, `SummaryFacts` (`ChunkMapResult`/`MergedFacts`/`SummaryMerge`), `NDJSONLineValidator`, `TranscriptChunking`, `MLXTextEngine`, `SummaryModel` (identity, state, download/pause/load/unload), `SummarizationError`/`SummaryModelError` | EchoCore, ModelDelivery, mlx-swift-lm, mlx-swift, swift-transformers (`Tokenizers`) |
+| `Recording` | `RecordingSession` (`@Observable @MainActor`: `phase`, `levels`, `notices`, `currentMeetingID`, `queuedMeetingIDs`, `terminalFailureMeetingIDs`, `start`/`stop`, `retryTranscription`/`retranscribe`/`requestSummary`, `resumePendingFinalizations`/`kickSummaryBackfill`), `RecordingPhase`, `RecordingNotice`, `CaptureLevels`, `FinalizationMachine`, `SummaryBackfillPolicy`; internally `FinalizationDriver`, `SummaryScheduler`, `LevelWindow`/`ChannelFrameCounter`, the `CaptureScope` → `CaptureScopeRecord` mapping, and the capture/pass/summary seams the tests drive | EchoCore, Audio, Transcription, Summarization, ModelDelivery, Meetings |
 | `CallDetection` *(pending)* | mic-activity monitor, catalogs, `CallSessionMachine` | EchoCore, Audio |
 | `Updates` *(pending)* | release feed, checker, updater | EchoCore |
 | `Island` *(pending)* | the floating panel and its controller | EchoCore, CallDetection, Recording, DesignSystem |
@@ -68,14 +74,23 @@ rationale is in `docs/architecture/v2-architecture.md` §2 and ADR-001.
 packages never import each other. Engine packages never import SwiftUI, and
 AppKit only for process identity in files the boundary script allowlists.
 
+`App` also imports, directly, any engine package whose launch side effect it
+owns — today `ModelDelivery`, for the retired-model cleanup. That is the
+arrow above, not an exception to it: the composition root is where launch
+work lives (architecture §6). What it may not do is link a package it does
+not itself call; everything Recording pulls in resolves through Recording's
+own manifest.
+
 ## Finding code
 
 - Ask "who owns this?" and open that package's `Sources/` folder. Files are
   named after the concept they hold (`MeetingStore.swift`, `WorkspaceModel.swift`).
 - `grep -rn "public " Packages/<Name>/Sources` shows a package's API.
-- Side effects: disk is in `MeetingStore` (and later the audio writer and model
-  downloaders); the pasteboard, save panels and Finder are in
-  `Workspace/MeetingActions.swift`; launch-time work is in
+- Side effects: disk is in `MeetingStore` (meetings), `RetainedAudioWriter`
+  (a session's staged audio), `SnapshotDownloader`/`ResumableFileDownload`
+  (model files) and `ErrorTraceLog` (logs); the network is in `ModelDelivery`
+  alone; audio devices are in `Audio`; the pasteboard, save panels and Finder
+  are in `Workspace/MeetingActions.swift`; launch-time work is in
   `App/AppComposition.swift` — nowhere else.
 - Every `ECHO_*` environment variable is a property of
   `EchoCore/LaunchEnvironment.swift`. No other file reads the environment.
