@@ -26,6 +26,7 @@ struct MeetingSidebar: View {
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
     @State private var hovered: SidebarHover?
+    @State private var contextClicks = RowContextClickWatcher()
     @State private var renameTarget: MeetingMeta?
     @State private var renameText = ""
 
@@ -47,6 +48,14 @@ struct MeetingSidebar: View {
             footer
         }
         .padding(EchoSpacing.s)
+        // A right-click selects the row it is about to open its menu on, and
+        // only while the pointer is over one of these rows, in this window.
+        .background(WindowReader { contextClicks.listWindow = $0 })
+        .onAppear {
+            contextClicks.onContextClick = { id in workspace.open(id) }
+            contextClicks.start()
+        }
+        .onDisappear { contextClicks.stop() }
         .alert(
             "Rename Meeting", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
         ) {
@@ -292,12 +301,16 @@ struct MeetingSidebar: View {
         Task { await library.trash(id) }
     }
 
+    /// Keeps the hover state and the context-click watcher's idea of the
+    /// hovered row in step: the watcher has no other way to know which row a
+    /// right-click landed on.
     private func hover(_ row: SidebarHover, _ hovering: Bool) {
         if hovering {
             hovered = row
         } else if hovered == row {
             hovered = nil
         }
+        contextClicks.hoveredID = if case .meeting(let id) = hovered { id } else { nil }
     }
 
     // MARK: Footer
