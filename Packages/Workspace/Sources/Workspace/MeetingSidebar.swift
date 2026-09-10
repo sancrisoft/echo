@@ -33,7 +33,6 @@ struct MeetingSidebar: View {
             Divider()
             footer
         }
-        .background(EchoColor.surface.opacity(0.35))
         .alert(
             "Rename Meeting", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
         ) {

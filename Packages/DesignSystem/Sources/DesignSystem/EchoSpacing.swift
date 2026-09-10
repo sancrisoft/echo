@@ -112,6 +112,11 @@ public nonisolated enum EchoLayout {
 
     // MARK: The window
 
+    /// The design's hairline: the 1 px rule the artboards draw under the title
+    /// bar, down the sidebar's edge and across the document. A point, not a
+    /// pixel — a half-point line disappears on the artboards' scale.
+    public static let hairline: CGFloat = 1
+
     /// The title bar, with a hairline under it.
     public static let titleBarHeight: CGFloat = 44
     /// The window's smallest size at which nothing clips. Not drawn: the
