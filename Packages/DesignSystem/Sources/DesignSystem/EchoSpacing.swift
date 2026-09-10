@@ -74,6 +74,12 @@ public nonisolated enum EchoControl {
     /// A status pill's padding.
     public static let pillInset = CGSize(width: 8, height: 3)
 
+    /// The glyph at the head of a sidebar row: the magnifier, the gear, the
+    /// trash. The artboards draw their own glyphs and never size the SF
+    /// Symbol standing in for them, so this is the size the window ships,
+    /// centred in the row rather than measured off the canvas.
+    public static let sidebarGlyphSize: CGFloat = 12
+
     /// A property row: the icon in its label column, and the gap between the
     /// column and the value.
     public static let propertyIconSize: CGFloat = 14
@@ -138,8 +144,13 @@ public nonisolated enum EchoLayout {
     public static let sidebarRowInset: CGFloat = 9
     /// The "Meetings" section label and its count.
     public static let sectionLabelHeight: CGFloat = 30
+    /// The air above the section label, separating it from the rows above.
+    public static let sectionLabelTopMargin: CGFloat = 14
     /// A date group's header: Today, Yesterday, Last week, Earlier.
     public static let groupHeaderHeight: CGFloat = 22
+    /// The air above a date group, between it and the group before it. The
+    /// first group under the section label takes none.
+    public static let groupHeaderTopMargin: CGFloat = 6
 
     // MARK: The document
 
