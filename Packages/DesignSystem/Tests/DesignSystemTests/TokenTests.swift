@@ -227,3 +227,84 @@ struct MetricTests {
         #expect(Set(steps).count == steps.count)
     }
 }
+
+// MARK: - The island
+
+@Suite("The island's palette")
+struct IslandPaletteTests {
+
+    /// The island is black on every appearance, so these tokens are checked
+    /// once per appearance and expected to be the same both times.
+    @Test("the island does not follow the appearance")
+    func islandIsAlwaysDark() throws {
+        let tokens: [(String, Color)] = [
+            ("shell", EchoColor.Island.shell),
+            ("controlFill", EchoColor.Island.controlFill),
+            ("chipFill", EchoColor.Island.chipFill),
+            ("controlLabel", EchoColor.Island.controlLabel),
+            ("quietLabel", EchoColor.Island.quietLabel),
+            ("glyph", EchoColor.Island.glyph),
+            ("title", EchoColor.Island.title),
+            ("detail", EchoColor.Island.detail),
+            ("gaugeTrack", EchoColor.Island.gaugeTrack),
+            ("gaugeNeutral", EchoColor.Island.gaugeNeutral),
+            ("gaugeNeutralLabel", EchoColor.Island.gaugeNeutralLabel),
+        ]
+        for (name, color) in tokens {
+            let light = try resolve(color, in: .aqua)
+            let dark = try resolve(color, in: .darkAqua)
+            #expect(abs(light.red - dark.red) < tolerance, "\(name) changes with the appearance")
+            #expect(abs(light.alpha - dark.alpha) < tolerance, "\(name) changes with the appearance")
+        }
+    }
+
+    @Test("the opaque island tokens draw the design's value")
+    func islandValues() throws {
+        let tokens: [(String, Color, UInt32)] = [
+            ("controlLabel", EchoColor.Island.controlLabel, 0xE4E5E8),
+            ("quietLabel", EchoColor.Island.quietLabel, 0x83878D),
+            ("glyph", EchoColor.Island.glyph, 0x9DA1A7),
+            ("title", EchoColor.Island.title, 0xF2F3F5),
+            ("detail", EchoColor.Island.detail, 0x7E8288),
+            ("gaugeNeutral", EchoColor.Island.gaugeNeutral, 0x8A8D93),
+            ("gaugeNeutralLabel", EchoColor.Island.gaugeNeutralLabel, 0x6E7176),
+        ]
+        for (name, color, hex) in tokens {
+            let drawn = try resolve(color, in: .darkAqua)
+            let expected = channels(of: hex, opacity: 1)
+            #expect(abs(drawn.red - expected.red) < tolerance, "red channel of \(name)")
+            #expect(abs(drawn.green - expected.green) < tolerance, "green channel of \(name)")
+            #expect(abs(drawn.blue - expected.blue) < tolerance, "blue channel of \(name)")
+        }
+    }
+
+    @Test("the island's fills are white at the percentage the design gives them")
+    func islandFills() throws {
+        let fills: [(String, Color, Double)] = [
+            ("controlFill", EchoColor.Island.controlFill, 0.10),
+            ("chipFill", EchoColor.Island.chipFill, 0.08),
+            ("gaugeTrack", EchoColor.Island.gaugeTrack, 0.13),
+        ]
+        for (name, color, opacity) in fills {
+            let drawn = try resolve(color, in: .darkAqua)
+            #expect(abs(drawn.red - 1) < tolerance, "\(name) is not white")
+            #expect(abs(drawn.green - 1) < tolerance, "\(name) is not white")
+            #expect(abs(drawn.blue - 1) < tolerance, "\(name) is not white")
+            #expect(abs(drawn.alpha - opacity) < tolerance, "\(name) is at the wrong percentage")
+        }
+        // A primary capsule is a step brighter than a chip, and the gauge's
+        // track brighter still: the order is the design's, not an accident.
+        #expect(
+            try resolve(EchoColor.Island.chipFill, in: .darkAqua).alpha
+                < resolve(EchoColor.Island.controlFill, in: .darkAqua).alpha)
+        #expect(
+            try resolve(EchoColor.Island.controlFill, in: .darkAqua).alpha
+                < resolve(EchoColor.Island.gaugeTrack, in: .darkAqua).alpha)
+    }
+
+    @Test("the tab's shadow exists in light mode only")
+    func tabShadowIsLightOnly() throws {
+        #expect(try resolve(EchoColor.tabSelectionShadow, in: .aqua).alpha > 0)
+        #expect(try resolve(EchoColor.tabSelectionShadow, in: .darkAqua).alpha == 0)
+    }
+}

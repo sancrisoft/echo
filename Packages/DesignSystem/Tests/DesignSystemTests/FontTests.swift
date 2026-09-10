@@ -72,6 +72,11 @@ nonisolated let scale: [ScaleEntry] = [
     .init(name: "controlSelected", font: { EchoFont.controlSelected }, size: 12.5, weight: 500),
     .init(name: "statusPill", font: { EchoFont.statusPill }, size: 12, weight: 500),
     .init(name: "micro", font: { EchoFont.micro }, size: 11.5, weight: 400),
+    .init(name: "primaryButton", font: { EchoFont.primaryButton }, size: 12.5, weight: 600),
+    .init(name: "capsulePrimary", font: { EchoFont.capsulePrimary }, size: 12, weight: 600),
+    .init(name: "capsuleSecondary", font: { EchoFont.capsuleSecondary }, size: 12, weight: 500),
+    .init(name: "chip", font: { EchoFont.chip }, size: 11.5, weight: 500),
+    .init(name: "gaugeLabel", font: { EchoFont.gaugeLabel }, size: 10, weight: 600),
 ]
 
 @Suite("Typography")
@@ -170,6 +175,8 @@ struct FontTests {
         #expect(abs(EchoFont.appNameTracking - (13.5 * -0.008)) < 0.001)
         #expect(abs(EchoFont.sectionLabelTracking - (11.5 * 0.01)) < 0.001)
         #expect(EchoFont.sectionLabelTracking > 0, "the section label is the one that opens up")
+        #expect(abs(EchoFont.capsuleTracking - (12 * -0.004)) < 0.001)
+        #expect(abs(EchoFont.gaugeLabelTracking - (10 * -0.004)) < 0.001)
     }
 
     @Test("without Onest the scale falls back to the weights SF Pro ships")

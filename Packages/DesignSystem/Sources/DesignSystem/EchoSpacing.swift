@@ -23,6 +23,17 @@ public nonisolated enum EchoSpacing {
 }
 
 public nonisolated enum EchoRadius {
+    /// The island's expanded shell. Its bottom corners only; the top two are
+    /// always square, because the shell hangs off the bezel.
+    public static let islandExpanded: CGFloat = 22
+    /// The island's collapsed shell.
+    public static let islandCollapsed: CGFloat = 12
+    /// A capsule control on the island. Half its height: the island takes
+    /// iOS-style capsules where the window keeps rounded rects (DEC-4 may
+    /// unify them; until it does, these are two families).
+    public static let capsule: CGFloat = 13
+    /// A value chip or an icon button on the island.
+    public static let chip: CGFloat = 12
     /// The window's own corner.
     public static let window: CGFloat = 11
     /// A well a segmented control sits in.
@@ -33,6 +44,68 @@ public nonisolated enum EchoRadius {
     public static let row: CGFloat = 6
     /// A status pill.
     public static let pill: CGFloat = 5
+    /// A level gauge, half its height.
+    public static let gauge: CGFloat = 2
+}
+
+/// The geometry of the controls themselves, as the design draws them.
+/// `EchoLayout` is where the window's parts go; this is what sits inside them.
+public nonisolated enum EchoControl {
+
+    // MARK: In the window
+
+    /// The one filled button a screen gets — "New recording" in the title bar.
+    public static let primaryButtonHeight: CGFloat = 29
+    public static let primaryButtonInset: CGFloat = 14
+
+    /// A quiet button in the breadcrumb bar: Copy, Export, the "…".
+    public static let toolbarButtonInset: CGFloat = 9
+
+    /// The well a segmented tab strip sits in, and the segments inside it.
+    public static let tabStripInset: CGFloat = 3
+    public static let tabGap: CGFloat = 2
+    public static let tabInset: CGFloat = 13
+
+    /// The shadow under a selected tab. The design states it as a CSS
+    /// shadow — offset 1, blur 2 — and a CSS blur is twice a SwiftUI radius.
+    public static let tabSelectionShadowRadius: CGFloat = 1
+    public static let tabSelectionShadowOffset: CGFloat = 1
+
+    /// A status pill's padding.
+    public static let pillInset = CGSize(width: 8, height: 3)
+
+    /// A property row: the icon in its label column, and the gap between the
+    /// column and the value.
+    public static let propertyIconSize: CGFloat = 14
+    public static let propertyGap: CGFloat = 10
+
+    // MARK: On the island
+
+    /// A capsule control. Primary and secondary differ only in weight and in
+    /// how much room the label is given.
+    public static let capsuleHeight: CGFloat = 26
+    public static let capsuleInset: CGFloat = 13
+    public static let capsuleInsetSecondary: CGFloat = 12
+    public static let capsuleInsetQuiet: CGFloat = 6
+    /// Between a capsule's glyph and its label.
+    public static let capsuleGap: CGFloat = 6
+
+    /// A value chip: wider where the label starts than where the chevron ends.
+    public static let chipHeight: CGFloat = 24
+    public static let chipLeadingInset: CGFloat = 10
+    public static let chipTrailingInset: CGFloat = 7
+    public static let chipGap: CGFloat = 5
+
+    /// An icon button, square and fully rounded.
+    public static let iconButtonSize: CGFloat = 24
+
+    /// The glyph inside an icon button, and the chevron inside a value chip:
+    /// the design draws both at the same size.
+    public static let islandGlyphSize: CGFloat = 10
+
+    /// A level gauge: the bar, and the gap after its label.
+    public static let gaugeHeight: CGFloat = 4
+    public static let gaugeLabelGap: CGFloat = 6
 }
 
 public nonisolated enum EchoLayout {

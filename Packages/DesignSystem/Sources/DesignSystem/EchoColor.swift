@@ -105,12 +105,67 @@ public nonisolated enum EchoColor {
     /// the accent for what it actually distinguishes.
     public static let selection = surfaceRaised
 
+    /// The shadow the design puts under a selected tab. It exists in light
+    /// mode only: on white a raised segment needs the lift, on near-black it
+    /// would be a smudge, so the dark side of this token is fully transparent.
+    public static let tabSelectionShadow = Color(
+        light: 0x17191E, dark: 0x000000, lightOpacity: 0.10, darkOpacity: 0)
+
     /// The fill behind a hovered row. The design does not draw a hover state;
     /// this is the platform's own whisper until it does.
     public static let hover = Color.primary.opacity(0.05)
+
+    /// The island's own palette.
+    ///
+    /// The island is black on every appearance — the design has it poured from
+    /// the bezel, and a bezel does not go light — so these do not follow the
+    /// system. Its fills are white at a percentage rather than a grey, so they
+    /// read the same over the shell and over the wallpaper the flares expose.
+    public enum Island {
+
+        /// The shell, and the ears either side of the cutout.
+        public static let shell = Color.black
+
+        /// Behind a primary or secondary capsule. Both share it: only the
+        /// weight of the label separates them, so nothing on the island reads
+        /// as a white button.
+        public static let controlFill = Color.white.opacity(0.10)
+
+        /// Behind a value chip or an icon button, a step quieter than a
+        /// capsule.
+        public static let chipFill = Color.white.opacity(0.08)
+
+        /// The label of a primary, secondary or chip control.
+        public static let controlLabel = Color(hex: 0xE4E5E8)
+
+        /// The label of a quiet control, and the chevron of a value chip.
+        public static let quietLabel = Color(hex: 0x83878D)
+
+        /// The glyph inside an icon button.
+        public static let glyph = Color(hex: 0x9DA1A7)
+
+        /// A face's first line.
+        public static let title = Color(hex: 0xF2F3F5)
+
+        /// A face's second line.
+        public static let detail = Color(hex: 0x7E8288)
+
+        /// The unfilled part of a level gauge.
+        public static let gaugeTrack = Color.white.opacity(0.13)
+
+        /// The gauge that is not the accent one, fill and label.
+        public static let gaugeNeutral = Color(hex: 0x8A8D93)
+        public static let gaugeNeutralLabel = Color(hex: 0x6E7176)
+    }
 }
 
 extension Color {
+
+    /// One hex value, whatever the appearance. For the surfaces the design
+    /// draws the same in both — the island, which is always black.
+    public nonisolated init(hex: UInt32, opacity: Double = 1) {
+        self.init(nsColor: NSColor(hex: hex, alpha: CGFloat(opacity)))
+    }
 
     /// A color that follows the appearance, from two hex values and the opacity
     /// each appearance draws them at.

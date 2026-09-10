@@ -30,24 +30,42 @@ public struct EchoButtonStyle: ButtonStyle {
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(EchoFont.row)
-            .padding(.horizontal, role == .quiet ? EchoSpacing.s : EchoSpacing.m)
-            .padding(.vertical, 6)
+            .font(role == .primary ? EchoFont.primaryButton : EchoFont.control)
+            .lineLimit(1)
+            .frame(height: height)
+            .padding(.horizontal, inset)
             .foregroundStyle(foreground)
-            .background(background(pressed: configuration.isPressed), in: .rect(cornerRadius: EchoRadius.control))
+            .background(background(pressed: configuration.isPressed), in: .rect(cornerRadius: radius))
             .overlay {
                 if role == .secondary {
-                    RoundedRectangle(cornerRadius: EchoRadius.control)
+                    RoundedRectangle(cornerRadius: radius)
                         .strokeBorder(EchoColor.border, lineWidth: 1)
                 }
             }
-            .contentShape(.rect(cornerRadius: EchoRadius.control))
+            .contentShape(.rect(cornerRadius: radius))
             .opacity(configuration.isPressed ? 0.85 : 1)
+    }
+
+    /// A quiet button is a toolbar button and takes that shape; everything
+    /// with a fill takes the shape of the one filled button the design draws,
+    /// so buttons on a screen line up whatever their role.
+    private var height: CGFloat {
+        role == .quiet ? EchoLayout.toolbarButtonHeight : EchoControl.primaryButtonHeight
+    }
+
+    private var inset: CGFloat {
+        role == .quiet ? EchoControl.toolbarButtonInset : EchoControl.primaryButtonInset
+    }
+
+    private var radius: CGFloat {
+        role == .quiet ? EchoRadius.row : EchoRadius.control
     }
 
     private var foreground: Color {
         switch role {
-        case .primary: return .white
+        // The design's one filled button is the interface inverted: the text
+        // takes the window's own background, whichever appearance that is.
+        case .primary: return EchoColor.windowBackground
         case .secondary: return EchoColor.textPrimary
         case .quiet: return EchoColor.textSecondary
         case .destructive: return EchoColor.danger
@@ -56,7 +74,9 @@ public struct EchoButtonStyle: ButtonStyle {
 
     private func background(pressed: Bool) -> Color {
         switch role {
-        case .primary: return EchoColor.accent.opacity(pressed ? 0.8 : 1)
+        // Not the accent. The accent marks selection and links; a button that
+        // wore it would be the loudest thing on a grey screen.
+        case .primary: return EchoColor.textPrimary.opacity(pressed ? 0.85 : 1)
         case .secondary: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
         case .quiet: return pressed ? EchoColor.hover : .clear
         case .destructive: return EchoColor.danger.opacity(pressed ? 0.16 : 0.1)
@@ -76,7 +96,7 @@ extension ButtonStyle where Self == EchoButtonStyle {
 /// A small capsule that names a state: "Summarized", "Draft", "Failed".
 public struct StatusBadge: View {
 
-    public enum Tone: Sendable {
+    public enum Tone: Sendable, Equatable {
         case neutral
         case accent
         case success
@@ -95,13 +115,20 @@ public struct StatusBadge: View {
 
     public var body: some View {
         Text(text)
-            .font(EchoFont.micro.weight(.medium))
+            .font(EchoFont.statusPill)
             .foregroundStyle(color)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.12), in: .capsule)
+            .padding(.horizontal, EchoControl.pillInset.width)
+            .padding(.vertical, EchoControl.pillInset.height)
+            .background(fill, in: .rect(cornerRadius: EchoRadius.pill))
             .lineLimit(1)
             .fixedSize()
+    }
+
+    /// The design draws one of these: the accent pill, on the accent's own
+    /// wash. The other tones are states it has not drawn, and they borrow the
+    /// wash's weight rather than inventing one.
+    private var fill: Color {
+        tone == .accent ? EchoColor.accentWash : color.opacity(0.15)
     }
 
     private var color: Color {
@@ -113,6 +140,106 @@ public struct StatusBadge: View {
         case .danger: return EchoColor.danger
         case .recording: return EchoColor.recording
         }
+    }
+}
+
+// MARK: - Property row
+
+/// One fact under a document's title: an icon and its word in a fixed column,
+/// then the value. The column is a fixed width so every row's value starts at
+/// the same place, whatever the label says.
+public struct PropertyRow<Value: View>: View {
+
+    private let symbol: String
+    private let label: String
+    private let value: Value
+
+    public init(symbol: String, label: String, @ViewBuilder value: () -> Value) {
+        self.symbol = symbol
+        self.label = label
+        self.value = value()
+    }
+
+    public var body: some View {
+        HStack(spacing: EchoControl.propertyGap) {
+            HStack(spacing: EchoSpacing.s) {
+                Image(systemName: symbol)
+                    .font(.system(size: EchoControl.propertyIconSize))
+                    .frame(width: EchoControl.propertyIconSize, height: EchoControl.propertyIconSize)
+                Text(label)
+                    .font(EchoFont.propertyLabel)
+                    .lineLimit(1)
+            }
+            .foregroundStyle(EchoColor.textTertiary)
+            .frame(width: EchoLayout.propertyLabelWidth, alignment: .leading)
+
+            value
+                .font(EchoFont.propertyValue)
+                .foregroundStyle(EchoColor.textValue)
+
+            Spacer(minLength: 0)
+        }
+        .frame(height: EchoLayout.propertyRowHeight)
+    }
+}
+
+extension PropertyRow where Value == Text {
+    /// The common case: a value that is one line of text.
+    public init(symbol: String, label: String, _ value: String) {
+        self.init(symbol: symbol, label: label) { Text(value) }
+    }
+}
+
+// MARK: - Segmented tab strip
+
+/// The document's tabs: segments inside a well, the selected one raised.
+///
+/// Selection is passed in and passed back; the strip owns nothing. A screen
+/// that switches tabs keeps that state where the rest of its navigation lives.
+public struct TabStrip<Tab: Hashable>: View {
+
+    private let tabs: [Tab]
+    @Binding private var selection: Tab
+    private let title: (Tab) -> String
+
+    public init(_ tabs: [Tab], selection: Binding<Tab>, title: @escaping (Tab) -> String) {
+        self.tabs = tabs
+        self._selection = selection
+        self.title = title
+    }
+
+    public var body: some View {
+        HStack(spacing: EchoControl.tabGap) {
+            ForEach(tabs, id: \.self) { tab in
+                let isSelected = tab == selection
+                Button {
+                    selection = tab
+                } label: {
+                    Text(title(tab))
+                        .font(isSelected ? EchoFont.controlSelected : EchoFont.control)
+                        .foregroundStyle(isSelected ? EchoColor.textPrimary : EchoColor.textSecondary)
+                        .lineLimit(1)
+                        .frame(height: EchoLayout.toolbarButtonHeight)
+                        .padding(.horizontal, EchoControl.tabInset)
+                        .background {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: EchoRadius.row, style: .continuous)
+                                    .fill(EchoColor.surfaceSelected)
+                                    .shadow(
+                                        color: EchoColor.tabSelectionShadow,
+                                        radius: EchoControl.tabSelectionShadowRadius,
+                                        y: EchoControl.tabSelectionShadowOffset)
+                            }
+                        }
+                        .contentShape(.rect(cornerRadius: EchoRadius.row))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+            }
+        }
+        .padding(EchoControl.tabStripInset)
+        .background(EchoColor.surface, in: .rect(cornerRadius: EchoRadius.well))
+        .fixedSize()
     }
 }
 

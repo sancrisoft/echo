@@ -77,9 +77,29 @@ public nonisolated enum EchoFont {
     /// 12 / 500 — the status pill.
     public static var statusPill: Font { onest(12, weight: 500) }
 
+    /// 12.5 / 600 — the label of the one filled button a screen gets.
+    public static var primaryButton: Font { onest(12.5, weight: 600) }
+
     /// 11.5 — the smallest size the design sets words at. Numbers and
     /// identifiers at this size go through `mono` instead.
     public static var micro: Font { onest(11.5, weight: 400) }
+
+    // The island sets its own controls: a capsule, a value chip and the label
+    // beside a level gauge. They are smaller and tighter than anything in the
+    // window, because they hang off the bezel with the wallpaper behind them.
+
+    /// 12 / 600 — the label of a primary capsule.
+    public static var capsulePrimary: Font { onest(12, weight: 600) }
+
+    /// 12 / 500 — the label of a secondary capsule, and of a quiet one: the
+    /// design separates primary from the rest by weight alone.
+    public static var capsuleSecondary: Font { onest(12, weight: 500) }
+
+    /// 11.5 / 500 — the label of a value chip.
+    public static var chip: Font { onest(11.5, weight: 500) }
+
+    /// 10 / 600 — the label beside a level gauge.
+    public static var gaugeLabel: Font { onest(10, weight: 600) }
 
     /// Monospaced with tabular digits, for anything that counts. The design
     /// draws it at 500 for a timer, 400 for inline code and a model name, and
@@ -114,6 +134,12 @@ public nonisolated enum EchoFont {
 
     /// +0.01em on a section label.
     public static let sectionLabelTracking: CGFloat = 11.5 * 0.01
+
+    /// −0.004em on a capsule's label.
+    public static let capsuleTracking: CGFloat = 12 * -0.004
+
+    /// −0.004em on a gauge's label.
+    public static let gaugeLabelTracking: CGFloat = 10 * -0.004
 
     // MARK: - The typefaces
 
