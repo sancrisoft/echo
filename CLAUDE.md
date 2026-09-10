@@ -39,6 +39,10 @@ Packages/Audio/
   Vendor/                    WebRTCAPM.xcframework (the binary target) plus
                              webrtc-apm/{VERSION,licenses}; VERSION says how
                              the xcframework is regenerated
+Packages/DesignSystem/
+  Sources/DesignSystem/Resources/Fonts/   the two typefaces (OFL) plus their
+                             licence texts; they ship inside Echo.app
+  Vendor/fonts/VERSION       where each font came from, its hash, how to refresh
 docs/architecture/   v2-discovery.md · v2-architecture.md · adr/
 docs/design/         local only (gitignored): the redesign as a written spec
 .design/             local only (gitignored): the design canvas working copy
@@ -53,7 +57,7 @@ Makefile             the commands
 |---|---|---|
 | `EchoCore` | `TranscriptSegment`/`Speaker`/`AudioChannel`, `TranscriptUtterance`, `DataRoot`, `ErrorTrace`, `AppSettings`, `LaunchEnvironment`, `TestHost`, `AppIdentity`; `EchoCoreTestSupport` (fixtures root, `.acceptance` trait, `TemporaryDirectory`) | — |
 | `Meetings` | `MeetingStore` (the only thing that touches `Meetings/`), `MeetingLibrary`, `MeetingMeta`/`MeetingRecord`, `LegacyMeetingSummary`, `StorageBreakdown`, `MeetingExport`, `MeetingListSelection` | EchoCore |
-| `DesignSystem` | `EchoColor`, `EchoFont`, `EchoSpacing`/`EchoRadius`/`EchoLayout`, primitives (`EchoButtonStyle`, `StatusBadge`, `MetaStrip`, `EmptyState`, `SelectableRowChrome`), `DesignGallery` | — |
+| `DesignSystem` | `EchoColor` (+ `EchoColor.Island`), `EchoFont` (the scale over the bundled Onest and DM Mono, and their launch-time registration), `EchoSpacing`/`EchoRadius`/`EchoLayout`/`EchoControl`, the window's primitives (`EchoButtonStyle`, `StatusBadge`, `PropertyRow`, `TabStrip`, `MetaStrip`, `EmptyState`, `SelectableRowChrome`) and the island's (`IslandButtonStyle`, `IslandIconButtonStyle`, `ValueChip`, `LevelGauge`), `DesignGallery` | — |
 | `Workspace` | the main window: `WorkspaceWindow`, `WorkspaceModel`, sidebar, document, trash, settings screen, `MarkdownDocument`/`MarkdownView`, `MeetingGrouping`, `MeetingStatus`, `MeetingActions` (panels, pasteboard, Finder) | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem |
 | `Audio` | `MicrophoneCapture`/`SystemAudioCapture` (`Sendable` classes, callbacks at init), `AudioConstants`/`AudioLevelMeter`/`AudioDownmixer`/`BufferResampler`, `CaptureRateGuard`, `CaptureGapTracker`, `CaptureScope`/`ProcessSelector`/`ScopedProcessResolution`, `AppBundleIdentity`, `RetainedAudioWriter` (actor, file naming injected), `AECStage`/`PassthroughAECStage`/`WebRTCAECStage`/`SwitchingAECStage`, `OutputRouteClass`/`EchoHandlingMode`/`EchoModeMachine`/`EchoDegradationNotice`, `EchoBleedProbe`, `InputDeviceMonitor`/`InputDeviceLifecycleMachine`/`InputDeviceNotice`, `OutputRouteMonitor`/`OutputRouteClassifier`, `InputHealthClassifier`/`InputHealthTracker`/`InputHealthNotice`/`FanOutGateDiagnosticsSink`, `GateTerm`/`GateVerdict`/`GateDecisionRecord`/`GateDiagnosticsSink`, `LiveInputMonitor`/`AudioStats`, `FixtureRecorder` (DEBUG); vendored WebRTC APM | EchoCore |
 | `ModelDelivery` | `SnapshotDownloader`/`SnapshotSpec`, `ResumableFileDownload`, `DownloadProgress` (the one clamp), `DownloadRetry`, `SnapshotDownloadTally`/`SnapshotDownloadBudget`, `SnapshotManifest`, `DownloadPauseStore`, `RetiredModelCleanup`, `DiskSpace` | EchoCore, swift-transformers (`Hub`) |

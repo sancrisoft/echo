@@ -106,7 +106,7 @@ struct MeetingSidebar: View {
         .padding(.horizontal, EchoSpacing.s)
         .padding(.vertical, 6)
         .background(EchoColor.surfaceRaised.opacity(0.6), in: .rect(cornerRadius: EchoRadius.control))
-        .overlay(RoundedRectangle(cornerRadius: EchoRadius.control).strokeBorder(EchoColor.separator))
+        .overlay(RoundedRectangle(cornerRadius: EchoRadius.control).strokeBorder(EchoColor.border))
         .padding(.horizontal, EchoSpacing.m)
         .padding(.bottom, EchoSpacing.s)
         .background {
@@ -127,13 +127,13 @@ struct MeetingSidebar: View {
         if library.metas.isEmpty {
             Spacer()
             Text("No meetings yet")
-                .font(EchoFont.rowDetail)
+                .font(EchoFont.control)
                 .foregroundStyle(EchoColor.textTertiary)
             Spacer()
         } else if workspace.searchHidesEverything(in: library.metas) {
             Spacer()
             Text("No results for “\(workspace.searchText)”")
-                .font(EchoFont.rowDetail)
+                .font(EchoFont.control)
                 .foregroundStyle(EchoColor.textTertiary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, EchoSpacing.l)
@@ -314,7 +314,7 @@ struct MeetingRowView: View {
                 }
             }
             Text(metaLine)
-                .font(EchoFont.rowDetail)
+                .font(EchoFont.control)
                 .foregroundStyle(EchoColor.textSecondary)
                 .monospacedDigit()
                 .lineLimit(1)

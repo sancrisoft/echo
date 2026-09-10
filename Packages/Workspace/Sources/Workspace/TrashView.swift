@@ -94,7 +94,7 @@ struct TrashView: View {
                     .foregroundStyle(EchoColor.textPrimary)
                     .lineLimit(1)
                 Text(deletionText(meta))
-                    .font(EchoFont.rowDetail)
+                    .font(EchoFont.control)
                     .foregroundStyle(EchoColor.textSecondary)
             }
             Spacer()
