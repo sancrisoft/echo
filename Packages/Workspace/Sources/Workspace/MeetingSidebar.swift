@@ -324,11 +324,14 @@ struct MeetingSidebar: View {
             }
             .buttonStyle(.plain)
             .onHover { hovering in hover(.trash, hovering) }
-            if let storage = library.storage {
-                Text("\(ByteCountFormatter.string(fromByteCount: storage.libraryBytes, countStyle: .file)) on this Mac")
-                    .font(EchoFont.micro)
-                    .foregroundStyle(EchoColor.textTertiary)
+            if let line = SidebarStorageLine.text(for: library.storage) {
+                Text(line)
+                    .font(EchoFont.mono(10.5))
+                    .foregroundStyle(EchoColor.textFaint)
+                    .lineLimit(1)
+                    .padding(.top, EchoSpacing.s)
                     .padding(.horizontal, EchoLayout.sidebarRowInset)
+                    .padding(.bottom, EchoSpacing.xs)
             }
         }
     }
