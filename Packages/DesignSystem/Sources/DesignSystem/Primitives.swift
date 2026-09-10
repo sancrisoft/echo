@@ -38,7 +38,7 @@ public struct EchoButtonStyle: ButtonStyle {
             .overlay {
                 if role == .secondary {
                     RoundedRectangle(cornerRadius: EchoRadius.control)
-                        .strokeBorder(EchoColor.separator, lineWidth: 1)
+                        .strokeBorder(EchoColor.border, lineWidth: 1)
                 }
             }
             .contentShape(.rect(cornerRadius: EchoRadius.control))

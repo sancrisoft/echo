@@ -106,7 +106,7 @@ struct MeetingSidebar: View {
         .padding(.horizontal, EchoSpacing.s)
         .padding(.vertical, 6)
         .background(EchoColor.surfaceRaised.opacity(0.6), in: .rect(cornerRadius: EchoRadius.control))
-        .overlay(RoundedRectangle(cornerRadius: EchoRadius.control).strokeBorder(EchoColor.separator))
+        .overlay(RoundedRectangle(cornerRadius: EchoRadius.control).strokeBorder(EchoColor.border))
         .padding(.horizontal, EchoSpacing.m)
         .padding(.bottom, EchoSpacing.s)
         .background {

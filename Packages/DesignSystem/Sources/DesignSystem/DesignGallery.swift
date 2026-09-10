@@ -26,13 +26,35 @@ import SwiftUI
                     Text("00:12:41 · 5,512 words").font(EchoFont.mono())
 
                     Text("Color").font(EchoFont.sectionTitle)
+                    Text("Surfaces").font(EchoFont.micro).foregroundStyle(EchoColor.textTertiary)
                     HStack {
-                        swatch("bg", EchoColor.windowBackground)
+                        swatch("window", EchoColor.windowBackground)
+                        swatch("sidebar", EchoColor.sidebarBackground)
                         swatch("surface", EchoColor.surface)
                         swatch("raised", EchoColor.surfaceRaised)
-                        swatch("separator", EchoColor.separator)
+                        swatch("selected", EchoColor.surfaceSelected)
+                        swatch("divider", EchoColor.divider)
+                        swatch("border", EchoColor.border)
+                    }
+
+                    Text("Text").font(EchoFont.micro).foregroundStyle(EchoColor.textTertiary)
+                    HStack {
+                        swatch("primary", EchoColor.textPrimary)
+                        swatch("prose", EchoColor.textProse)
+                        swatch("value", EchoColor.textValue)
+                        swatch("secondary", EchoColor.textSecondary)
+                        swatch("tertiary", EchoColor.textTertiary)
+                        swatch("quaternary", EchoColor.textQuaternary)
+                        swatch("faint", EchoColor.textFaint)
+                    }
+
+                    Text("Roles").font(EchoFont.micro).foregroundStyle(EchoColor.textTertiary)
+                    HStack {
                         swatch("accent", EchoColor.accent)
+                        swatch("wash", EchoColor.accentWash)
                         swatch("recording", EchoColor.recording)
+                        swatch("selection", EchoColor.selection)
+                        swatch("hover", EchoColor.hover)
                     }
 
                     Text("Buttons").font(EchoFont.sectionTitle)
@@ -79,7 +101,7 @@ import SwiftUI
                 RoundedRectangle(cornerRadius: EchoRadius.control)
                     .fill(color)
                     .frame(width: 56, height: 36)
-                    .overlay(RoundedRectangle(cornerRadius: EchoRadius.control).strokeBorder(EchoColor.separator))
+                    .overlay(RoundedRectangle(cornerRadius: EchoRadius.control).strokeBorder(EchoColor.border))
                 Text(name).font(EchoFont.micro).foregroundStyle(EchoColor.textSecondary)
             }
         }
