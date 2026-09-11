@@ -49,17 +49,22 @@ struct MeetingDateGroupTests {
             hasSummary: true)
     }
 
-    @Test("today, yesterday, the last seven days, then one group per month, in list order")
+    @Test("the four groups the design draws, in list order, and never a fifth")
     func buckets() {
         let metas = [
             meta("today", daysAgo: 0), meta("yesterday", daysAgo: 1), meta("recent", daysAgo: 4),
             meta("last month", daysAgo: 40), meta("older", daysAgo: 90),
         ]
         let groups = MeetingDateGroup.groups(for: metas, sort: .recent, now: now, calendar: calendar)
-        #expect(groups.map(\.title).prefix(3) == ["Today", "Yesterday", "Last 7 days"])
-        #expect(groups.count == 5)
-        #expect(groups[3].meetings.map(\.title) == ["last month"])
-        #expect(groups[4].meetings.map(\.title) == ["older"])
+        #expect(groups.map(\.title) == ["Today", "Yesterday", "Last week", "Earlier"])
+        #expect(groups[3].meetings.map(\.title) == ["last month", "older"], "everything old is one group")
+    }
+
+    @Test("a week-old meeting is in the week, an eight-day-old one is earlier")
+    func theEdgeOfTheWeek() {
+        let groups = MeetingDateGroup.groups(
+            for: [meta("seven", daysAgo: 7), meta("eight", daysAgo: 8)], sort: .recent, now: now, calendar: calendar)
+        #expect(groups.map(\.title) == ["Last week", "Earlier"])
     }
 
     @Test("meetings in one bucket keep their list order")
@@ -98,6 +103,15 @@ struct MeetingStatusTests {
         #expect(MeetingStatus.resolve(meta(segments: 0, summary: false, source: nil)) == .pending)
         #expect(MeetingStatus.resolve(meta(segments: 3, summary: false, source: nil)) == .transcribed)
         #expect(MeetingStatus.resolve(meta(segments: 3, summary: true, source: nil)) == .summarized)
+    }
+
+    @Test("the row's mark says draft until the summary lands, and never calls a failure one")
+    func rowMarks() {
+        #expect(MeetingStatus.summarized.rowMark == nil)
+        #expect(MeetingStatus.transcribed.rowMark == .draft)
+        #expect(MeetingStatus.pending.rowMark == .draft)
+        #expect(MeetingStatus.draft.rowMark == .draft)
+        #expect(MeetingStatus.failed.rowMark == .failed)
     }
 
     @Test("the transcript is readable only when there are words")

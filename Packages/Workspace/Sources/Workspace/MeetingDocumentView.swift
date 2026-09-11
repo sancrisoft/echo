@@ -54,6 +54,15 @@ struct MeetingDocumentView: View {
 
     private var status: MeetingStatus { MeetingStatus.resolve(meta) }
 
+    /// A meeting's length, rounded to the minute the design shows.
+    /// Lives here because the document is the only place that says it: the
+    /// sidebar row is the title and nothing else.
+    static func duration(_ seconds: TimeInterval) -> String {
+        let minutes = max(1, Int((seconds / 60).rounded()))
+        if minutes < 60 { return "\(minutes) min" }
+        return "\(minutes / 60) h \(minutes % 60) min"
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: EchoSpacing.m) {
             HStack(alignment: .firstTextBaseline) {
@@ -109,7 +118,7 @@ struct MeetingDocumentView: View {
     private var metaItems: [MetaItem] {
         var items = [
             MetaItem("calendar", Self.dateRange(meta)),
-            MetaItem("clock", MeetingRowView.duration(meta.duration)),
+            MetaItem("clock", Self.duration(meta.duration)),
         ]
         if let words = meta.wordCount, words > 0 {
             items.append(MetaItem("text.word.spacing", "\(words.formatted()) words"))

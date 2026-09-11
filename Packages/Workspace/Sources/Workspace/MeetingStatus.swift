@@ -55,6 +55,26 @@ public enum MeetingStatus: Equatable, Sendable {
         }
     }
 
+    /// What a sidebar row carries at its trailing edge, or nothing when the
+    /// meeting is complete. The design draws one word there — `draft`, for a
+    /// meeting whose summary has not landed — and no mark at all for a
+    /// finished one. It draws nothing for a meeting whose transcription
+    /// failed, and calling that a draft would be a lie, so failure takes the
+    /// same shape with its own word and the one colour the palette keeps for
+    /// it.
+    public enum RowMark: String, Equatable, Sendable {
+        case draft
+        case failed
+    }
+
+    public var rowMark: RowMark? {
+        switch self {
+        case .summarized: return nil
+        case .transcribed, .pending, .draft: return .draft
+        case .failed: return .failed
+        }
+    }
+
     public var tone: StatusBadge.Tone {
         switch self {
         case .summarized: return .success

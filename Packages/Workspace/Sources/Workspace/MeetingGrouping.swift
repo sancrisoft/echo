@@ -62,8 +62,10 @@ public enum MeetingFilter {
     }
 }
 
-/// A date bucket in the sidebar: Today, Yesterday, the last seven days, then
-/// one group per month.
+/// A date bucket in the sidebar: Today, Yesterday, Last week, Earlier — the
+/// four the design draws, and no more. A month-by-month tail was the earlier
+/// shape; the sidebar is a list of recent work, and everything older than a
+/// week reads as one place to scroll into.
 public struct MeetingDateGroup: Identifiable, Equatable, Sendable {
     public let id: String
     public let title: String
@@ -105,11 +107,8 @@ public struct MeetingDateGroup: Identifiable, Equatable, Sendable {
         if let weekAgo = calendar.date(byAdding: .day, value: -7, to: calendar.startOfDay(for: now)), date >= weekAgo,
             date < now
         {
-            return ("week", "Last 7 days")
+            return ("week", "Last week")
         }
-        let components = calendar.dateComponents([.year, .month], from: date)
-        let key = "\(components.year ?? 0)-\(components.month ?? 0)"
-        let title = date.formatted(.dateTime.month(.wide).year())
-        return (key, title)
+        return ("earlier", "Earlier")
     }
 }

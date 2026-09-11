@@ -183,6 +183,7 @@ struct MetricTests {
     /// changes, never because a view would rather have another value.
     @Test("the fixed dimensions are the artboard's")
     func dimensionsMatchTheArtboard() {
+        #expect(EchoLayout.hairline == 1)
         #expect(EchoLayout.titleBarHeight == 44)
         #expect(EchoLayout.sidebarWidth == 256)
         #expect(EchoLayout.appRowHeight == 34)

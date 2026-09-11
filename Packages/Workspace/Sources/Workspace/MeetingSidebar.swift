@@ -2,11 +2,16 @@
 //  MeetingSidebar.swift
 //  Workspace
 //
-//  The meetings, grouped by date, with search and sort at the top and the
-//  way to Trash and Settings at the bottom. Rows are custom views in a scroll
-//  view: a `List` in a sidebar column rendered zero rows on this macOS, and a
-//  `List(selection:)` with a custom selection card paints the highlight twice.
-//  Selection lives in `WorkspaceModel`; the sidebar only reads and writes it.
+//  The sidebar the design draws: Search and Settings as rows at the top, the
+//  meetings under a section label that counts them, grouped by date, and the
+//  way to Trash with what the library occupies at the foot.
+//
+//  Every row is the same shape — one height, one inset, one radius — so the
+//  list reads as one column whatever a row holds. Rows are custom views in a
+//  scroll view: a `List` in a sidebar column rendered zero rows on this macOS,
+//  and a `List(selection:)` with a custom selection card paints the highlight
+//  twice. Selection lives in `WorkspaceModel`; the sidebar only reads and
+//  writes it.
 //
 
 import DesignSystem
@@ -20,20 +25,37 @@ struct MeetingSidebar: View {
 
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
-    @State private var hoveredID: UUID?
+    @State private var hovered: SidebarHover?
+    @State private var contextClicks = RowContextClickWatcher()
     @State private var renameTarget: MeetingMeta?
     @State private var renameText = ""
 
+    /// Which row the pointer is over. One value for the whole column, because
+    /// the pointer is only ever over one row.
+    private enum SidebarHover: Hashable {
+        case search
+        case settings
+        case trash
+        case meeting(UUID)
+    }
+
     var body: some View {
-        @Bindable var workspace = workspace
         VStack(spacing: 0) {
-            header
-            searchField
+            searchRow
+            settingsRow
+            sectionLabel
             list
-            Divider()
             footer
         }
-        .background(EchoColor.surface.opacity(0.35))
+        .padding(EchoSpacing.s)
+        // A right-click selects the row it is about to open its menu on, and
+        // only while the pointer is over one of these rows, in this window.
+        .background(WindowReader { contextClicks.listWindow = $0 })
+        .onAppear {
+            contextClicks.onContextClick = { id in workspace.open(id) }
+            contextClicks.start()
+        }
+        .onDisappear { contextClicks.stop() }
         .alert(
             "Rename Meeting", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
         ) {
@@ -48,77 +70,108 @@ struct MeetingSidebar: View {
         }
     }
 
-    // MARK: Header and search
+    // MARK: Search
 
-    private var header: some View {
-        HStack {
-            Text("Meetings")
-                .font(EchoFont.sectionTitle)
-                .foregroundStyle(EchoColor.textPrimary)
-            if !library.metas.isEmpty {
-                Text("\(library.metas.count)")
-                    .font(EchoFont.mono(11.5))
-                    .foregroundStyle(EchoColor.textTertiary)
-            }
-            Spacer()
-            Menu {
-                Picker("Sort", selection: Binding(get: { workspace.sortOrder }, set: { workspace.sortOrder = $0 })) {
-                    ForEach(MeetingSortOrder.allCases) { order in
-                        Text(order.menuTitle).tag(order)
-                    }
-                }
-                .pickerStyle(.inline)
-            } label: {
-                Image(systemName: "arrow.up.arrow.down")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(EchoColor.textSecondary)
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Sort")
-        }
-        .padding(.horizontal, EchoSpacing.l)
-        .padding(.top, EchoSpacing.l)
-        .padding(.bottom, EchoSpacing.s)
-    }
-
-    private var searchField: some View {
+    /// The search row types in place: the design draws it as a row with its
+    /// shortcut, so it stays a row and becomes a field where it stands. What
+    /// ⌘K eventually opens is an open decision; today it puts the caret here,
+    /// where the filter already lives.
+    private var searchRow: some View {
         @Bindable var workspace = workspace
-        return HStack(spacing: EchoSpacing.xs) {
+        return HStack(spacing: EchoSpacing.s) {
             Image(systemName: "magnifyingglass")
+                .font(.system(size: EchoControl.sidebarGlyphSize))
+                .frame(width: EchoControl.sidebarGlyphSize)
                 .foregroundStyle(EchoColor.textTertiary)
-                .font(.system(size: 12))
-            TextField("Search meetings", text: $workspace.searchText)
-                .textFieldStyle(.plain)
-                .font(EchoFont.row.weight(.regular))
-                .focused($searchFocused)
-            if !workspace.searchText.isEmpty {
-                Button {
-                    workspace.searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(EchoColor.textTertiary)
+            ZStack(alignment: .leading) {
+                if workspace.searchText.isEmpty {
+                    // The placeholder the design draws, in the design's own
+                    // colour. It is decoration: the field below carries the
+                    // name, and a reader that heard both would hear it twice.
+                    Text("Search")
+                        .font(EchoFont.row)
+                        .foregroundStyle(EchoColor.textSecondary)
+                        .accessibilityHidden(true)
                 }
-                .buttonStyle(.plain)
+                TextField("", text: $workspace.searchText)
+                    .textFieldStyle(.plain)
+                    .font(EchoFont.row)
+                    .foregroundStyle(EchoColor.textPrimary)
+                    .accessibilityLabel("Search")
+                    .focused($searchFocused)
+                    .onExitCommand {
+                        workspace.searchText = ""
+                        searchFocused = false
+                    }
             }
+            Text("⌘K")
+                .font(EchoFont.mono(11))
+                .foregroundStyle(EchoColor.textQuaternary)
         }
-        .padding(.horizontal, EchoSpacing.s)
-        .padding(.vertical, 6)
-        .background(EchoColor.surfaceRaised.opacity(0.6), in: .rect(cornerRadius: EchoRadius.control))
-        .overlay(RoundedRectangle(cornerRadius: EchoRadius.control).strokeBorder(EchoColor.border))
-        .padding(.horizontal, EchoSpacing.m)
-        .padding(.bottom, EchoSpacing.s)
+        .sidebarRow(isSelected: false, isHovered: hovered == .search || searchFocused)
+        .onHover { hovering in hover(.search, hovering) }
+        .onTapGesture { searchFocused = true }
         .background {
-            // ⌘F focuses the search field from anywhere in the window.
+            // ⌘K focuses the search field from anywhere in the window.
             Button("") { searchFocused = true }
-                .keyboardShortcut("f", modifiers: .command)
+                .keyboardShortcut("k", modifiers: .command)
                 .frame(width: 0, height: 0)
                 .opacity(0)
         }
     }
 
-    // MARK: List
+    // MARK: Settings
+
+    private var settingsRow: some View {
+        Button {
+            workspace.section = .settings
+        } label: {
+            HStack(spacing: EchoSpacing.s) {
+                Image(systemName: "gearshape")
+                    .font(.system(size: EchoControl.sidebarGlyphSize))
+                    .frame(width: EchoControl.sidebarGlyphSize)
+                    .foregroundStyle(EchoColor.textTertiary)
+                rowTitle("Settings", isSelected: workspace.section == .settings)
+                Spacer(minLength: EchoSpacing.s)
+            }
+            .sidebarRow(isSelected: workspace.section == .settings, isHovered: hovered == .settings)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in hover(.settings, hovering) }
+    }
+
+    // MARK: The meetings
+
+    private var sectionLabel: some View {
+        HStack(spacing: EchoSpacing.s) {
+            Text("Meetings")
+                .font(EchoFont.sectionLabel)
+                .tracking(EchoFont.sectionLabelTracking)
+                .foregroundStyle(EchoColor.textTertiary)
+            // The label takes the row and the count sits at its right edge,
+            // where every other count in the column sits.
+            Spacer(minLength: EchoSpacing.s)
+            Text("\(library.metas.count)")
+                .font(EchoFont.mono(11))
+                .foregroundStyle(EchoColor.textQuaternary)
+        }
+        .padding(.horizontal, EchoLayout.sidebarRowInset)
+        .frame(height: EchoLayout.sectionLabelHeight)
+        .padding(.top, EchoLayout.sectionLabelTopMargin)
+        // The design draws no sort control; the orders stay reachable without
+        // putting a second affordance on a row that is a label.
+        .contextMenu { sortMenu }
+    }
+
+    @ViewBuilder
+    private var sortMenu: some View {
+        Picker("Sort", selection: Binding(get: { workspace.sortOrder }, set: { workspace.sortOrder = $0 })) {
+            ForEach(MeetingSortOrder.allCases) { order in
+                Text(order.menuTitle).tag(order)
+            }
+        }
+        .pickerStyle(.inline)
+    }
 
     private var visible: [MeetingMeta] { workspace.visibleMeetings(in: library.metas) }
 
@@ -127,38 +180,33 @@ struct MeetingSidebar: View {
         if library.metas.isEmpty {
             Spacer()
             Text("No meetings yet")
-                .font(EchoFont.control)
+                .font(EchoFont.row)
                 .foregroundStyle(EchoColor.textTertiary)
             Spacer()
         } else if workspace.searchHidesEverything(in: library.metas) {
             Spacer()
             Text("No results for “\(workspace.searchText)”")
-                .font(EchoFont.control)
+                .font(EchoFont.row)
                 .foregroundStyle(EchoColor.textTertiary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, EchoSpacing.l)
+                .padding(.horizontal, EchoLayout.sidebarRowInset)
             Spacer()
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: EchoSpacing.xxs) {
-                        ForEach(MeetingDateGroup.groups(for: visible, sort: workspace.sortOrder)) { group in
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        let groups = MeetingDateGroup.groups(for: visible, sort: workspace.sortOrder)
+                        ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                             if !group.title.isEmpty {
-                                Text(group.title)
-                                    .font(EchoFont.micro.weight(.semibold))
-                                    .foregroundStyle(EchoColor.textTertiary)
-                                    .padding(.horizontal, EchoSpacing.l)
-                                    .padding(.top, EchoSpacing.m)
-                                    .padding(.bottom, EchoSpacing.xs)
+                                groupHeader(group.title, isFirst: index == 0)
                             }
                             ForEach(group.meetings) { meta in
                                 row(for: meta)
                             }
                         }
                     }
-                    .padding(.horizontal, EchoSpacing.s)
-                    .padding(.bottom, EchoSpacing.s)
                 }
+                .scrollIndicators(.never)
                 .focusable()
                 .focusEffectDisabled()
                 .focused($listFocused)
@@ -178,19 +226,27 @@ struct MeetingSidebar: View {
         }
     }
 
+    private func groupHeader(_ title: String, isFirst: Bool) -> some View {
+        Text(title)
+            .font(EchoFont.groupHeader)
+            .foregroundStyle(EchoColor.textQuaternary)
+            .padding(.horizontal, EchoLayout.sidebarRowInset)
+            .frame(height: EchoLayout.groupHeaderHeight, alignment: .leading)
+            .padding(.top, isFirst ? 0 : EchoLayout.groupHeaderTopMargin)
+    }
+
     private func row(for meta: MeetingMeta) -> some View {
         MeetingRowView(
             meta: meta,
             isSelected: workspace.selectedMeetingID == meta.id && workspace.section == .meetings,
-            isHovered: hoveredID == meta.id
+            isHovered: hovered == .meeting(meta.id)
         )
         .id(meta.id)
-        .contentShape(.rect(cornerRadius: EchoRadius.row))
         .onTapGesture {
             workspace.open(meta.id)
             listFocused = true
         }
-        .onHover { hovering in hoveredID = hovering ? meta.id : (hoveredID == meta.id ? nil : hoveredID) }
+        .onHover { hovering in hover(.meeting(meta.id), hovering) }
         .contextMenu { contextMenu(for: meta) }
     }
 
@@ -245,97 +301,98 @@ struct MeetingSidebar: View {
         Task { await library.trash(id) }
     }
 
+    /// Keeps the hover state and the context-click watcher's idea of the
+    /// hovered row in step: the watcher has no other way to know which row a
+    /// right-click landed on.
+    private func hover(_ row: SidebarHover, _ hovering: Bool) {
+        if hovering {
+            hovered = row
+        } else if hovered == row {
+            hovered = nil
+        }
+        contextClicks.hoveredID = if case .meeting(let id) = hovered { id } else { nil }
+    }
+
     // MARK: Footer
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: EchoSpacing.xxs) {
-            footerRow("trash", "Trash", count: library.trashedMetas.count, section: .trash)
-            footerRow("gearshape", "Settings", count: nil, section: .settings)
-            if let storage = library.storage {
-                Text("\(ByteCountFormatter.string(fromByteCount: storage.libraryBytes, countStyle: .file)) on this Mac")
-                    .font(EchoFont.micro)
-                    .foregroundStyle(EchoColor.textTertiary)
-                    .padding(.horizontal, EchoSpacing.l)
-                    .padding(.top, EchoSpacing.xs)
-                    .padding(.bottom, EchoSpacing.s)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                workspace.section = .trash
+            } label: {
+                HStack(spacing: EchoSpacing.s) {
+                    Image(systemName: "trash")
+                        .font(.system(size: EchoControl.sidebarGlyphSize))
+                        .frame(width: EchoControl.sidebarGlyphSize)
+                        .foregroundStyle(EchoColor.textTertiary)
+                    rowTitle("Trash", isSelected: workspace.section == .trash)
+                    Spacer(minLength: EchoSpacing.s)
+                    if library.trashedMetas.count > 0 {
+                        Text("\(library.trashedMetas.count)")
+                            .font(EchoFont.mono(11))
+                            .foregroundStyle(EchoColor.textQuaternary)
+                    }
+                }
+                .sidebarRow(isSelected: workspace.section == .trash, isHovered: hovered == .trash)
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in hover(.trash, hovering) }
+            if let line = SidebarStorageLine.text(for: library.storage) {
+                Text(line)
+                    .font(EchoFont.mono(10.5))
+                    .foregroundStyle(EchoColor.textFaint)
+                    .lineLimit(1)
+                    .padding(.top, EchoSpacing.s)
+                    .padding(.horizontal, EchoLayout.sidebarRowInset)
+                    .padding(.bottom, EchoSpacing.xs)
             }
         }
-        .padding(.top, EchoSpacing.s)
     }
 
-    private func footerRow(_ symbol: String, _ title: String, count: Int?, section: WorkspaceModel.Section) -> some View
-    {
-        Button {
-            workspace.section = section
-        } label: {
-            HStack(spacing: EchoSpacing.s) {
-                Image(systemName: symbol)
-                    .font(.system(size: 12))
-                    .frame(width: 16)
-                Text(title)
-                    .font(EchoFont.row)
-                Spacer()
-                if let count, count > 0 {
-                    Text("\(count)")
-                        .font(EchoFont.mono(11.5))
-                        .foregroundStyle(EchoColor.textTertiary)
-                }
-            }
-            .foregroundStyle(workspace.section == section ? EchoColor.accent : EchoColor.textSecondary)
-            .padding(.horizontal, EchoSpacing.m)
-            .padding(.vertical, 6)
-            .background(SelectableRowChrome(isSelected: workspace.section == section, isHovered: false))
-            .contentShape(.rect(cornerRadius: EchoRadius.row))
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, EchoSpacing.s)
+    private func rowTitle(_ title: String, isSelected: Bool) -> some View {
+        Text(title)
+            .font(isSelected ? EchoFont.rowSelected : EchoFont.row)
+            .foregroundStyle(isSelected ? EchoColor.textPrimary : EchoColor.textSecondary)
+            .lineLimit(1)
     }
 }
 
-/// One meeting in the sidebar: the title, a status badge when the meeting is
-/// not fully processed, and a compact meta line.
+/// One meeting in the sidebar: its title, and a mark when the meeting is not
+/// finished. One line — the caption, the time and the word count belong to the
+/// document, and a second line here would halve how much history fits.
 struct MeetingRowView: View {
     let meta: MeetingMeta
     let isSelected: Bool
     let isHovered: Bool
 
     var body: some View {
-        let status = MeetingStatus.resolve(meta)
-        VStack(alignment: .leading, spacing: EchoSpacing.xxs) {
-            HStack(spacing: EchoSpacing.s) {
-                Text(meta.title)
-                    .font(EchoFont.row)
-                    .foregroundStyle(EchoColor.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Spacer(minLength: 0)
-                if status != .summarized {
-                    StatusBadge(status.label, tone: status.tone)
-                }
-            }
-            Text(metaLine)
-                .font(EchoFont.control)
-                .foregroundStyle(EchoColor.textSecondary)
-                .monospacedDigit()
+        HStack(spacing: EchoSpacing.s) {
+            Text(meta.title)
+                .font(isSelected ? EchoFont.rowSelected : EchoFont.row)
+                .foregroundStyle(isSelected ? EchoColor.textPrimary : EchoColor.textSecondary)
                 .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: EchoSpacing.s)
+            if let mark = MeetingStatus.resolve(meta).rowMark {
+                Text(mark.rawValue)
+                    .font(EchoFont.mono(10))
+                    .foregroundStyle(mark == .failed ? EchoColor.danger : EchoColor.textQuaternary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
         }
-        .padding(.horizontal, EchoSpacing.m)
-        .padding(.vertical, 7)
-        .background(SelectableRowChrome(isSelected: isSelected, isHovered: isHovered))
+        .sidebarRow(isSelected: isSelected, isHovered: isHovered)
     }
+}
 
-    private var metaLine: String {
-        var parts = [meta.startedAt.formatted(date: .omitted, time: .shortened)]
-        parts.append(Self.duration(meta.duration))
-        if let words = meta.wordCount, words > 0 {
-            parts.append("\(words.formatted()) words")
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    static func duration(_ seconds: TimeInterval) -> String {
-        let minutes = max(1, Int((seconds / 60).rounded()))
-        if minutes < 60 { return "\(minutes) min" }
-        return "\(minutes / 60) h \(minutes % 60) min"
+extension View {
+    /// The shape every sidebar row shares: one height, one inset, one radius,
+    /// and the chrome behind it. A row's content decides nothing about its
+    /// geometry, so Search, Settings, a meeting and Trash line up exactly.
+    fileprivate func sidebarRow(isSelected: Bool, isHovered: Bool) -> some View {
+        padding(.horizontal, EchoLayout.sidebarRowInset)
+            .frame(height: EchoLayout.sidebarRowHeight)
+            .background(SelectableRowChrome(isSelected: isSelected, isHovered: isHovered))
+            .contentShape(.rect(cornerRadius: EchoRadius.row))
     }
 }

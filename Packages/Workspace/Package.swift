@@ -34,6 +34,7 @@ let package = Package(
             dependencies: [
                 "Workspace",
                 .product(name: "EchoCore", package: "EchoCore"),
+                .product(name: "EchoCoreTestSupport", package: "EchoCore"),
                 .product(name: "Meetings", package: "Meetings"),
             ],
             swiftSettings: [

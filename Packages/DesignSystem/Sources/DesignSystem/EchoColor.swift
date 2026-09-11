@@ -15,14 +15,15 @@
 //
 //  Platform trap, measured on macOS 26: the window background, List backgrounds
 //  and the title bar are materials tinted by the user's wallpaper, not flat
-//  colors. A flat color painted over one reads as a mismatched band in dark
-//  mode. So the surfaces split in two kinds:
+//  colors. A flat color painted over *part* of such a window reads as a
+//  mismatched band in dark mode — the painted pane against the material beside
+//  and above it. So the surfaces split in two kinds:
 //
-//  * `windowBackground` and `sidebarBackground` are *backdrops*. Over the
-//    window they are the target look a tinted material has to reach, never a
-//    fill painted on top of it. They are opaque only where there is no material
-//    to preserve — a panel that must not let anything through, such as the
-//    island or a popover body.
+//  * `windowBackground` and `sidebarBackground` are *backdrops*, and the
+//    artboards draw them flat. A window that wants them takes the window
+//    background too, title bar included, so nothing translucent is left for a
+//    pane to mismatch against; that, and not a wash, is how the band is
+//    avoided.
 //  * `surface`, `surfaceRaised` and `surfaceSelected` are genuinely opaque and
 //    are drawn as shapes on top: wells, rows, cards, the selected segment.
 //
