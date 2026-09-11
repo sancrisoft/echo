@@ -152,6 +152,16 @@ public nonisolated enum EchoLayout {
     /// first group under the section label takes none.
     public static let groupHeaderTopMargin: CGFloat = 6
 
+    // MARK: The island
+
+    /// The fallback shell, on a screen with no cutout: fixed, where the notched
+    /// shell is only as wide as its words need.
+    public static let islandPillSize = CGSize(width: 320, height: 34)
+
+    /// The air between the menu bar and the fallback pill. The notched shell
+    /// takes none — it hangs off the top edge of the screen.
+    public static let islandPillTopGap: CGFloat = 8
+
     // MARK: The document
 
     /// The breadcrumb bar above the document.

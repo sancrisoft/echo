@@ -86,7 +86,7 @@ Each package answers "who owns this?" for one product capability from
 | **Updates** | Version arithmetic, the GitHub release feed, the daily checker, and the updater that hands off to the install script. | EchoCore | — |
 | **DesignSystem** | Semantic color tokens for light and dark, the type scale over the two bundled typefaces, spacing, radii and control geometry, and the primitives every surface repeats: buttons, chips, property rows, tab strips, list rows, meta strips, status badges, level gauge, empty state. No product logic. | — | — |
 | **Workspace** | The main window: sidebar with meetings grouped by date, the document (summary and transcript), trash, the settings screen, first-run banners, search, the Markdown renderer, `WorkspaceModel` (selection, section, search, sort — the window's single navigation truth), display-state resolution. | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem | — |
-| **Island** | The floating panel: `IslandController` (applies `CallSessionMachine` actions to `RecordingSession`, owns timers), the non-activating `NSPanel`, the faces. | EchoCore, CallDetection, Recording, DesignSystem | — |
+| **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, and the no-notch pill fallback), `IslandController` (applies `CallSessionMachine` actions to `RecordingSession`, owns timers), the non-activating `NSPanel`, the faces. | EchoCore, CallDetection, Recording, DesignSystem | — |
 | **App** (target) | Composition root, scenes, activation policy, the menu bar item, launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
 
 The UI packages are built towards an internal design that is not in the
@@ -276,6 +276,15 @@ names inside a package are free to change.
 - `WorkspaceWindow(dataRoot:)` (root view), `WorkspaceModel` (`@Observable @MainActor`: `section`, `selectedMeetingID`, `selectedTrashedID`, `documentTab`, `searchText`, `sortOrder`, the selection rules), `MeetingSortOrder`, `MeetingFilter`, `MeetingDateGroup`, `MeetingStatus.resolve`, `MarkdownDocument.parse`, `MarkdownRendering`, `MarkdownView`.
 
 **Island**
+- `ScreenGeometry` (one screen's frame, visible frame, `safeAreaInsets.top`, the
+  two auxiliary top areas and the status bar's thickness, read off `NSScreen`
+  once so the geometry below is a pure function a test can state; plus
+  `underPointer()`, which picks the screen the user is looking at), and
+  `IslandMetrics` (`Shell.notch(cutout:)` or `Shell.pill`, `centerX`,
+  `topEdge`, `collapsedHeight`, `frame(for:)`). Both `nonisolated` value types.
+  The cutout is derived from the gap the two auxiliary areas leave between
+  them — `safeAreaInsets.top` gives only its height — because it differs by
+  machine: measured 185 × 32 on a 14" M4 Pro.
 - `IslandController` (`@Observable @MainActor`), `IslandPanel`.
 
 ---
