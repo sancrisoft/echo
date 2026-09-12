@@ -13,13 +13,19 @@ let package = Package(
         .library(name: "Island", targets: ["Island"])
     ],
     dependencies: [
-        .package(path: "../DesignSystem")
+        .package(path: "../CallDetection"),
+        .package(path: "../DesignSystem"),
+        .package(path: "../EchoCore"),
+        .package(path: "../Recording"),
     ],
     targets: [
         .target(
             name: "Island",
             dependencies: [
-                .product(name: "DesignSystem", package: "DesignSystem")
+                .product(name: "CallDetection", package: "CallDetection"),
+                .product(name: "DesignSystem", package: "DesignSystem"),
+                .product(name: "EchoCore", package: "EchoCore"),
+                .product(name: "Recording", package: "Recording"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
@@ -30,7 +36,9 @@ let package = Package(
             name: "IslandTests",
             dependencies: [
                 "Island",
+                .product(name: "CallDetection", package: "CallDetection"),
                 .product(name: "DesignSystem", package: "DesignSystem"),
+                .product(name: "Recording", package: "Recording"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),

@@ -13,6 +13,8 @@
 		E2A0000000000000000000B4 /* Workspace in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A4 /* Workspace */; };
 		E2A0000000000000000000B5 /* Recording in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A5 /* Recording */; };
 		E2A0000000000000000000B6 /* ModelDelivery in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A6 /* ModelDelivery */; };
+		E2A0000000000000000000B7 /* CallDetection in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A7 /* CallDetection */; };
+		E2A0000000000000000000B8 /* Island in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A8 /* Island */; };
 		E2A0000000000000000000B9 /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A9 /* EchoCore */; };
 /* End PBXBuildFile section */
 
@@ -68,6 +70,8 @@
 				E2A0000000000000000000B4 /* Workspace in Frameworks */,
 				E2A0000000000000000000B5 /* Recording in Frameworks */,
 				E2A0000000000000000000B6 /* ModelDelivery in Frameworks */,
+				E2A0000000000000000000B7 /* CallDetection in Frameworks */,
+				E2A0000000000000000000B8 /* Island in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -126,6 +130,8 @@
 				E2A0000000000000000000A4 /* Workspace */,
 				E2A0000000000000000000A5 /* Recording */,
 				E2A0000000000000000000A6 /* ModelDelivery */,
+				E2A0000000000000000000A7 /* CallDetection */,
+				E2A0000000000000000000A8 /* Island */,
 			);
 			productName = Echo;
 			productReference = E2A00000000000000000F001 /* Echo.app */;
@@ -190,6 +196,8 @@
 				E2A000000000000000009004 /* XCLocalSwiftPackageReference "Packages/Workspace" */,
 				E2A000000000000000009005 /* XCLocalSwiftPackageReference "Packages/Recording" */,
 				E2A000000000000000009006 /* XCLocalSwiftPackageReference "Packages/ModelDelivery" */,
+				E2A000000000000000009007 /* XCLocalSwiftPackageReference "Packages/CallDetection" */,
+				E2A000000000000000009008 /* XCLocalSwiftPackageReference "Packages/Island" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E2A000000000000000003002 /* Products */;
@@ -530,6 +538,14 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ModelDelivery;
 		};
+		E2A000000000000000009007 /* XCLocalSwiftPackageReference "Packages/CallDetection" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/CallDetection;
+		};
+		E2A000000000000000009008 /* XCLocalSwiftPackageReference "Packages/Island" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/Island;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -562,6 +578,19 @@
 		E2A0000000000000000000A6 /* ModelDelivery */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ModelDelivery;
+		};
+		/* CallDetection and Island are also DIRECT imports of the app target.
+		   The composition root builds the detector, serves the three requests
+		   it makes of the app, and starts both of them — all launch-time work
+		   it owns. Island reaches CallDetection, Recording and DesignSystem
+		   through its own manifest; none of those is listed here for it. */
+		E2A0000000000000000000A7 /* CallDetection */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CallDetection;
+		};
+		E2A0000000000000000000A8 /* Island */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Island;
 		};
 		E2A0000000000000000000A9 /* EchoCore */ = {
 			isa = XCSwiftPackageProductDependency;

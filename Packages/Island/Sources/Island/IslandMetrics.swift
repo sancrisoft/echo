@@ -107,10 +107,15 @@ public nonisolated struct IslandMetrics: Equatable, Sendable {
 
     /// Where a shell of `size` sits on this screen.
     ///
-    /// Deliberately unrounded: the cutout's centre falls on a half point on the
-    /// 14", and every Mac with a cutout is a 2x display, where half a point is
-    /// a whole pixel and lands crisp. Rounding would move the shell off the
-    /// cutout and buy nothing.
+    /// Exact, fractions and all: the cutout's centre falls on a half point on
+    /// the 14", and this is the geometry, not the window.
+    ///
+    /// A window cannot hold the fraction. Measured on 2026-09-11 on the 14" M4
+    /// Pro: `NSWindow.setFrame` given x −872.5 reports −873 back, before and
+    /// after ordering front, on a 2x screen. Rounding is therefore the
+    /// window's business and is done where the window is
+    /// (`IslandShellGeometry.panelFrame(on:)`), deliberately rather than by
+    /// whatever AppKit would have done on its own.
     public func frame(for size: CGSize) -> CGRect {
         CGRect(
             x: centerX - size.width / 2,

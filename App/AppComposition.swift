@@ -9,9 +9,11 @@
 //  stay inert scaffolding that touches no data folder (ADR-004).
 //
 
+import CallDetection
 import DesignSystem
 import EchoCore
 import Foundation
+import Island
 import Meetings
 import ModelDelivery
 import Recording
@@ -34,10 +36,18 @@ final class AppComposition {
     let library: MeetingLibrary
 
     /// The one truth about a recording: phase, live levels, notices, the
-    /// meeting being worked on, and the actions. Injected even though nothing
-    /// renders it yet — the record gesture arrives with the island, and the
-    /// design has the menu bar item expand the island rather than record.
+    /// meeting being worked on, and the actions.
     let session: RecordingSession
+
+    /// Notices a call and asks for the three things it cannot do itself. It
+    /// exists only now that there is a panel to show what it decides:
+    /// detection without one could stop a recording with nothing on screen to
+    /// explain why.
+    let detector: CallDetector
+
+    /// The island: the panel, the face it wears, and the only place detection
+    /// and the session meet.
+    let island: IslandController
 
     /// The main window's navigation state.
     let workspace: WorkspaceModel
@@ -58,6 +68,38 @@ final class AppComposition {
         workspace = WorkspaceModel()
         windowOpener = WindowOpener()
         errorLog = ErrorTraceLog(directory: dataRoot.logs)
+
+        // Detection's three verbs, served here because this is the only place
+        // that holds all of the session, the window's navigation and the
+        // opener at once. Each is the same call every other surface makes:
+        // the island's reach is exactly "the start and stop the rest of the
+        // app runs", and nothing wider is representable.
+        // Bound locally so the three closures capture the three objects and
+        // not the composition root: capturing `self` here would put every
+        // long-lived object in the app behind a detection request, and leave
+        // the root retained by something it owns.
+        let session = session
+        let workspace = workspace
+        let windowOpener = windowOpener
+        detector = CallDetector(
+            settings: settings,
+            requests: CallDetectionRequests(
+                startRecording: { scope in Task { await session.start(scope: scope) } },
+                stopRecording: { await session.stop() },
+                openSavedMeeting: {
+                    // The meeting the stop just persisted: the session is
+                    // transcribing or summarising it, and that is the one it
+                    // is carrying. With none, the window still opens —
+                    // landing somewhere is better than a tap that does
+                    // nothing.
+                    if let meetingID = session.currentMeetingID {
+                        workspace.open(meetingID)
+                    }
+                    windowOpener.openMainWindow()
+                }
+            )
+        )
+        island = IslandController(detector: detector, session: session)
     }
 
     /// Starts every launch side effect. Idempotent; a no-op under a test host.
@@ -116,6 +158,14 @@ final class AppComposition {
             await session.resumePendingFinalizations()
             session.kickSummaryBackfill()
         }
+
+        // The island goes up before detection starts watching: a call noticed
+        // with no panel on screen would be a decision nobody could see being
+        // made. It is also the app's permanent presence — the design has it
+        // on screen with nothing happening, which is where a recording is
+        // started from.
+        island.start()
+        detector.start()
     }
 
     /// Shows the settings section in the main window.

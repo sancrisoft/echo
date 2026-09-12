@@ -11,6 +11,7 @@
 
 import AppKit
 import EchoCore
+import Island
 import Meetings
 import SwiftUI
 import Workspace
@@ -24,10 +25,15 @@ import Workspace
                 guard let path = composition.environment.snapshotPath else { return }
                 // Let the library's launch refresh land before choosing a scene.
                 try? await Task.sleep(for: .seconds(1.5))
-                show(composition.environment.snapshotScene)
+                let scene = composition.environment.snapshotScene
+                show(scene)
                 // Let the scene load its document and lay out.
                 try? await Task.sleep(for: .seconds(1.5))
-                write(to: path)
+                if scene == .island {
+                    composition.island.snapshot(to: path)
+                } else {
+                    write(to: path)
+                }
                 NSApp.terminate(nil)
             }
         }
@@ -46,6 +52,10 @@ import Workspace
                 workspace.section = .trash
             case .settings:
                 workspace.section = .settings
+            case .island:
+                // Nothing to put on screen: the island is already up, and
+                // which face it wears is not the window's to decide.
+                break
             }
         }
 

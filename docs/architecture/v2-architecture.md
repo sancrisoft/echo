@@ -86,7 +86,7 @@ Each package answers "who owns this?" for one product capability from
 | **Updates** | Version arithmetic, the GitHub release feed, the daily checker, and the updater that hands off to the install script. | EchoCore | — |
 | **DesignSystem** | Semantic color tokens for light and dark, the type scale over the two bundled typefaces, spacing, radii and control geometry, and the primitives every surface repeats: buttons, chips, property rows, tab strips, list rows, meta strips, status badges, level gauge, empty state. No product logic. | — | — |
 | **Workspace** | The main window: sidebar with meetings grouped by date, the document (summary and transcript), trash, the settings screen, first-run banners, search, the Markdown renderer, `WorkspaceModel` (selection, section, search, sort — the window's single navigation truth), display-state resolution. | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem | — |
-| **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, and the no-notch pill fallback), `IslandController` (applies `CallSessionMachine` actions to `RecordingSession`, owns timers), the non-activating `NSPanel`, the faces. | EchoCore, CallDetection, Recording, DesignSystem | — |
+| **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, and the no-notch pill fallback), the shell itself (its outline with the two concave flares, the ears either side of the cutout, the one-row expansion), `IslandController` (the non-activating `NSPanel`, which face the shell wears, where the window goes, and the one report detection needs about the session), the faces. | EchoCore, CallDetection, Recording, DesignSystem | — |
 | **App** (target) | Composition root, scenes, activation policy, the menu bar item, launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
 
 The UI packages are built towards an internal design that is not in the
@@ -285,7 +285,21 @@ names inside a package are free to change.
   The cutout is derived from the gap the two auxiliary areas leave between
   them — `safeAreaInsets.top` gives only its height — because it differs by
   machine: measured 185 × 32 on a 14" M4 Pro.
-- `IslandController` (`@Observable @MainActor`), `IslandPanel`.
+- `IslandShellFace` (the six faces the design draws, as silhouettes;
+  `resolve(detection:phase:)` composes detection's face with the session's
+  phase, and `expandsOnItsOwn(detection:)` says which open with no pointer on
+  them) and `IslandShellGeometry` (shell size, the margin the flares or the
+  pill's shadow need inside the window, radius, cutout width, and
+  `panelFrame(on:)` — which rounds, because a window origin is whole points and
+  the cutout's centre is not).
+- `IslandShellShape` (square at the top, rounded at the bottom, a concave flare
+  outside each top corner) and `IslandShell` (the chrome: the black, the two
+  ears and the row).
+- `IslandController` (`@Observable @MainActor`: `face`, `isExpanded`,
+  `metrics`, `start()`/`stop()`), `IslandPanel`. The controller is also the one
+  place detection and the session meet — neither package can observe the other
+  — so it reports `recordingChanged` once per change.
+- `IslandGallery` (DEBUG): every face, collapsed and expanded, on one sheet.
 
 ---
 
@@ -303,7 +317,7 @@ One owner per kind of state. Nothing is mirrored.
 | Preferences | `AppSettings` (EchoCore) | `settings.json`, key-by-key decode, additive. Consumers read the property at the moment they act. |
 | Launch at login | `SMAppService` (read through Workspace's settings screen) | The OS is the source of truth; never mirrored. |
 | Window navigation (section, selection, opened document, tab, search, sort) | `WorkspaceModel` (Workspace) | One object; the PoC's triple-tracked selection and dead `MeetingLibrary.selection` do not return. |
-| Island face, deadline | `IslandController` (Island) | Face is the machine's output; the countdown renders the controller's real deadline. |
+| Island face, deadline | `CallDetector` (CallDetection), composed by `IslandController` (Island) | Detection's face is the machine's output and its deadline is the real one a countdown renders. The island composes that face with the session's phase into the silhouette it wears — a pure resolver, not a second copy. |
 | Transient UI (hover, confirmation dialogs, focus) | `@State` in the view | |
 | Derived (a meeting's display status) | Pure resolver in Workspace over `MeetingMeta` + `RecordingSession` + `FinalizationMachine` state | Computed, never stored. |
 
