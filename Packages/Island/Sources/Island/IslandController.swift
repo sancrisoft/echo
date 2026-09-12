@@ -50,14 +50,35 @@ public final class IslandController {
     @ObservationIgnored private let detector: CallDetector
     @ObservationIgnored private let session: RecordingSession
     @ObservationIgnored private var panel: IslandPanel?
-    @ObservationIgnored private var screenObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var screenObservers: [any NSObjectProtocol] = []
     @ObservationIgnored private var hover: HoverGrace?
+
+    /// The display the island is currently on, so a placement can ask whether
+    /// it is still attached. `nil` before the first one.
+    @ObservationIgnored private var currentDisplay: CGDirectDisplayID?
+
+    /// The pending re-placement after an activation, once `NSScreen.main` has
+    /// caught up with it.
+    @ObservationIgnored private var restage: Task<Void, Never>?
 
     /// The pending trim of a window that is larger than the shell inside it,
     /// because the shell is closing. Cancelled by anything that makes the
     /// window grow again, so a pointer that comes straight back never sees a
     /// window shrink under an opening shell.
     @ObservationIgnored private var settle: Task<Void, Never>?
+
+    /// How long to let `NSScreen.main` settle after an app is activated.
+    ///
+    /// Measured on 2026-09-11 with two displays: at the instant
+    /// `didActivateApplicationNotification` arrives, `NSScreen.main` still
+    /// reports the screen being LEFT — every activation sampled, without
+    /// exception — and had caught up 16–80 ms later. Reading it immediately
+    /// would put the island on the screen the user just walked away from,
+    /// which is the exact failure this whole layer exists to fix, so the read
+    /// waits with margin over the slowest reading. The cost of waiting is a
+    /// beat nobody is looking at yet; the cost of being early is the wrong
+    /// screen.
+    private static let activationSettle: Duration = .milliseconds(200)
 
     /// Whether the shell will actually move. The system's setting, read at the
     /// moment it matters rather than mirrored: the OS owns it, and the view
@@ -106,30 +127,86 @@ public final class IslandController {
         panel.contentView = tracking
         self.panel = panel
 
-        // The screen the island belongs on can change without anything on the
-        // island changing: a display is plugged in, the menu bar is hidden,
-        // the resolution moves.
-        screenObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didChangeScreenParametersNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.place() }
-        }
-
+        followScreens()
         observe()
         update()
+    }
+
+    /// The screen the island belongs on changes without anything on the island
+    /// changing, and it changes as an EVENT — which is the whole reason #194
+    /// chose the active screen over the pointer. Two kinds of event cover it:
+    ///
+    ///   - the screens themselves are rearranged: a display plugged in or, the
+    ///     case that matters, unplugged out from under the window;
+    ///   - the user moves to another screen, which reaches an app that never
+    ///     activates as somebody else being activated, or as the active Space
+    ///     changing — with "Displays have separate Spaces" on, another
+    ///     display's Space is another Space.
+    ///
+    /// The first is placed on at once: `NSScreen.screens` is already the new
+    /// list when it arrives, and a window on a screen that is gone cannot wait.
+    /// The second waits for `NSScreen.main` to catch up (`activationSettle`).
+    private func followScreens() {
+        let workspace = NSWorkspace.shared.notificationCenter
+        screenObservers = [
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    // A rearrangement outranks a pending activation: the list
+                    // it would have read no longer exists.
+                    self?.restage?.cancel()
+                    self?.restage = nil
+                    self?.place()
+                }
+            },
+            workspace.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.placeWhenActiveScreenSettles() }
+            },
+            workspace.addObserver(
+                forName: NSWorkspace.activeSpaceDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.placeWhenActiveScreenSettles() }
+            },
+        ]
+    }
+
+    /// Re-places once the active screen has settled. Coalesced, because
+    /// activating an app raises both notifications and switching apps quickly
+    /// raises several: the island is placed where the user ended up, not once
+    /// per step of getting there.
+    private func placeWhenActiveScreenSettles() {
+        restage?.cancel()
+        restage = Task { [weak self] in
+            try? await Task.sleep(for: Self.activationSettle)
+            guard !Task.isCancelled, let self, self.panel != nil else { return }
+            self.restage = nil
+            self.place()
+        }
     }
 
     /// Takes the island off screen and stops following anything. The panel is
     /// released with the controller; nothing here is meant to be restarted.
     public func stop() {
-        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
-        screenObserver = nil
+        for observer in screenObservers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        screenObservers = []
         hover?.forget()
         hover = nil
         settle?.cancel()
         settle = nil
+        restage?.cancel()
+        restage = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -196,31 +273,35 @@ public final class IslandController {
 
     // MARK: - Placement
 
-    /// Sizes the window to the face and hangs it off the current screen.
+    /// Sizes the window to the face and hangs it off the screen it belongs on.
     ///
-    /// The screen is re-read on every placement rather than remembered: it is
-    /// the one under the pointer, and the pointer moves.
+    /// The screen is re-read on every placement rather than remembered — the
+    /// active screen moves, and so does the set of screens there are — and the
+    /// choice between staying and moving is `ScreenGeometry.choice`, which is
+    /// where the three rules are written down.
     ///
-    /// Between placements the island stays where it was put. That was true of
-    /// the PoC's island too, where it did not matter — that island appeared,
-    /// said something and went away. This one never goes away, and with two
-    /// displays attached the difference shows: measured on 2026-09-11, a
-    /// pointer that crosses to the other screen leaves the idle island behind
-    /// on the one it was placed on, and there is nothing to hover where the
-    /// user now is. It catches up on the next thing that happens — a call, a
-    /// recording, a face changing. Following the pointer the rest of the time
-    /// means watching every mouse move system-wide, for a window that has
-    /// never needed that before; it is a decision, not an oversight, and it
-    /// has its own issue, #194.
+    /// Placement happens whenever anything changes: a face, a hover, a
+    /// recording, an app being activated, the screens being rearranged. The
+    /// idle face is the one this matters most for, because it is the one that
+    /// is on screen the rest of the time — measured on 2026-09-11, before this
+    /// layer, it stayed behind on the display it was first placed on and there
+    /// was nothing to hover where the user had gone (#194).
     private func place() {
         guard let panel else { return }
-        guard let geometry = ScreenGeometry.underPointer() else {
+        guard
+            let geometry = ScreenGeometry.forShell(
+                current: currentDisplay,
+                hovered: hover?.isInside ?? false
+            )
+        else {
             // No screens: nothing to hang off, and a window placed on a
             // screen that is not there is worse than no window.
             metrics = nil
+            currentDisplay = nil
             panel.orderOut(nil)
             return
         }
+        currentDisplay = geometry.displayID
         let metrics = IslandMetrics(geometry)
         self.metrics = metrics
         let target = IslandShellGeometry(metrics: metrics, face: face, isExpanded: isExpanded)
@@ -257,6 +338,8 @@ public final class IslandController {
             // app on that Mac and read the log.
             let reading =
                 "\(face) \(isExpanded ? "open" : "shut")"
+                + " display \(geometry.displayID) of \(NSScreen.screens.count)"
+                + " hovered \(hover?.isInside ?? false)"
                 + " pointer \(NSStringFromPoint(NSEvent.mouseLocation))"
                 + " \(metrics.shell)"
                 + " frame \(NSStringFromRect(geometry.frame))"

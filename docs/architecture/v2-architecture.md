@@ -279,7 +279,10 @@ names inside a package are free to change.
 - `ScreenGeometry` (one screen's frame, visible frame, `safeAreaInsets.top`, the
   two auxiliary top areas and the status bar's thickness, read off `NSScreen`
   once so the geometry below is a pure function a test can state; plus
-  `underPointer()`, which picks the screen the user is looking at), and
+  `forShell(current:hovered:)`, which picks the display the shell belongs on
+  from the ACTIVE screen rather than the pointer, and the pure `choice` behind
+  it: a shell whose display is gone moves, a shell under the pointer waits, and
+  otherwise it follows), and
   `IslandMetrics` (`Shell.notch(cutout:)` or `Shell.pill`, `centerX`,
   `topEdge`, `collapsedHeight`, `frame(for:)`). Both `nonisolated` value types.
   The cutout is derived from the gap the two auxiliary areas leave between
@@ -299,7 +302,10 @@ names inside a package are free to change.
   `metrics`, `start()`/`stop()`), `IslandPanel`. The controller is also the one
   place detection and the session meet — neither package can observe the other
   — so it reports `recordingChanged` and `hoverChanged` down, once per change
-  each.
+  each. It follows the active screen from three notifications (screen
+  parameters, app activation, active Space), letting `NSScreen.main` settle
+  after the last two because it is measurably stale at the instant they
+  arrive.
 - `IslandHoverView` (internal: the `NSTrackingArea` that is the only mechanism
   by which a panel that never becomes key learns about the pointer — spike #69
   measured `acceptsMouseMovedEvents` delivering nothing at all) and
