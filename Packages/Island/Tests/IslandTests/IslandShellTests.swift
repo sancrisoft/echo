@@ -535,6 +535,42 @@ struct IslandShellTests {
 
     // MARK: For the eye
 
+    @Test("a shell smaller than its window hangs from the top of it, never floats in the middle")
+    func theShellHangsFromTheTop() throws {
+        // The state this is about is the middle of an expansion: the window
+        // has already taken the room the open shell will need, and the shell
+        // inside it is still small. Hung from the top, the black is against
+        // the bezel and grows downward out of the notch. Centred, it starts
+        // below the notch and rises into it, which is what was reported.
+        let metrics = IslandMetrics(Self.notched)
+        let shut = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: false)
+        let open = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: true)
+        #expect(open.panelSize.height > shut.panelSize.height, "the fixture stopped being the case")
+
+        let rendered = try image(
+            of: IslandShell(
+                geometry: shut,
+                isExpanded: false,
+                leadingEar: { Color.clear },
+                trailingEar: { Color.clear },
+                row: { Color.clear }
+            ),
+            size: open.panelSize
+        )
+
+        let middle = rendered.width / 2
+        #expect(try isOpaque(rendered, atX: middle, y: 2), "nothing against the top of the window")
+        #expect(
+            try !isOpaque(rendered, atX: middle, y: rendered.height - 3),
+            "the shell reaches the bottom, so this proves nothing about where it hangs")
+        // The last row of the shell itself, and the first row past it.
+        let shellBottom = Int(shut.panelSize.height) * 2
+        #expect(try isOpaque(rendered, atX: middle, y: shellBottom - 3))
+        #expect(
+            try !isOpaque(rendered, atX: middle, y: shellBottom + 3),
+            "the shell is lower than the top of its window")
+    }
+
     @Test("the shell draws the same in both appearances")
     func theShellDoesNotFollowTheAppearance() throws {
         // The island is black on a light Mac too: it is poured from the bezel,
@@ -549,8 +585,15 @@ struct IslandShellTests {
                     trailingEar: { Color.clear },
                     row: { Color.clear }
                 )
-                let light = try image(of: shell.environment(\.colorScheme, .light))
-                let dark = try image(of: shell.environment(\.colorScheme, .dark))
+                let panel = IslandShellGeometry(metrics: metrics, face: face, isExpanded: isExpanded)
+                    .panelSize
+                let light = try image(of: shell.environment(\.colorScheme, .light), size: panel)
+                let dark = try image(of: shell.environment(\.colorScheme, .dark), size: panel)
+                // A blank pair matches a blank pair: without this the test
+                // passes on two empty images, which is what it did the moment
+                // the shell's root became something with no ideal size.
+                #expect(light.width == Int(panel.width) * 2, "\(face) rendered at the wrong size")
+                #expect(try isOpaque(light, atX: light.width / 2, y: 2), "\(face) rendered nothing")
                 #expect(
                     light.dataProvider?.data == dark.dataProvider?.data,
                     "\(face) draws something that follows the appearance")
@@ -584,9 +627,26 @@ struct IslandShellTests {
         }
     }
 
-    private func image(of view: some View) throws -> CGImage {
-        let renderer = ImageRenderer(content: view)
+    /// Renders at an explicit size, because the shell fills what it is given
+    /// rather than asserting a size of its own — exactly as it does inside its
+    /// window. Rendered with no size it collapses to nothing.
+    private func image(of view: some View, size: CGSize) throws -> CGImage {
+        let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
         renderer.scale = 2
         return try #require(renderer.cgImage)
+    }
+
+    /// Whether the rendered pixel is drawn at all, which for the shell means
+    /// black rather than nothing. The alpha byte is wherever the renderer put
+    /// it, so ask rather than assume.
+    private func isOpaque(_ image: CGImage, atX x: Int, y: Int) throws -> Bool {
+        let data = try #require(image.dataProvider?.data as Data?)
+        let bytesPerPixel = image.bitsPerPixel / 8
+        let offset = y * image.bytesPerRow + x * bytesPerPixel
+        try #require(offset + bytesPerPixel <= data.count)
+        let alphaFirst =
+            image.alphaInfo == .premultipliedFirst || image.alphaInfo == .first
+            || image.alphaInfo == .noneSkipFirst
+        return data[alphaFirst ? offset : offset + bytesPerPixel - 1] > 0
     }
 }

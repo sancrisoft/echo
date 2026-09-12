@@ -58,18 +58,33 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
     }
 
     public var body: some View {
-        ZStack(alignment: .top) {
-            shell
-            ears
-            openRow
+        // A `GeometryReader` rather than a flexible frame, because a flexible
+        // frame did not hold the top. `maxHeight: .infinity` only fills a
+        // proposal it is given one for, and the hosting view does not offer a
+        // definite height — so the frame collapsed to the shell's own height
+        // and the shell was centred in the window instead of hung from it.
+        // Measured on the 14" M4 Pro during a first hover: 21 pt below the top
+        // of its own window 92 ms in and 9 pt at 202 ms, with as much empty
+        // space beneath it as above, in the model layer and the presentation
+        // layer alike — so a layout, not an animation. What anybody watching
+        // sees of that is the shell rising into the notch from below instead
+        // of pouring out of it.
+        //
+        // A reader always fills what it is offered, and the frame below is
+        // then a definite size with a definite alignment.
+        GeometryReader { proxy in
+            ZStack(alignment: .top) {
+                shell
+                ears
+                openRow
+            }
+            .frame(width: geometry.shellSize.width, height: geometry.shellSize.height)
+            // The shell hangs from the top of its window by the margin the
+            // flares or the pill's shadow need, and is centred across it.
+            .padding(.top, geometry.shellInset.height)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+            .animation(shellMotion, value: geometry.shellSize)
         }
-        .frame(width: geometry.shellSize.width, height: geometry.shellSize.height)
-        .animation(shellMotion, value: geometry.shellSize)
-        // The shell hangs from the top of its window by the margin the flares
-        // or the pill's shadow need, and is centred across it. Everything else
-        // about the window's size is the window's business.
-        .padding(.top, geometry.shellInset.height)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     // MARK: The black
