@@ -21,6 +21,7 @@
 
 import AppKit
 import CallDetection
+import DesignSystem
 import EchoCore
 import Observation
 import Recording
@@ -51,6 +52,19 @@ public final class IslandController {
     @ObservationIgnored private var panel: IslandPanel?
     @ObservationIgnored private var screenObserver: (any NSObjectProtocol)?
     @ObservationIgnored private var hover: HoverGrace?
+
+    /// The pending trim of a window that is larger than the shell inside it,
+    /// because the shell is closing. Cancelled by anything that makes the
+    /// window grow again, so a pointer that comes straight back never sees a
+    /// window shrink under an opening shell.
+    @ObservationIgnored private var settle: Task<Void, Never>?
+
+    /// Whether the shell will actually move. The system's setting, read at the
+    /// moment it matters rather than mirrored: the OS owns it, and the view
+    /// reads the same setting through its own environment.
+    private var animates: Bool {
+        !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
 
     /// The last recording state reported to detection. Kept so the news
     /// crosses once per change: `recordingChanged` can move detection's own
@@ -120,6 +134,8 @@ public final class IslandController {
         screenObserver = nil
         hover?.forget()
         hover = nil
+        settle?.cancel()
+        settle = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -168,10 +184,19 @@ public final class IslandController {
     /// Sizes the window to the face and hangs it off the current screen.
     ///
     /// The screen is re-read on every placement rather than remembered: it is
-    /// the one under the pointer, and the pointer moves. Between placements
-    /// the island stays where it was put — following the pointer continuously
-    /// would mean watching every mouse move system-wide, for a window that
-    /// only needs to be right when it changes.
+    /// the one under the pointer, and the pointer moves.
+    ///
+    /// Between placements the island stays where it was put. That was true of
+    /// the PoC's island too, where it did not matter — that island appeared,
+    /// said something and went away. This one never goes away, and with two
+    /// displays attached the difference shows: measured on 2026-09-11, a
+    /// pointer that crosses to the other screen leaves the idle island behind
+    /// on the one it was placed on, and there is nothing to hover where the
+    /// user now is. It catches up on the next thing that happens — a call, a
+    /// recording, a face changing. Following the pointer the rest of the time
+    /// means watching every mouse move system-wide, for a window that has
+    /// never needed that before; it is a decision, not an oversight, and it
+    /// has its own issue, #194.
     private func place() {
         guard let panel else { return }
         guard let geometry = ScreenGeometry.underPointer() else {
@@ -183,11 +208,29 @@ public final class IslandController {
         }
         let metrics = IslandMetrics(geometry)
         self.metrics = metrics
-        panel.setFrame(
-            IslandShellGeometry(metrics: metrics, face: face, isExpanded: isExpanded)
-                .panelFrame(on: metrics),
-            display: true
-        )
+        let target = IslandShellGeometry(metrics: metrics, face: face, isExpanded: isExpanded)
+            .panelFrame(on: metrics)
+
+        // The window has to hold the shell for the whole of the spring, and it
+        // is not part of it: it takes the union now and is trimmed to the
+        // target once the shell has stopped.
+        settle?.cancel()
+        settle = nil
+        let animated = animates && panel.isVisible
+        let now = IslandWindowTransition.now(from: panel.frame, to: target, animated: animated)
+        panel.setFrame(now, display: true)
+        if IslandWindowTransition.settles(now, to: target) {
+            settle = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(EchoMotion.islandShellSpring.settlingDuration))
+                guard !Task.isCancelled, let self, let panel = self.panel else { return }
+                panel.setFrame(target, display: true)
+                self.settle = nil
+                #if DEBUG
+                    Self.log.info(
+                        "Island window trimmed to \(NSStringFromRect(target), privacy: .public)")
+                #endif
+            }
+        }
         // Not `orderFront`: Echo is an accessory app, and the island appears
         // without activating it.
         panel.orderFrontRegardless()
@@ -207,6 +250,7 @@ public final class IslandController {
                 + " statusBar \(geometry.statusBarThickness)"
                 + " menuBar \(metrics.menuBarHeight)"
                 + " scale \(panel.backingScaleFactor)"
+                + " shell \(NSStringFromRect(target))"
                 + " window \(NSStringFromRect(panel.frame))"
             Self.log.info("Island placed: \(reading, privacy: .public)")
         #endif

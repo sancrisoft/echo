@@ -34,7 +34,7 @@ import SwiftUI
 public struct IslandShellShape: Shape {
 
     /// The bottom corners. The top two are always square.
-    public let cornerRadius: CGFloat
+    public var cornerRadius: CGFloat
 
     /// The concave corner at each end of the top edge. Zero draws the shell
     /// with none, which is what a screen with no cutout asks for.
@@ -43,6 +43,14 @@ public struct IslandShellShape: Shape {
     public init(cornerRadius: CGFloat, flare: CGFloat = EchoLayout.islandFlare) {
         self.cornerRadius = cornerRadius
         self.flare = flare
+    }
+
+    /// The radius, so it travels with the width and the height instead of
+    /// stepping between them. The flare does not move: it is the same corner
+    /// on a shell of any size, and it only changes when the screen does.
+    public var animatableData: CGFloat {
+        get { cornerRadius }
+        set { cornerRadius = newValue }
     }
 
     public func path(in rect: CGRect) -> Path {

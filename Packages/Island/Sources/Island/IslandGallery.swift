@@ -49,9 +49,14 @@ import SwiftUI
         /// Drawn over a ground that is not the shell's own black, so the
         /// flares are visible as flares: what they expose is whatever is
         /// behind the island, and against black they expose nothing.
+        ///
+        /// The cell is the window's size, because the shell fills its window
+        /// rather than asserting a size of its own — the gallery stands in for
+        /// the window here and has to be as big as one.
         private func shell(_ face: IslandShellFace, isExpanded: Bool) -> some View {
-            IslandShell(
-                geometry: IslandShellGeometry(metrics: metrics, face: face, isExpanded: isExpanded),
+            let geometry = IslandShellGeometry(metrics: metrics, face: face, isExpanded: isExpanded)
+            return IslandShell(
+                geometry: geometry,
                 isExpanded: isExpanded,
                 leadingEar: {
                     Circle()
@@ -74,6 +79,7 @@ import SwiftUI
                     }
                 }
             )
+            .frame(width: geometry.panelSize.width, height: geometry.panelSize.height)
             .background(EchoColor.surface)
         }
     }

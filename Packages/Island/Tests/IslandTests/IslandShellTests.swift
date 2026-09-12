@@ -150,13 +150,24 @@ struct IslandShellTests {
         #expect(geometry.panelSize.height == geometry.shellSize.height)
     }
 
-    @Test("the collapsed shell knows the hole it has to split around; the expanded one has none")
-    func onlyTheCollapsedShellSplitsAroundTheCutout() {
+    @Test("the hole the ears split around belongs to the screen, not to a state")
+    func theCutoutIsTheScreensAndNotTheStates() {
+        // The ears go on holding their places either side of the cutout for as
+        // long as they are still on screen, and they are still on screen while
+        // the shell opens. A hole that vanished the instant it began would
+        // take them with it, mid-fade.
         let metrics = IslandMetrics(Self.notched)
-        #expect(
-            IslandShellGeometry(metrics: metrics, face: .recording, isExpanded: false).cutoutWidth
-                == metrics.cutout?.width)
-        #expect(IslandShellGeometry(metrics: metrics, face: .recording, isExpanded: true).cutoutWidth == nil)
+        for isExpanded in [false, true] {
+            #expect(
+                IslandShellGeometry(metrics: metrics, face: .recording, isExpanded: isExpanded)
+                    .cutoutWidth == metrics.cutout?.width)
+        }
+        // A screen with no cutout has no hole in either state.
+        for isExpanded in [false, true] {
+            #expect(
+                IslandShellGeometry(metrics: .init(Self.noCutout), face: .recording, isExpanded: isExpanded)
+                    .cutoutWidth == nil)
+        }
     }
 
     @Test("a shell that hangs off the bezel casts nothing")

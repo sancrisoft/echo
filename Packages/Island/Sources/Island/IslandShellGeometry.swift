@@ -36,8 +36,11 @@ public nonisolated struct IslandShellGeometry: Equatable, Sendable {
     /// floats clear of the bezel and so has nothing to be poured from.
     public let flare: CGFloat
 
-    /// The cutout the collapsed shell splits its content around, when the
-    /// screen has one and the shell is collapsed around it.
+    /// The cutout the ears split around, when the screen has one. A property
+    /// of the screen and not of the state: the ears go on holding their places
+    /// either side of it for as long as they are still on screen, and a hole
+    /// that vanished the instant the shell began to open would take them with
+    /// it.
     public let cutoutWidth: CGFloat?
 
     /// Whether the shell casts. Only the pill does.
@@ -56,7 +59,7 @@ public nonisolated struct IslandShellGeometry: Equatable, Sendable {
             // to reach into.
             shellInset = CGSize(width: flare, height: 0)
             cornerRadius = isExpanded ? EchoRadius.islandExpanded : EchoRadius.islandCollapsed
-            cutoutWidth = isExpanded ? nil : cutout.width
+            cutoutWidth = cutout.width
             castsShadow = false
 
         case .pill:

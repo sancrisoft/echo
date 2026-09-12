@@ -84,7 +84,7 @@ Each package answers "who owns this?" for one product capability from
 | **Recording** | The meeting lifecycle behind one observable: `RecordingSession` (phase, live levels, notices, current meeting, start/stop/retry), permission priming, wiring Audio into retention and levels, the finalization machine that schedules transcription passes and gates summaries, the summary scheduler and backfill policy. | EchoCore, Audio, Transcription, Summarization, ModelDelivery, Meetings | — |
 | **CallDetection** | Which apps are on a call: the mic-activity monitor over Core Audio process metadata, the curated app catalog, the installed-browser catalog, the disabled-apps filter, and `CallSessionMachine` (debounce, grace, faces as pure output). Produces `CaptureScope` values. | EchoCore, Audio | — |
 | **Updates** | Version arithmetic, the GitHub release feed, the daily checker, and the updater that hands off to the install script. | EchoCore | — |
-| **DesignSystem** | Semantic color tokens for light and dark, the type scale over the two bundled typefaces, spacing, radii and control geometry, and the primitives every surface repeats: buttons, chips, property rows, tab strips, list rows, meta strips, status badges, level gauge, empty state. No product logic. | — | — |
+| **DesignSystem** | Semantic color tokens for light and dark, the type scale over the two bundled typefaces, spacing, radii and control geometry, the durations and curves the design states (`EchoMotion`), and the primitives every surface repeats: buttons, chips, property rows, tab strips, list rows, meta strips, status badges, level gauge, empty state. No product logic. | — | — |
 | **Workspace** | The main window: sidebar with meetings grouped by date, the document (summary and transcript), trash, the settings screen, first-run banners, search, the Markdown renderer, `WorkspaceModel` (selection, section, search, sort — the window's single navigation truth), display-state resolution. | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem | — |
 | **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, and the no-notch pill fallback), the shell itself (its outline with the two concave flares, the ears either side of the cutout, the one-row expansion), `IslandController` (the non-activating `NSPanel`, which face the shell wears, where the window goes, and the one report detection needs about the session), the faces. | EchoCore, CallDetection, Recording, DesignSystem | — |
 | **App** (target) | Composition root, scenes, activation policy, the menu bar item, launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
@@ -305,6 +305,10 @@ names inside a package are free to change.
   `HoverGrace` (internal: crossings into presence, with the design's grace on
   the way out). Hover is crossings only; where the pointer is inside the island
   is not knowable and nothing is built on it.
+- `IslandWindowTransition` (internal: the window is not part of the spring, so
+  it takes the union of where the shell is and where it is going, and is
+  trimmed when the spring settles — a window cut to the shell would clip the
+  animation at its own edge).
 - `IslandGallery` (DEBUG): every face, collapsed and expanded, on one sheet.
 
 ---
