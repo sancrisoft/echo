@@ -206,6 +206,7 @@ struct IslandShellTests {
         let geometry = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: false)
 
         #expect(geometry.panelSize.width == cutout.width)
+        #expect(geometry.shellSize.width == cutout.width)
         #expect(geometry.shellSize.height == cutout.height)
 
         let frame = geometry.panelFrame(on: metrics)
@@ -213,20 +214,48 @@ struct IslandShellTests {
         #expect(frame.width <= cutout.width, "black on the bezel either side of the notch")
     }
 
-    @Test("the flares are kept, and taken out of the width instead")
-    func theIdleShellKeepsItsFlares() {
-        // Dropping them would have been the other way to fit inside the hole,
-        // and it would cost every expansion its first frame: the flare is the
-        // same corner at every size and does not animate, so a collapsed shell
-        // with none would have to grow two the instant the pointer arrives.
-        let geometry = IslandShellGeometry(
-            metrics: .init(Self.notched), face: .idle, isExpanded: false)
-        let cutout = try! #require(IslandMetrics(Self.notched).cutout)
-        #expect(geometry.flare == EchoLayout.islandFlare)
-        #expect(geometry.flare > 0)
-        // The width is what is left of the hole once both flares have taken
-        // their room — which is what makes the drawn black add back up to it.
-        #expect(geometry.shellSize.width == cutout.width - 2 * geometry.flare)
+    @Test("the idle shell has no flares, because there is nothing to pour from")
+    func theIdleShellHasNoFlares() {
+        // A flare is black drawn OUTSIDE the shell, and outside the hole there
+        // is only bezel. So the shell takes the cutout's own outline and the
+        // flares grow in with the expansion — which is why the shape animates
+        // the flare rather than stepping it.
+        let metrics = IslandMetrics(Self.notched)
+        let cutout = try! #require(metrics.cutout)
+
+        let shut = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: false)
+        #expect(shut.flare == 0)
+        #expect(shut.shellSize.width == cutout.width)
+
+        let open = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: true)
+        #expect(open.flare == EchoLayout.islandFlare)
+    }
+
+    @Test("a face with ears keeps its flares while collapsed")
+    func theAnnouncingFacesKeepTheirFlares() {
+        // They hang off the bezel rather than hiding in the hole, and the
+        // flare is what makes them read as poured from it.
+        let metrics = IslandMetrics(Self.notched)
+        for face in IslandShellFace.allCases where face.announces {
+            let geometry = IslandShellGeometry(metrics: metrics, face: face, isExpanded: false)
+            #expect(geometry.flare == EchoLayout.islandFlare, "\(face)")
+        }
+    }
+
+    @Test("the expanded row clears the cutout, which is not screen to draw on")
+    func theRowHangsBelowTheHole() {
+        let metrics = IslandMetrics(Self.notched)
+        let cutout = try! #require(metrics.cutout)
+        for face in IslandShellFace.allCases {
+            let geometry = IslandShellGeometry(metrics: metrics, face: face, isExpanded: true)
+            #expect(geometry.rowTopInset == cutout.height, "\(face)")
+            // And something is left to put the row in.
+            #expect(geometry.shellSize.height > geometry.rowTopInset, "\(face)")
+        }
+        // A screen with no cutout has nothing in the way.
+        #expect(
+            IslandShellGeometry(metrics: .init(Self.noCutout), face: .idle, isExpanded: true)
+                .rowTopInset == 0)
     }
 
     @Test("a face with something to say is still as wide as the design draws it")
@@ -270,6 +299,30 @@ struct IslandShellTests {
                 IslandShellGeometry(metrics: .init(Self.noCutout), face: .recording, isExpanded: isExpanded)
                     .cutoutWidth == nil)
         }
+    }
+
+    @Test("which outline is drawn follows the screen, never the flare")
+    func theOutlineFollowsTheScreen() {
+        // The regression this exists for: the idle shell has no flares, and a
+        // view choosing its shape by asking whether there was one sent the
+        // shell whose top edge is flush with the top of the SCREEN to the
+        // floating pill's rounded rectangle, rounding two corners the design
+        // says are always square.
+        let notched = IslandMetrics(Self.notched)
+        for face in IslandShellFace.allCases {
+            for isExpanded in [false, true] {
+                let geometry = IslandShellGeometry(metrics: notched, face: face, isExpanded: isExpanded)
+                #expect(geometry.hangsFromBezel, "\(face) \(isExpanded ? "open" : "shut")")
+            }
+        }
+        // And the one that genuinely floats does not.
+        #expect(
+            !IslandShellGeometry(metrics: .init(Self.noCutout), face: .idle, isExpanded: false)
+                .hangsFromBezel)
+        // The flare is not the question: the shell that hangs has none while
+        // it is hiding in the hole.
+        let shut = IslandShellGeometry(metrics: notched, face: .idle, isExpanded: false)
+        #expect(shut.flare == 0 && shut.hangsFromBezel)
     }
 
     @Test("a shell that hangs off the bezel casts nothing")

@@ -32,8 +32,13 @@ public nonisolated struct IslandShellGeometry: Equatable, Sendable {
     /// no meaning on the pill, which is round all the way.
     public let cornerRadius: CGFloat
 
-    /// The concave corner at each end of the top edge; zero on the pill, which
-    /// floats clear of the bezel and so has nothing to be poured from.
+    /// The concave corner at each end of the top edge.
+    ///
+    /// Zero on the pill, which floats clear of the bezel and so has nothing to
+    /// be poured from — and zero on the idle shell hiding in the cutout, for
+    /// the same reason: a flare is black drawn OUTSIDE the shell, and outside
+    /// the hole there is only bezel. It grows in with the expansion, which is
+    /// why `IslandShellShape` animates it.
     public let flare: CGFloat
 
     /// The cutout the ears split around, when the screen has one. A property
@@ -46,14 +51,44 @@ public nonisolated struct IslandShellGeometry: Equatable, Sendable {
     /// Whether the shell casts. Only the pill does.
     public let castsShadow: Bool
 
+    /// Whether the shell hangs off the top of the screen rather than floating
+    /// below the menu bar.
+    ///
+    /// It decides which outline is drawn, and it is a property of the SCREEN.
+    /// Deriving it from the flare instead is the mistake that is easy to make
+    /// and hard to see: the idle shell has no flares — it is the cutout — and
+    /// a shell sent to the floating pill's rounded rectangle gets all four
+    /// corners rounded, including the two that are flush with the top of the
+    /// screen and that the design says are always square.
+    public var hangsFromBezel: Bool { cutoutWidth != nil }
+
+    /// The band at the top of the shell the expanded row has to stay out of.
+    ///
+    /// The cutout is not a dark area of screen, it is an absence of screen:
+    /// nothing drawn behind it is drawn at all. Collapsed, that is what the
+    /// ears are for. Expanded, the cutout is ABOVE the row — the row is the
+    /// part of the shell that hangs below the hole — and a row centred in the
+    /// whole height instead puts its tallest content behind the camera.
+    /// Reported from a 14" M4 Pro: the Record button's top corner was cut off
+    /// by the notch, because the shell's widest face leaves only ~70 pt clear
+    /// of the cutout at each end and a right-aligned control is wider than
+    /// that.
+    ///
+    /// Zero on a screen with no cutout, where there is nothing in the way.
+    public let rowTopInset: CGFloat
+
     public init(metrics: IslandMetrics, face: IslandShellFace, isExpanded: Bool) {
         switch metrics.shell {
         case .notch(let cutout):
-            flare = EchoLayout.islandFlare
+            // The idle shell IS the cutout, so it takes the cutout's own
+            // outline: no flares, because a flare is black drawn OUTSIDE the
+            // shell and there is nothing outside the hole to pour from.
+            let hidesInCutout = !isExpanded && !face.announces
+            flare = hidesInCutout ? 0 : EchoLayout.islandFlare
             shellSize = CGSize(
                 width: isExpanded
                     ? face.width.expanded
-                    : Self.collapsedWidth(face: face, cutout: cutout, flare: flare),
+                    : (hidesInCutout ? cutout.width : face.width.collapsed),
                 height: isExpanded ? EchoLayout.islandExpandedHeight : metrics.collapsedHeight
             )
             // The flares widen the window and nothing heightens it: the top
@@ -62,6 +97,7 @@ public nonisolated struct IslandShellGeometry: Equatable, Sendable {
             shellInset = CGSize(width: flare, height: 0)
             cornerRadius = isExpanded ? EchoRadius.islandExpanded : EchoRadius.islandCollapsed
             cutoutWidth = cutout.width
+            rowTopInset = cutout.height
             castsShadow = false
 
         case .pill:
@@ -85,42 +121,9 @@ public nonisolated struct IslandShellGeometry: Equatable, Sendable {
             shellInset = CGSize(width: reach, height: reach)
             cornerRadius = EchoRadius.islandPill
             cutoutWidth = nil
+            rowTopInset = 0
             castsShadow = true
         }
-    }
-
-    /// How wide the collapsed shell is on a notched screen.
-    ///
-    /// A face with something to say is as wide as the design draws it: wider
-    /// than the cutout, because what it says lives in the ears either side of
-    /// the hole.
-    ///
-    /// The idle face says nothing, and the design gives it empty ears — so the
-    /// only thing those ears put on screen is black, on the bezel, for the
-    /// whole life of the app. Worse than it looks on paper, because the flares
-    /// are drawn OUTSIDE the shell's own width: the drawn black is the face's
-    /// width plus a flare at each end, which on the 14" M4 Pro is 232 pt of
-    /// shell hanging off a 185 pt cutout. That is the black bar the island was
-    /// reported as.
-    ///
-    /// So the idle shell is the cutout, flares included — the width is what is
-    /// left of the hole once both flares have taken their room. The black then
-    /// ends exactly where the cutout does and the app's permanent presence is
-    /// invisible, which is what "permanent" can only mean on a screen the user
-    /// is trying to work on.
-    ///
-    /// Taking it out of the flares rather than dropping them is deliberate:
-    /// the flare is the same corner at every size and does not animate, so a
-    /// shell that had none while collapsed would have to grow two of them in
-    /// the first frame of every expansion.
-    ///
-    /// The product owner's decision (2026-09-12), against a design that draws
-    /// the idle face wider than the hole.
-    private static func collapsedWidth(
-        face: IslandShellFace, cutout: CGRect, flare: CGFloat
-    ) -> CGFloat {
-        guard !face.announces else { return face.width.collapsed }
-        return max(0, cutout.width - 2 * flare)
     }
 
     /// What the window has to be: the shell plus its margins.

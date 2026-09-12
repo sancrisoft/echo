@@ -37,20 +37,30 @@ public struct IslandShellShape: Shape {
     public var cornerRadius: CGFloat
 
     /// The concave corner at each end of the top edge. Zero draws the shell
-    /// with none, which is what a screen with no cutout asks for.
-    public let flare: CGFloat
+    /// with none — what a screen with no cutout asks for, and what the idle
+    /// shell hiding inside the cutout asks for too.
+    public var flare: CGFloat
 
     public init(cornerRadius: CGFloat, flare: CGFloat = EchoLayout.islandFlare) {
         self.cornerRadius = cornerRadius
         self.flare = flare
     }
 
-    /// The radius, so it travels with the width and the height instead of
-    /// stepping between them. The flare does not move: it is the same corner
-    /// on a shell of any size, and it only changes when the screen does.
-    public var animatableData: CGFloat {
-        get { cornerRadius }
-        set { cornerRadius = newValue }
+    /// The radius and the flare, so both travel with the width and the height
+    /// instead of stepping between them.
+    ///
+    /// The flare has to move because the idle shell has none: it is the
+    /// cutout, and a flare is black drawn outside the shell, which outside the
+    /// hole means on the bezel. So expanding grows two flares that were not
+    /// there, and a flare that stepped would paint 16 pt of black at each end
+    /// in a single frame — at exactly the moment the shell is still small
+    /// enough for that to be most of it.
+    public var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(cornerRadius, flare) }
+        set {
+            cornerRadius = newValue.first
+            flare = newValue.second
+        }
     }
 
     public func path(in rect: CGRect) -> Path {

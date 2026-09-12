@@ -76,12 +76,13 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
 
     @ViewBuilder
     private var shell: some View {
-        if geometry.flare > 0 {
+        if geometry.hangsFromBezel {
             // The flares are drawn outside the shape's own rect, which is why
             // this is framed to the shell and not to the window.
             IslandShellShape(cornerRadius: geometry.cornerRadius, flare: geometry.flare)
                 .fill(EchoColor.Island.shell)
                 .animation(shellMotion, value: geometry.cornerRadius)
+                .animation(shellMotion, value: geometry.flare)
         } else {
             RoundedRectangle(cornerRadius: geometry.cornerRadius, style: .continuous)
                 .fill(EchoColor.Island.shell)
@@ -120,6 +121,14 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
         .clipped()
     }
 
+    /// The open face, in the part of the shell that hangs BELOW the cutout.
+    ///
+    /// The cutout is an absence of screen, not a dark patch of it: a row
+    /// centred in the whole height puts its tallest content behind the camera,
+    /// where it is not drawn at all. Reported from a 14" M4 Pro — the Record
+    /// button's top corner was cut off by the notch, because the widest face
+    /// leaves only ~70 pt clear of the cutout at each end and a right-aligned
+    /// control is wider than that.
     private var openRow: some View {
         row()
             .padding(.leading, EchoLayout.islandRowLeadingInset)
@@ -131,8 +140,15 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
                 reduceMotion ? nil : EchoMotion.islandContent(opening: isExpanded),
                 value: isExpanded
             )
-            .frame(width: geometry.shellSize.width, height: geometry.shellSize.height)
+            // Never negative: a closing shell passes through heights shorter
+            // than the band it is clearing, and the row is fading out by then
+            // anyway.
+            .frame(
+                width: geometry.shellSize.width,
+                height: max(0, geometry.shellSize.height - geometry.rowTopInset)
+            )
             .clipped()
+            .padding(.top, geometry.rowTopInset)
     }
 
     /// The hole between the ears.
