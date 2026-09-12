@@ -269,6 +269,27 @@ public final class IslandController {
         isExpanded = face.isOpen(detection: detection, hovered: isHovered)
 
         if let geometry = ScreenGeometry.forShell(current: currentDisplay, hovered: isHovered) {
+            #if DEBUG
+                // The screen's own numbers, logged when the island arrives on a
+                // display and not on every hover. The island cannot be
+                // screenshotted without screen-recording permission, and the
+                // screens it has never run on are an open issue (#121) — a 16"
+                // cutout, an odd-width screen, a menu bar somebody shows. This
+                // is how a reading is taken from one: run the app on that Mac
+                // and read the log.
+                if currentDisplay != geometry.displayID {
+                    let screen =
+                        "frame \(NSStringFromRect(geometry.frame))"
+                        + " visible \(NSStringFromRect(geometry.visibleFrame))"
+                        + " safeAreaTop \(geometry.safeAreaTop)"
+                        + " statusBar \(geometry.statusBarThickness)"
+                        + " auxLeft \(geometry.auxiliaryTopLeft.map(NSStringFromRect) ?? "none")"
+                        + " auxRight \(geometry.auxiliaryTopRight.map(NSStringFromRect) ?? "none")"
+                    Self.log.info(
+                        "Island screen \(geometry.displayID, privacy: .public): \(screen, privacy: .public)"
+                    )
+                }
+            #endif
             currentDisplay = geometry.displayID
             metrics = IslandMetrics(geometry)
         } else {
@@ -307,19 +328,16 @@ public final class IslandController {
 
     // MARK: - Placement
 
-    /// Sizes the window to the face and hangs it off the screen it belongs on.
+    /// Sizes the window to the shell `refresh` just read, and says whether
+    /// there is a window at all.
     ///
-    /// The screen is re-read on every placement rather than remembered — the
-    /// active screen moves, and so does the set of screens there are — and the
-    /// choice between staying and moving is `ScreenGeometry.choice`, which is
-    /// where the three rules are written down.
-    ///
-    /// Placement happens whenever anything changes: a face, a hover, a
-    /// recording, an app being activated, the screens being rearranged. The
-    /// idle face is the one this matters most for, because it is the one that
-    /// is on screen the rest of the time — measured on 2026-09-11, before this
-    /// layer, it stayed behind on the display it was first placed on and there
-    /// was nothing to hover where the user had gone (#194).
+    /// It runs after every `refresh`, which is after anything changes: a face,
+    /// a hover, a recording, an app being activated, the screens being
+    /// rearranged. The idle face is the one this matters most for, because it
+    /// is the one on screen the rest of the time — measured on 2026-09-11,
+    /// before the layer below, it stayed behind on the display it was first
+    /// placed on and there was nothing to hover where the user had gone
+    /// (#194).
     private func place() {
         guard let panel else { return }
         guard let metrics,
