@@ -131,6 +131,30 @@ struct IslandShellTests {
         }
     }
 
+    @Test("a session's whole life, on a screen with no cutout")
+    func theBareScreenFollowsTheNews() {
+        // The reported behaviour, as a sequence: nothing on screen until
+        // something happens, then something on screen for as long as it is
+        // happening, then nothing again.
+        let steps: [(detection: IslandFace?, phase: RecordingPhase, onScreen: Bool)] = [
+            (nil, .idle, false),
+            (.startPrompt(appName: "Zoom", scoped: true), .idle, true),
+            (.compactPill, .idle, true),
+            (nil, .recording(startedAt: Date(), scope: .everything), true),
+            (nil, .stopping, true),
+            (nil, .finalizing(meetingID: Self.meeting, progress: 0.4), true),
+            (nil, .summarizing(meetingID: Self.meeting), true),
+            (.saved, .idle, true),
+            (nil, .idle, false),
+        ]
+        for step in steps {
+            let face = IslandShellFace.resolve(detection: step.detection, phase: step.phase)
+            #expect(
+                face.isOnScreen(hasCutout: false, hovered: false) == step.onScreen,
+                "\(face) from \(String(describing: step.detection))/\(step.phase)")
+        }
+    }
+
     @Test("a screen without one shows the island only while it has something to say")
     func theBareScreenShowsOnlyNews() {
         // The reported case: a black bar over the top of the desktop for the
@@ -299,6 +323,43 @@ struct IslandShellTests {
                 IslandShellGeometry(metrics: .init(Self.noCutout), face: .recording, isExpanded: isExpanded)
                     .cutoutWidth == nil)
         }
+    }
+
+    @Test("the idle shell fills the hole at every height, not only at its top edge")
+    func theIdleShellDoesNotPinchInsideTheNotch() {
+        // A flare only ever adds black ABOVE the band it occupies: below it,
+        // what is drawn is the shell's own width. So a shell whose body was
+        // the cutout MINUS both flares came out to the hole's edge at its top
+        // edge and was narrower than the hole everywhere under it — the first
+        // part of every expansion happened behind the notch, the top corners
+        // appearing only once the shell had grown past them. Reported from a
+        // 14" M4 Pro as the shell being cut.
+        //
+        // The body is therefore the assertion that matters. The bounding box
+        // agreeing is necessary and nowhere near sufficient: it agreed before.
+        let metrics = IslandMetrics(Self.notched)
+        let cutout = try! #require(metrics.cutout)
+        let geometry = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: false)
+
+        #expect(geometry.shellSize.width == cutout.width, "narrower than the hole below its top edge")
+
+        let path = IslandShellShape(cornerRadius: geometry.cornerRadius, flare: geometry.flare)
+            .path(in: CGRect(origin: .zero, size: geometry.shellSize))
+        #expect(abs(path.boundingRect.width - cutout.width) < 0.5)
+        // Below any flare band there would be, the shape still reaches both
+        // edges of the hole.
+        let deep = EchoLayout.islandFlare + 1
+        #expect(path.contains(CGPoint(x: 0.5, y: deep)))
+        #expect(path.contains(CGPoint(x: geometry.shellSize.width - 0.5, y: deep)))
+    }
+
+    @Test("two screens are two shells, so the spring is never asked to cross between them")
+    func eachScreenIsItsOwnShell() {
+        // The blink: a notched shell on one display and a pill on another are
+        // different widths, heights, radii, flares and shadows, and the window
+        // has already teleported by the time the spring is handed the move.
+        // The shell carries the screen's identity so the crossing is a cut.
+        #expect(IslandMetrics(Self.notched).displayID != IslandMetrics(Self.noCutout).displayID)
     }
 
     @Test("which outline is drawn follows the screen, never the flare")

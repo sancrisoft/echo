@@ -24,7 +24,8 @@ struct IslandMetricsTests {
         safeAreaTop: 32,
         auxiliaryTopLeft: CGRect(x: 0, y: 950, width: 663, height: 32),
         auxiliaryTopRight: CGRect(x: 848, y: 950, width: 664, height: 32),
-        statusBarThickness: 22
+        statusBarThickness: 22,
+        displayID: 1
     )
 
     /// UNVERIFIED (#121): invented, not measured. No second display exists on
@@ -35,7 +36,10 @@ struct IslandMetricsTests {
         safeAreaTop: 0,
         auxiliaryTopLeft: nil,
         auxiliaryTopRight: nil,
-        statusBarThickness: 22
+        statusBarThickness: 22,
+        // Two fixtures are two displays: the shell is keyed on this, so a
+        // pair that shared an id would hide the very thing it is keyed for.
+        displayID: 2
     )
 
     // MARK: The cutout, as measured
