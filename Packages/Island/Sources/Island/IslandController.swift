@@ -445,7 +445,15 @@ public final class IslandController {
                 )
             else { return }
             context.scaleBy(x: scale, y: scale)
-            layer.render(in: context)
+            // The PRESENTATION layer, which is what is actually on screen.
+            // `layer` holds the model values — where the animation is going —
+            // so rendering it mid-spring returns the end state and an
+            // animation cannot be sampled at all. That matters because the
+            // island is the one surface that cannot be screenshotted from
+            // outside (it needs screen-recording permission, #69), so this is
+            // the only way to see what it is doing while it moves. `nil` when
+            // nothing is animating, where the model layer is the answer.
+            (layer.presentation() ?? layer).render(in: context)
             guard let image = context.makeImage() else { return }
             let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
             try? png?.write(to: path.deletingPathExtension().appendingPathExtension("layer.png"), options: .atomic)
