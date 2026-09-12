@@ -325,8 +325,13 @@ struct IslandShellTests {
         }
     }
 
-    @Test("the idle shell fills the hole at every height, not only at its top edge")
-    func theIdleShellDoesNotPinchInsideTheNotch() {
+    @Test("hovering the notch opens from its edges, not from somewhere behind it")
+    func theFirstHoverOpensFromTheNotchsEdges() {
+        // The hover animation defect, as geometry. Hovering the idle shell is
+        // the ONLY way it ever opens, so what the expansion starts from is
+        // what a hover looks like — and it was starting from a shell narrower
+        // than the hole, hidden behind the notch until it had grown past it.
+        //
         // A flare only ever adds black ABOVE the band it occupies: below it,
         // what is drawn is the shell's own width. So a shell whose body was
         // the cutout MINUS both flares came out to the hole's edge at its top
