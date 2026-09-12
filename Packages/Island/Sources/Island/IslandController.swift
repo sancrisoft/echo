@@ -72,6 +72,11 @@ public final class IslandController {
     /// every pass would chase its own tail.
     @ObservationIgnored private var reportedRecording: Bool?
 
+    /// The last hover state reported to detection, on the same terms and for
+    /// the same reason: telling it is what suspends the retract, and detection
+    /// can answer by changing its face, which comes straight back here.
+    @ObservationIgnored private var reportedHover: Bool?
+
     public init(detector: CallDetector, session: RecordingSession) {
         self.detector = detector
         self.session = session
@@ -93,19 +98,8 @@ public final class IslandController {
                 rootView: IslandRootView(controller: self, detector: detector, session: session)
             )
         )
-        tracking.onCrossing = { [weak self] entered in
-            guard let self else { return }
-            if entered {
-                // A retracted offer that the pointer comes back to is an offer
-                // the user is looking at again. The machine has its own word
-                // for that, and it is the only thing allowed to un-retract:
-                // opening the shell over a pill it still considers retracted
-                // would show a Record button its own guard refuses to honour.
-                detector.pillTapped()
-                hover.entered()
-            } else {
-                hover.exited()
-            }
+        tracking.onCrossing = { entered in
+            if entered { hover.entered() } else { hover.exited() }
         }
 
         let panel = IslandPanel()
@@ -162,9 +156,11 @@ public final class IslandController {
     /// Recomputes the face from both halves and puts the window where that
     /// face belongs.
     private func update() {
-        // Told first: detection's own face can change on this news, and the
-        // face read below has to be the one after it, not before.
+        // Told first, both of them: detection's own face can change on either
+        // piece of news, and the face read below has to be the one after it,
+        // not before.
         reportRecording()
+        reportHover()
 
         let detection = detector.face
         face = IslandShellFace.resolve(detection: detection, phase: session.phase)
@@ -177,6 +173,25 @@ public final class IslandController {
         guard reportedRecording != isRecording else { return }
         reportedRecording = isRecording
         detector.recordingChanged(isRecording)
+    }
+
+    /// Tells detection whether the pointer is on the island.
+    ///
+    /// The island is the only object that can answer this — detection sits
+    /// below it and the spike measured that continuous pointer position is not
+    /// available to the panel at all (#69) — and what it reports is the grace's
+    /// answer, not the raw crossing. That is deliberate: a crossing is a
+    /// mechanism, presence is the fact, and the retract must not restart
+    /// because a window resized under a pointer that never moved.
+    ///
+    /// What it means is detection's: the timing is its own, it holds no
+    /// opinion about the surface above, and the decision arrives as an event
+    /// like every other.
+    private func reportHover() {
+        let isHovering = hover?.isInside ?? false
+        guard reportedHover != isHovering else { return }
+        reportedHover = isHovering
+        detector.hoverChanged(isHovering)
     }
 
     // MARK: - Placement

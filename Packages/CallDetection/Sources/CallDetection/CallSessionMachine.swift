@@ -36,11 +36,18 @@ public enum CallDetectionTiming {
     /// Also the reconnect window: capture resuming inside it cancels silently.
     public static let endGrace: TimeInterval = 30
 
-    /// An ignored start prompt collapses to the compact pill after this.
-    public static let promptRetract: TimeInterval = 15
-
-    /// The "Meeting saved" confirmation retracts after this.
-    public static let savedRetract: TimeInterval = 8
+    /// How long a face that announces something stays up before it retracts.
+    ///
+    /// One number for every face that retracts — the ignored start prompt and
+    /// the "Meeting saved" confirmation alike. The PoC had two (15 s and 8 s);
+    /// unifying them at 10 s is the product owner's decision (2026-09-11), not
+    /// a measurement, and `startRetractTimer` carries no interval so that the
+    /// two cannot quietly drift apart again.
+    ///
+    /// The end-of-call countdown is not one of these. It is `endGrace` above:
+    /// not a notification waiting to be read but a recording that will stop,
+    /// which is why the pointer can suspend this and never that.
+    public static let retract: TimeInterval = 10
 }
 
 /// What the island shows right now. `nil` means the panel is hidden — the
@@ -96,15 +103,20 @@ public struct CallSessionMachine {
         /// catalog order. `[]` means no catalogued process is capturing.
         case matchedAppsChanged([ProcessSelector])
         case debounceFired
-        /// `promptRetract` or `savedRetract` — whichever was armed. The face
-        /// decides what retracting means, so one event covers both.
+        /// The retract elapsed. The face decides what retracting means, so
+        /// one event covers every face that has one.
         case retractFired
         case graceFired
         /// Whether a recording is running, from any surface: the island, the
         /// menu bar, or the window.
         case recordingChanged(Bool)
         case startTapped
-        case pillTapped
+        /// Whether the pointer is on the island, as the island's own hover
+        /// grace decides it. Detection cannot see a pointer — the surface
+        /// above owns it, and the spike measured that continuous pointer
+        /// position is not even available to it (#69) — so presence arrives
+        /// here as an event like any other.
+        case hoverChanged(Bool)
         case dismissTapped
         case stopNowTapped
         case keepRecordingTapped
@@ -118,8 +130,8 @@ public struct CallSessionMachine {
         /// Arm for `CallDetectionTiming.startDebounce`.
         case startDebounceTimer
         case cancelDebounceTimer
-        /// Arm for the carried interval (`promptRetract` or `savedRetract`).
-        case startRetractTimer(TimeInterval)
+        /// Arm for `CallDetectionTiming.retract`.
+        case startRetractTimer
         case cancelRetractTimer
         /// Arm for `CallDetectionTiming.endGrace`.
         case startGraceTimer
@@ -149,6 +161,12 @@ public struct CallSessionMachine {
     /// is disabled: a machine that forgot a live recording would prompt over
     /// it when re-enabled.
     public private(set) var isRecording = false
+
+    /// Mirrors whether the pointer is on the island. Observed external truth
+    /// like `isRecording`, and tracked on the same terms: a call that ends and
+    /// a setting that is toggled do not move a pointer, so nothing here
+    /// resets it except the island saying so.
+    public private(set) var isHovered = false
 
     /// Set by ✕ and by a manual stop mid-call: this call gets no further start
     /// prompt. Scoped to the call — it resets when capture stops, so the next
@@ -187,6 +205,26 @@ public struct CallSessionMachine {
         .startPrompt(appName: appName, scoped: startScope.scopedApp != nil)
     }
 
+    /// Whether what is on screen retracts on its own. Exactly the two faces
+    /// that announce something and then stop mattering: the pill an ignored
+    /// offer has already shrunk to does not retract again, and the countdown
+    /// is not a notification at all.
+    private var isRetractable: Bool {
+        switch face {
+        case .startPrompt, .saved: true
+        case .compactPill, .endGrace, .none: false
+        }
+    }
+
+    /// Arming the retract — unless the pointer is on the island, where the
+    /// interval would be counting something that is not happening. Every path
+    /// that arms it goes through here, so "hovering suspends the retract" is
+    /// one rule in one place rather than a condition repeated at four call
+    /// sites.
+    private var armRetract: [Action] {
+        isHovered || !isRetractable ? [] : [.startRetractTimer]
+    }
+
     @discardableResult
     public mutating func handle(_ event: Event) -> [Action] {
         // The setting is the outermost gate: while off, the only event that
@@ -196,6 +234,7 @@ public struct CallSessionMachine {
         if case .setEnabled(let on) = event { return setEnabled(on) }
         guard enabled else {
             if case .recordingChanged(let recording) = event { isRecording = recording }
+            if case .hoverChanged(let hovering) = event { isHovered = hovering }
             return []
         }
 
@@ -214,8 +253,8 @@ public struct CallSessionMachine {
             return handleRecordingChanged(recording)
         case .startTapped:
             return handleStartTapped()
-        case .pillTapped:
-            return handlePillTapped()
+        case .hoverChanged(let hovering):
+            return handleHoverChanged(hovering)
         case .dismissTapped:
             return handleDismissTapped()
         case .stopNowTapped:
@@ -304,7 +343,7 @@ public struct CallSessionMachine {
         // quietly and only its end raises the island.
         guard !isRecording, !dismissedThisCall else { return [] }
         face = promptFace
-        return [.setFace(face), .startRetractTimer(CallDetectionTiming.promptRetract)]
+        return [.setFace(face)] + armRetract
     }
 
     // MARK: - Timers
@@ -331,10 +370,7 @@ public struct CallSessionMachine {
         face = .saved
         // `isRecording` stays true until the controller reports the stop; the
         // machine is back in idle, where recording changes are tracked only.
-        return [
-            .requestStopRecording, .setFace(face),
-            .startRetractTimer(CallDetectionTiming.savedRetract),
-        ]
+        return [.requestStopRecording, .setFace(face)] + armRetract
     }
 
     // MARK: - Recording state (any surface)
@@ -371,6 +407,39 @@ public struct CallSessionMachine {
         }
     }
 
+    // MARK: - The pointer (from the island, which is the only one who sees it)
+
+    /// The pointer arrived on the island, or left it.
+    ///
+    /// Two things follow, and both say the same thing: a face the user is
+    /// looking at is not a face being ignored.
+    ///
+    ///   • The retract is suspended while the pointer is there, and starts
+    ///     over when it leaves. Starting over is the only thing the machine
+    ///     could mean — it holds no clock — and it is also the honest reading:
+    ///     the interval counts how long an announcement went unread.
+    ///   • A retracted offer the pointer comes back to is an offer the user is
+    ///     looking at again, so the pill un-retracts. This is the only thing
+    ///     allowed to un-retract it: opening the shell over a pill the machine
+    ///     still considers retracted would show a Record button its own guard
+    ///     refuses to honour.
+    ///
+    /// The end-of-call countdown is deliberately untouched. It is not an
+    /// announcement waiting to be read but a recording that will stop, and a
+    /// pointer resting on the island must never hold a forgotten session open
+    /// — which is the second of the two product lines at the top of this file.
+    private mutating func handleHoverChanged(_ hovering: Bool) -> [Action] {
+        guard hovering != isHovered else { return [] }
+        isHovered = hovering
+        guard hovering else { return armRetract }
+        if phase == .inCall, face == .compactPill, !dismissedThisCall {
+            face = promptFace
+            // No retract: the pointer that un-retracted it is still on it.
+            return [.setFace(face)]
+        }
+        return isRetractable ? [.cancelRetractTimer] : []
+    }
+
     // MARK: - Island taps
 
     private mutating func handleStartTapped() -> [Action] {
@@ -378,12 +447,6 @@ public struct CallSessionMachine {
         guard phase == .inCall, case .startPrompt = face else { return [] }
         face = nil
         return [.cancelRetractTimer, .setFace(nil), .requestStartRecording(startScope)]
-    }
-
-    private mutating func handlePillTapped() -> [Action] {
-        guard phase == .inCall, face == .compactPill, !dismissedThisCall else { return [] }
-        face = promptFace
-        return [.setFace(face), .startRetractTimer(CallDetectionTiming.promptRetract)]
     }
 
     private mutating func handleDismissTapped() -> [Action] {
@@ -403,12 +466,7 @@ public struct CallSessionMachine {
         guard phase == .endGrace else { return [] }
         endCall()
         face = .saved
-        return [
-            .cancelGraceTimer,
-            .requestStopRecording,
-            .setFace(face),
-            .startRetractTimer(CallDetectionTiming.savedRetract),
-        ]
+        return [.cancelGraceTimer, .requestStopRecording, .setFace(face)] + armRetract
     }
 
     private mutating func handleKeepRecordingTapped() -> [Action] {

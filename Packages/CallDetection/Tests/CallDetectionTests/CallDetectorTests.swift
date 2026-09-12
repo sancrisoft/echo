@@ -290,11 +290,32 @@ struct CallDetectorTests {
         #expect(harness.timers.live.map(\.seconds) == [CallDetectionTiming.startDebounce])
 
         try harness.timers.expireOnlyTimer()
-        #expect(harness.timers.live.map(\.seconds) == [CallDetectionTiming.promptRetract])
+        #expect(harness.timers.live.map(\.seconds) == [CallDetectionTiming.retract])
 
         try harness.timers.expireOnlyTimer()
         #expect(harness.detector.face == .compactPill)
         #expect(harness.timers.live.isEmpty, "a retracted prompt arms nothing further")
+    }
+
+    @Test func thePointerOnTheIslandDisarmsTheRetractAndLeavingRearmsIt() throws {
+        // The seam the island reaches down through: it reports the fact, the
+        // machine decides what it means, and the detector is where that shows
+        // up as a real timer being cancelled and armed again.
+        let harness = try makeHarness()
+        defer { harness.directory.remove() }
+
+        harness.report([client("us.zoom.xos")])
+        try harness.timers.expireOnlyTimer()  // the debounce
+        #expect(harness.timers.live.map(\.seconds) == [CallDetectionTiming.retract])
+
+        harness.detector.hoverChanged(true)
+        #expect(harness.timers.live.isEmpty, "the retract ran on under the pointer")
+
+        harness.detector.hoverChanged(false)
+        #expect(harness.timers.live.map(\.seconds) == [CallDetectionTiming.retract])
+
+        try harness.timers.expireOnlyTimer()
+        #expect(harness.detector.face == .compactPill)
     }
 
     @Test func aBlipInsideTheDebounceCancelsItsTimer() throws {
