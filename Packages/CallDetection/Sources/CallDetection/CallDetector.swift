@@ -216,10 +216,17 @@ public final class CallDetector {
         apply(machine.handle(.recordingChanged(isRecording)))
     }
 
+    /// Whether the pointer is on the island, from the island — which is the
+    /// only object that can see it. The retract is suspended while it is, and
+    /// the face the pointer came back to un-retracts; both rules live in the
+    /// machine, so what crosses the boundary is the fact and not the policy.
+    public func hoverChanged(_ isHovering: Bool) {
+        apply(machine.handle(.hoverChanged(isHovering)))
+    }
+
     // MARK: - Island taps
 
     public func startTapped() { apply(machine.handle(.startTapped)) }
-    public func pillTapped() { apply(machine.handle(.pillTapped)) }
     public func dismissTapped() { apply(machine.handle(.dismissTapped)) }
     public func stopNowTapped() { apply(machine.handle(.stopNowTapped)) }
     public func keepRecordingTapped() { apply(machine.handle(.keepRecordingTapped)) }
@@ -306,9 +313,9 @@ public final class CallDetector {
                 cancelDebounce?()
                 cancelDebounce = nil
 
-            case .startRetractTimer(let seconds):
+            case .startRetractTimer:
                 cancelRetract?()
-                cancelRetract = armTimer(seconds) { [weak self] in
+                cancelRetract = armTimer(CallDetectionTiming.retract) { [weak self] in
                     self?.fire(.retractFired)
                 }
             case .cancelRetractTimer:

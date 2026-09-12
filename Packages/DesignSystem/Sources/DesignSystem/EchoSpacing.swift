@@ -28,6 +28,9 @@ public nonisolated enum EchoRadius {
     public static let islandExpanded: CGFloat = 22
     /// The island's collapsed shell.
     public static let islandCollapsed: CGFloat = 12
+    /// The fallback shell on a screen with no cutout: fully rounded, so half
+    /// of `EchoLayout.islandPillSize.height` rather than a corner of its own.
+    public static let islandPill: CGFloat = 17
     /// A capsule control on the island. Half its height: the island takes
     /// iOS-style capsules where the window keeps rounded rects (DEC-4 may
     /// unify them; until it does, these are two families).
@@ -112,6 +115,10 @@ public nonisolated enum EchoControl {
     /// A level gauge: the bar, and the gap after its label.
     public static let gaugeHeight: CGFloat = 4
     public static let gaugeLabelGap: CGFloat = 6
+
+    /// The red dot that says a session is live: on the expanded recording
+    /// face, and in the ear it collapses into.
+    public static let recordingDotSize: CGFloat = 7
 }
 
 public nonisolated enum EchoLayout {
@@ -154,6 +161,28 @@ public nonisolated enum EchoLayout {
 
     // MARK: The island
 
+    /// The shell's height when it is expanded. One row, on every face: only
+    /// the width changes between them. Its collapsed height is not a token —
+    /// it is the cutout's own height, read per screen (`IslandMetrics`).
+    public static let islandExpandedHeight: CGFloat = 74
+
+    /// The concave flare at each of the shell's top corners, square. It sits
+    /// OUTSIDE the shell's width, one at each end, so a face's silhouette is
+    /// its width plus two of these.
+    public static let islandFlare: CGFloat = 16
+
+    /// The inset of an ear's content from the shell's outer edge, while it is
+    /// collapsed around the cutout.
+    public static let islandEarInset: CGFloat = 13
+
+    /// The expanded row's insets. It is wider on the side the icon is on than
+    /// on the side the controls are.
+    public static let islandRowLeadingInset: CGFloat = 14
+    public static let islandRowTrailingInset: CGFloat = 12
+
+    /// Between the parts of the expanded row.
+    public static let islandRowGap: CGFloat = 11
+
     /// The fallback shell, on a screen with no cutout: fixed, where the notched
     /// shell is only as wide as its words need.
     public static let islandPillSize = CGSize(width: 320, height: 34)
@@ -161,6 +190,12 @@ public nonisolated enum EchoLayout {
     /// The air between the menu bar and the fallback pill. The notched shell
     /// takes none — it hangs off the top edge of the screen.
     public static let islandPillTopGap: CGFloat = 8
+
+    /// The pill's shadow, which the notched shell does not have: it floats
+    /// clear of the bezel, so it casts. The design states it as a CSS shadow —
+    /// offset 10, blur 26 — and a CSS blur is twice a SwiftUI radius.
+    public static let islandPillShadowRadius: CGFloat = 13
+    public static let islandPillShadowOffset: CGFloat = 10
 
     // MARK: The document
 
@@ -180,4 +215,41 @@ public nonisolated enum EchoLayout {
     public static let propertyLabelWidth: CGFloat = 104
     /// The fade to the background at the foot of a scrolling document.
     public static let documentFadeHeight: CGFloat = 76
+}
+
+/// How wide one island face is, collapsed and expanded.
+///
+/// Width is the only thing that separates the faces: every expanded one is
+/// `EchoLayout.islandExpandedHeight` tall, and every collapsed one is as tall
+/// as the screen's cutout. The numbers are what the design draws, and they
+/// barely move — the whole swing between the narrowest and the widest expanded
+/// face is a fraction of the shell — because a capsule that changed shape as
+/// it changed state would read as a different object each time.
+///
+/// The design sets a width by the longest line of copy a face carries, so
+/// these are measurements of drawn faces rather than choices. A face whose
+/// words no longer fit its width is a measurement to retake here, not a
+/// `minWidth` to add at the point of use.
+public nonisolated struct IslandWidth: Equatable, Sendable {
+
+    public let collapsed: CGFloat
+    public let expanded: CGFloat
+
+    public init(collapsed: CGFloat, expanded: CGFloat) {
+        self.collapsed = collapsed
+        self.expanded = expanded
+    }
+
+    /// Nothing is happening: the app's permanent presence, with empty ears.
+    public static let idle = IslandWidth(collapsed: 200, expanded: 324)
+    /// A call was noticed and a recording is offered.
+    public static let callDetected = IslandWidth(collapsed: 272, expanded: 344)
+    /// A session is live: the timer and the two levels.
+    public static let recording = IslandWidth(collapsed: 320, expanded: 360)
+    /// The call ended under a live recording, and the stop is counting down.
+    public static let callEnded = IslandWidth(collapsed: 312, expanded: 360)
+    /// The meeting is on disk.
+    public static let saved = IslandWidth(collapsed: 296, expanded: 352)
+    /// The summary is being written.
+    public static let summarizing = IslandWidth(collapsed: 300, expanded: 340)
 }

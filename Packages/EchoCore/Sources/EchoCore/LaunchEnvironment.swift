@@ -27,6 +27,9 @@ public struct LaunchEnvironment: Sendable, Equatable {
         case transcript
         case trash
         case settings
+        /// The island, which is a panel and not the window: it renders
+        /// itself, because nothing outside it can.
+        case island
     }
 
     /// `ECHO_DATA_ROOT`: run the app against another data folder. The way to
@@ -46,8 +49,8 @@ public struct LaunchEnvironment: Sendable, Equatable {
     /// hook; pixels cannot be captured from outside a window on this macOS.
     public let snapshotPath: URL?
 
-    /// `ECHO_SNAPSHOT_SCENE=library|summary|transcript|trash|settings`: which
-    /// surface the snapshot shows. Defaults to the library.
+    /// `ECHO_SNAPSHOT_SCENE=library|summary|transcript|trash|settings|island`:
+    /// which surface the snapshot shows. Defaults to the library.
     public let snapshotScene: SnapshotScene
 
     /// `ECHO_KEEP_RETAINED_AUDIO=1`: a successful transcription pass keeps the

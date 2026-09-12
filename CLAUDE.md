@@ -57,7 +57,7 @@ Makefile             the commands
 |---|---|---|
 | `EchoCore` | `TranscriptSegment`/`Speaker`/`AudioChannel`, `TranscriptUtterance`, `DataRoot`, `ErrorTrace`, `AppSettings`, `LaunchEnvironment`, `TestHost`, `AppIdentity`; `EchoCoreTestSupport` (fixtures root, `.acceptance` trait, `TemporaryDirectory`) | — |
 | `Meetings` | `MeetingStore` (the only thing that touches `Meetings/`), `MeetingLibrary`, `MeetingMeta`/`MeetingRecord`, `LegacyMeetingSummary`, `StorageBreakdown`, `MeetingExport`, `MeetingListSelection` | EchoCore |
-| `DesignSystem` | `EchoColor` (+ `EchoColor.Island`), `EchoFont` (the scale over the bundled Onest and DM Mono, and their launch-time registration), `EchoSpacing`/`EchoRadius`/`EchoLayout`/`EchoControl`, the window's primitives (`EchoButtonStyle`, `StatusBadge`, `PropertyRow`, `TabStrip`, `MetaStrip`, `EmptyState`, `SelectableRowChrome`) and the island's (`IslandButtonStyle`, `IslandIconButtonStyle`, `ValueChip`, `LevelGauge`), `DesignGallery` | — |
+| `DesignSystem` | `EchoColor` (+ `EchoColor.Island`), `EchoFont` (the scale over the bundled Onest and DM Mono, and their launch-time registration), `EchoSpacing`/`EchoRadius`/`EchoLayout`/`EchoControl`/`EchoMotion`, the window's primitives (`EchoButtonStyle`, `StatusBadge`, `PropertyRow`, `TabStrip`, `MetaStrip`, `EmptyState`, `SelectableRowChrome`) and the island's (`IslandButtonStyle`, `IslandIconButtonStyle`, `ValueChip`, `LevelGauge`), `DesignGallery` | — |
 | `Workspace` | the main window: `WorkspaceWindow`, `WorkspaceModel`, sidebar, document, trash, settings screen, `MarkdownDocument`/`MarkdownView`, `MeetingGrouping`, `MeetingStatus`, `MeetingActions` (panels, pasteboard, Finder) | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem |
 | `Audio` | `MicrophoneCapture`/`SystemAudioCapture` (`Sendable` classes, callbacks at init), `AudioConstants`/`AudioLevelMeter`/`AudioDownmixer`/`BufferResampler`, `CaptureRateGuard`, `CaptureGapTracker`, `CaptureScope`/`ProcessSelector`/`ScopedProcessResolution`, `AppBundleIdentity`, `RetainedAudioWriter` (actor, file naming injected), `AECStage`/`PassthroughAECStage`/`WebRTCAECStage`/`SwitchingAECStage`, `OutputRouteClass`/`EchoHandlingMode`/`EchoModeMachine`/`EchoDegradationNotice`, `EchoBleedProbe`, `InputDeviceMonitor`/`InputDeviceLifecycleMachine`/`InputDeviceNotice`, `OutputRouteMonitor`/`OutputRouteClassifier`, `InputHealthClassifier`/`InputHealthTracker`/`InputHealthNotice`/`FanOutGateDiagnosticsSink`, `GateTerm`/`GateVerdict`/`GateDecisionRecord`/`GateDiagnosticsSink`, `LiveInputMonitor`/`AudioStats`, `FixtureRecorder` (DEBUG); vendored WebRTC APM | EchoCore |
 | `ModelDelivery` | `SnapshotDownloader`/`SnapshotSpec`, `ResumableFileDownload`, `DownloadProgress` (the one clamp), `DownloadRetry`, `SnapshotDownloadTally`/`SnapshotDownloadBudget`, `SnapshotManifest`, `DownloadPauseStore`, `RetiredModelCleanup`, `DiskSpace` | EchoCore, swift-transformers (`Hub`) |
@@ -66,7 +66,7 @@ Makefile             the commands
 | `Recording` | `RecordingSession` (`@Observable @MainActor`: `phase`, `levels`, `notices`, `currentMeetingID`, `queuedMeetingIDs`, `terminalFailureMeetingIDs`, `start`/`stop`, `retryTranscription`/`retranscribe`/`requestSummary`, `resumePendingFinalizations`/`kickSummaryBackfill`), `RecordingPhase`, `RecordingNotice`, `CaptureLevels`, `FinalizationMachine`, `SummaryBackfillPolicy`; internally `FinalizationDriver`, `SummaryScheduler`, `LevelWindow`/`ChannelFrameCounter`, the `CaptureScope` → `CaptureScopeRecord` mapping, and the capture/pass/summary seams the tests drive | EchoCore, Audio, Transcription, Summarization, ModelDelivery, Meetings |
 | `CallDetection` | `CallAppCatalog` (the curated table, the matcher and the disabled-apps filter), `BrowserCatalog` (every installed browser, from LaunchServices), `MicActivityMonitor` (the Core Audio shim, wildcard listeners, 80 ms-coalesced), `MicCaptureClient`, `CallSessionMachine`/`CallDetectionTiming`/`IslandFace`, `CallDetector` (`@Observable @MainActor`: `face`, `graceDeadline`, `appsInCall`, the taps, the three timers) and `CallDetectionRequests` (the three verbs it asks of the surface above) | EchoCore, Audio |
 | `Updates` *(pending)* | release feed, checker, updater | EchoCore |
-| `Island` *(pending)* | the floating panel and its controller | EchoCore, CallDetection, Recording, DesignSystem |
+| `Island` | `ScreenGeometry`/`IslandMetrics` (where the shell sits per screen, the cutout read from the gap between the menu bar's strips, the no-notch pill), `IslandShellFace` (the six silhouettes and the resolver over detection + phase), `IslandShellGeometry`, `IslandShellShape`/`IslandShell` (the outline, the flares, the ears, the one-row expansion), `IslandPanel`, `IslandController`, `IslandHoverView`/`HoverGrace` (the tracking area and the grace that are all hover can be), `IslandWindowTransition` (the window that has to hold a shell the spring is still moving), `IslandGallery`/`HoverBench` (DEBUG) | EchoCore, CallDetection, Recording, DesignSystem |
 
 The dependency table above is enforced by `scripts/check_boundaries.sh`; the
 rationale is in `docs/architecture/v2-architecture.md` §2 and ADR-001.
@@ -79,11 +79,12 @@ packages never import each other. Engine packages never import SwiftUI, and
 AppKit only for process identity in files the boundary script allowlists.
 
 `App` also imports, directly, any engine package whose launch side effect it
-owns — today `ModelDelivery`, for the retired-model cleanup. That is the
-arrow above, not an exception to it: the composition root is where launch
+owns — `ModelDelivery`, for the retired-model cleanup, and `CallDetection`,
+whose detector it builds, serves the three requests of, and starts. That is
+the arrow above, not an exception to it: the composition root is where launch
 work lives (architecture §6). What it may not do is link a package it does
-not itself call; everything Recording pulls in resolves through Recording's
-own manifest.
+not itself call; everything Recording and Island pull in resolves through
+their own manifests.
 
 ## Finding code
 

@@ -23,9 +23,6 @@ struct CallSessionMachineTests {
     private let zoom = ProcessSelector(displayName: "Zoom", bundlePrefix: "us.zoom.xos")
     private let chrome = ProcessSelector(displayName: "Google Chrome", bundlePrefix: "com.google.Chrome")
 
-    private var promptRetract: TimeInterval { CallDetectionTiming.promptRetract }
-    private var savedRetract: TimeInterval { CallDetectionTiming.savedRetract }
-
     // MARK: - Fixtures
 
     /// Catalogued capture seen, debounce running, nothing shown yet.
@@ -108,7 +105,7 @@ struct CallSessionMachineTests {
 
         let actions = machine.handle(.debounceFired)
 
-        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer(promptRetract)])
+        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer])
         #expect(machine.phase == .inCall)
         #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
         #expect(!machine.keptRecordingLatch)
@@ -138,14 +135,19 @@ struct CallSessionMachineTests {
         #expect(machine.phase == .inCall)
     }
 
-    @Test func pillTapReexpandsThePrompt() {
+    @Test func thePointerComingBackToThePillReexpandsThePrompt() {
         var machine = promptingMachine()
         machine.handle(.retractFired)
 
-        let actions = machine.handle(.pillTapped)
+        let actions = machine.handle(.hoverChanged(true))
 
-        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer(promptRetract)])
+        // No retract armed with it: the pointer that re-expanded the offer is
+        // still on it, and an offer being looked at is not one being ignored.
+        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true))])
         #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
+
+        // The pointer leaving is what starts the interval, from the top.
+        #expect(machine.handle(.hoverChanged(false)) == [.startRetractTimer])
     }
 
     @Test func dismissSilencesTheIslandForTheRestOfTheCall() {
@@ -159,7 +161,7 @@ struct CallSessionMachineTests {
         #expect(machine.dismissedThisCall)
         // Nothing reappears while the call continues.
         #expect(machine.handle(.retractFired).isEmpty)
-        #expect(machine.handle(.pillTapped).isEmpty)
+        #expect(machine.handle(.hoverChanged(true)).isEmpty)
         #expect(machine.handle(.matchedAppsChanged([zoom])).isEmpty)
         #expect(machine.face == nil)
     }
@@ -183,7 +185,90 @@ struct CallSessionMachineTests {
 
         let actions = machine.handle(.debounceFired)
 
-        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer(promptRetract)])
+        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer])
+    }
+
+    // MARK: - The pointer suspends the retract
+
+    @Test func oneIntervalRetractsEveryFaceThatRetracts() {
+        // The prompt and the confirmation had 15 s and 8 s in the PoC. They are
+        // one number now, and the action carries none, so there is nothing for
+        // a future face to disagree with.
+        #expect(CallDetectionTiming.retract == 10)
+    }
+
+    @Test func hoveringAPromptSuspendsItsRetract() {
+        var machine = promptingMachine()
+
+        #expect(machine.handle(.hoverChanged(true)) == [.cancelRetractTimer])
+        #expect(machine.isHovered)
+        #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
+
+        // Nothing retracts while it is being looked at, and a straggling timer
+        // that fired anyway still would — which is the controller's to cancel,
+        // not the machine's to second-guess.
+        #expect(machine.handle(.hoverChanged(true)).isEmpty, "a repeated report is not a change")
+
+        #expect(machine.handle(.hoverChanged(false)) == [.startRetractTimer])
+        #expect(!machine.isHovered)
+    }
+
+    @Test func aPromptThatAppearsUnderThePointerArmsNoRetract() {
+        var machine = candidateMachine()
+        machine.handle(.hoverChanged(true))
+
+        let actions = machine.handle(.debounceFired)
+
+        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true))])
+        #expect(machine.handle(.hoverChanged(false)) == [.startRetractTimer])
+    }
+
+    @Test func aSavedConfirmationUnderThePointerArmsNoRetract() {
+        var machine = endGraceMachine()
+        machine.handle(.hoverChanged(true))
+
+        let actions = machine.handle(.graceFired)
+
+        #expect(actions == [.requestStopRecording, .setFace(.saved)])
+        #expect(machine.face == .saved)
+        #expect(machine.handle(.hoverChanged(false)) == [.startRetractTimer])
+    }
+
+    @Test func hoveringTheCountdownDoesNotHoldTheRecordingOpen() {
+        // The second product line: a recording that overlapped a call never
+        // runs unbounded after it. A pointer resting on the island is not an
+        // answer to the countdown, so it must not suspend it.
+        var machine = endGraceMachine()
+
+        #expect(machine.handle(.hoverChanged(true)).isEmpty)
+        #expect(machine.handle(.hoverChanged(false)).isEmpty)
+        #expect(machine.phase == .endGrace)
+        #expect(machine.handle(.graceFired).contains(.requestStopRecording))
+    }
+
+    @Test func hoveringNothingIsNothing() {
+        var machine = CallSessionMachine()
+
+        #expect(machine.handle(.hoverChanged(true)).isEmpty)
+        #expect(machine.isHovered, "the fact is still tracked")
+        #expect(machine.handle(.hoverChanged(false)).isEmpty)
+    }
+
+    @Test func aDisabledMachineStillTracksThePointer() {
+        // Same terms as the recording state: the island is still on screen
+        // with its idle face while the feature is off, and the pointer still
+        // goes to it. Re-enabling has to start from where the pointer is.
+        var machine = CallSessionMachine()
+        machine.handle(.setEnabled(false))
+
+        #expect(machine.handle(.hoverChanged(true)).isEmpty)
+        #expect(machine.isHovered)
+
+        machine.handle(.setEnabled(true))
+        machine.handle(.matchedAppsChanged([zoom]))
+        #expect(
+            machine.handle(.debounceFired) == [.setFace(.startPrompt(appName: "Zoom", scoped: true))],
+            "armed a retract under a pointer it had been told about")
     }
 
     // MARK: - Starting (rows 9–10)
@@ -237,7 +322,7 @@ struct CallSessionMachineTests {
         #expect(
             confirm == [
                 .setFace(.startPrompt(appName: "FaceTime", scoped: false)),
-                .startRetractTimer(promptRetract),
+                .startRetractTimer,
             ])
 
         let actions = machine.handle(.startTapped)
@@ -377,7 +462,7 @@ struct CallSessionMachineTests {
 
         let actions = machine.handle(.graceFired)
 
-        #expect(actions == [.requestStopRecording, .setFace(.saved), .startRetractTimer(savedRetract)])
+        #expect(actions == [.requestStopRecording, .setFace(.saved), .startRetractTimer])
         #expect(machine.phase == .idle)
         #expect(machine.face == .saved)
         // A duplicate expiry (or a late "stop now") cannot stop twice.
@@ -403,7 +488,7 @@ struct CallSessionMachineTests {
                 .cancelGraceTimer,
                 .requestStopRecording,
                 .setFace(.saved),
-                .startRetractTimer(savedRetract),
+                .startRetractTimer,
             ])
         #expect(machine.phase == .idle)
         #expect(machine.face == .saved)
@@ -492,7 +577,7 @@ struct CallSessionMachineTests {
         let events: [CallSessionMachine.Event] = [
             .matchedAppsChanged([zoom]), .matchedAppsChanged([]),
             .debounceFired, .retractFired, .graceFired,
-            .startTapped, .pillTapped, .dismissTapped,
+            .startTapped, .hoverChanged(true), .hoverChanged(false), .dismissTapped,
             .stopNowTapped, .keepRecordingTapped, .openEchoTapped,
             .setEnabled(false),
         ]
@@ -532,7 +617,7 @@ struct CallSessionMachineTests {
         #expect(
             machine.handle(.debounceFired) == [
                 .setFace(.startPrompt(appName: "Zoom", scoped: true)),
-                .startRetractTimer(promptRetract),
+                .startRetractTimer,
             ])
     }
 
@@ -561,7 +646,7 @@ struct CallSessionMachineTests {
 
         for event in [
             CallSessionMachine.Event.debounceFired, .retractFired, .graceFired,
-            .startTapped, .pillTapped, .dismissTapped,
+            .startTapped, .hoverChanged(true), .hoverChanged(false), .dismissTapped,
             .stopNowTapped, .keepRecordingTapped, .openEchoTapped,
         ] {
             #expect(machine.handle(event).isEmpty, "idle machine reacted to \(event)")
@@ -587,10 +672,10 @@ struct CallSessionMachineTests {
         #expect(
             actions == [
                 .startDebounceTimer,
-                .setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer(promptRetract),
+                .setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer,
                 .cancelRetractTimer, .setFace(nil), .requestStartRecording(.app(zoom)),
                 .setFace(.endGrace(appName: "Zoom")), .startGraceTimer,
-                .requestStopRecording, .setFace(.saved), .startRetractTimer(savedRetract),
+                .requestStopRecording, .setFace(.saved), .startRetractTimer,
                 .setFace(nil),
             ])
         #expect(machine.phase == .idle)
@@ -646,7 +731,8 @@ struct CallSessionMachineTests {
             .graceFired,
             .recordingChanged(true),
             .recordingChanged(false),
-            .pillTapped,
+            .hoverChanged(true),
+            .hoverChanged(false),
             .dismissTapped,
             .stopNowTapped,
             .keepRecordingTapped,

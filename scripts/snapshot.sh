@@ -10,6 +10,9 @@
 #   ECHO_APPEARANCE=light scripts/snapshot.sh
 #
 # Output: build/snapshots/<scene>.png. Requires a Debug build (`make build`).
+# The island is a panel, not the window: it renders itself, and writes a second
+# file beside it (`island.layer.png`) which is the one that shows what is
+# actually composited.
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -31,7 +34,7 @@ fi
 export ECHO_DATA_ROOT
 
 scenes=("$@")
-[[ ${#scenes[@]} -gt 0 ]] || scenes=(library summary transcript trash settings)
+[[ ${#scenes[@]} -gt 0 ]] || scenes=(library summary transcript trash settings island)
 
 pkill -x Echo 2>/dev/null || true
 for scene in "${scenes[@]}"; do
