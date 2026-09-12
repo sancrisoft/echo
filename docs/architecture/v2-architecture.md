@@ -299,6 +299,12 @@ names inside a package are free to change.
   `metrics`, `start()`/`stop()`), `IslandPanel`. The controller is also the one
   place detection and the session meet — neither package can observe the other
   — so it reports `recordingChanged` once per change.
+- `IslandHoverView` (internal: the `NSTrackingArea` that is the only mechanism
+  by which a panel that never becomes key learns about the pointer — spike #69
+  measured `acceptsMouseMovedEvents` delivering nothing at all) and
+  `HoverGrace` (internal: crossings into presence, with the design's grace on
+  the way out). Hover is crossings only; where the pointer is inside the island
+  is not knowable and nothing is built on it.
 - `IslandGallery` (DEBUG): every face, collapsed and expanded, on one sheet.
 
 ---

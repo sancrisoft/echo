@@ -95,6 +95,29 @@ struct IslandShellTests {
                 detection: .startPrompt(appName: "Zoom", scoped: true)))
     }
 
+    @Test(
+        "the pointer opens any face",
+        arguments: IslandShellFace.allCases)
+    func hoverOpensEveryFace(face: IslandShellFace) {
+        #expect(face.isOpen(detection: nil, hovered: true))
+    }
+
+    @Test("the pointer cannot shut a face that opened on its own")
+    func hoverNeverCloses() {
+        // It is the pointer's absence, and a face that raised itself did not
+        // raise itself to be dismissed by one.
+        for face in IslandShellFace.allCases where face.expandsOnItsOwn(detection: nil) {
+            #expect(face.isOpen(detection: nil, hovered: false))
+        }
+    }
+
+    @Test("the reporting faces are shut with no pointer on them")
+    func withoutThePointerTheQuietFacesAreShut() {
+        for face in [IslandShellFace.idle, .recording, .summarizing] {
+            #expect(!face.isOpen(detection: nil, hovered: false))
+        }
+    }
+
     // MARK: The shell's size, on a notched screen
 
     @Test("a collapsed shell is the face's collapsed width and the cutout's own height")

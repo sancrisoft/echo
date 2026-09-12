@@ -79,15 +79,34 @@ extension ScreenGeometry {
     /// screen the user was not using: a real call detected, an island shown,
     /// and nobody saw it. The pointer is the better signal for "here".
     ///
-    /// UNVERIFIED: this machine has one internal display, so the choice between
-    /// screens has never run against a second one. Issue #121.
+    /// Verified against a second display on 2026-09-11, which is also how the
+    /// edge case below was found.
     @MainActor
     public static func underPointer() -> ScreenGeometry? {
+        let screens = NSScreen.screens
         let pointer = NSEvent.mouseLocation
         let screen =
-            NSScreen.screens.first { $0.frame.contains(pointer) }
+            index(of: pointer, in: screens.map(\.frame)).map { screens[$0] }
             ?? NSScreen.main
-            ?? NSScreen.screens.first
+            ?? screens.first
         return screen.map { ScreenGeometry($0) }
+    }
+
+    /// Which of these frames the pointer is on, edges included.
+    ///
+    /// `CGRect.contains` excludes a rect's maximum edges, and the island lives
+    /// ON the top edge — hovering it is the ordinary way to reach it. Measured
+    /// on 2026-09-11 with two displays attached: a pointer resting at exactly
+    /// `frame.maxY` of the built-in matched no screen at all, fell through to
+    /// `NSScreen.main`, and moved the island to the other display while the
+    /// user was pointing at it. So containment here includes every edge.
+    ///
+    /// Adjacent screens share an edge, so a pointer on one belongs to both and
+    /// the first match wins: the order `NSScreen.screens` gives, which is
+    /// stable, and either answer is the screen the pointer is touching.
+    nonisolated static func index(of point: CGPoint, in frames: [CGRect]) -> Int? {
+        frames.firstIndex {
+            point.x >= $0.minX && point.x <= $0.maxX && point.y >= $0.minY && point.y <= $0.maxY
+        }
     }
 }

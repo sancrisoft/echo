@@ -108,4 +108,14 @@ extension IslandShellFace {
         case .idle, .recording, .summarizing: return false
         }
     }
+
+    /// Whether the shell is open.
+    ///
+    /// The pointer opens any face — that is what hover is for, and it is how
+    /// the idle face is reached at all. A face that opened on its own stays
+    /// open without it: the pointer can bring the shell out, never put it
+    /// back.
+    public func isOpen(detection: IslandFace?, hovered: Bool) -> Bool {
+        hovered || expandsOnItsOwn(detection: detection)
+    }
 }

@@ -34,8 +34,8 @@ public final class IslandController {
     /// The face the shell is wearing.
     public private(set) var face: IslandShellFace = .idle
 
-    /// Whether the shell is open. In this layer only the faces that open on
-    /// their own can set it; the pointer arrives with the hover layer.
+    /// Whether the shell is open: the pointer is on it, or the face is one of
+    /// the three that open without one.
     public private(set) var isExpanded = false
 
     /// The screen the island is on, as it was read when it was last placed.
@@ -50,6 +50,7 @@ public final class IslandController {
     @ObservationIgnored private let session: RecordingSession
     @ObservationIgnored private var panel: IslandPanel?
     @ObservationIgnored private var screenObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private var hover: HoverGrace?
 
     /// The last recording state reported to detection. Kept so the news
     /// crosses once per change: `recordingChanged` can move detection's own
@@ -70,10 +71,31 @@ public final class IslandController {
     public func start() {
         guard panel == nil else { return }
 
-        let panel = IslandPanel()
-        panel.contentView = NSHostingView(
-            rootView: IslandRootView(controller: self, detector: detector, session: session)
+        let hover = HoverGrace { [weak self] _ in self?.update() }
+        self.hover = hover
+
+        let tracking = IslandHoverView(
+            hosting: NSHostingView(
+                rootView: IslandRootView(controller: self, detector: detector, session: session)
+            )
         )
+        tracking.onCrossing = { [weak self] entered in
+            guard let self else { return }
+            if entered {
+                // A retracted offer that the pointer comes back to is an offer
+                // the user is looking at again. The machine has its own word
+                // for that, and it is the only thing allowed to un-retract:
+                // opening the shell over a pill it still considers retracted
+                // would show a Record button its own guard refuses to honour.
+                detector.pillTapped()
+                hover.entered()
+            } else {
+                hover.exited()
+            }
+        }
+
+        let panel = IslandPanel()
+        panel.contentView = tracking
         self.panel = panel
 
         // The screen the island belongs on can change without anything on the
@@ -96,6 +118,8 @@ public final class IslandController {
     public func stop() {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         screenObserver = nil
+        hover?.forget()
+        hover = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -128,7 +152,7 @@ public final class IslandController {
 
         let detection = detector.face
         face = IslandShellFace.resolve(detection: detection, phase: session.phase)
-        isExpanded = face.expandsOnItsOwn(detection: detection)
+        isExpanded = face.isOpen(detection: detection, hovered: hover?.isInside ?? false)
         place()
     }
 
@@ -174,7 +198,9 @@ public final class IslandController {
             // issue (#121). This is how a reading is taken from one: run the
             // app on that Mac and read the log.
             let reading =
-                "\(metrics.shell)"
+                "\(face) \(isExpanded ? "open" : "shut")"
+                + " pointer \(NSStringFromPoint(NSEvent.mouseLocation))"
+                + " \(metrics.shell)"
                 + " frame \(NSStringFromRect(geometry.frame))"
                 + " visible \(NSStringFromRect(geometry.visibleFrame))"
                 + " safeAreaTop \(geometry.safeAreaTop)"

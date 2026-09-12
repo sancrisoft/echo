@@ -20,14 +20,32 @@
 //  The cutout is 185 pt wide there. The width differs between models, which
 //  is why nothing below hardcodes one.
 //
-//  NOT verified on hardware — issue #121 owns that, and none of it should be
-//  taken as working until it runs:
-//    - the no-notch fallback (`Shell.pill`): this machine has no external
-//      display and no screen without a cutout, so that branch has only the
-//      tests behind it;
-//    - every multi-screen path, `ScreenGeometry.underPointer()` included;
-//    - the fallback to `NSStatusBar.thickness` when the menu bar auto-hides;
-//    - the 16" cutout: a different machine, so a different number.
+//  Run on a second display on 2026-09-11, an LG 4K as the primary with the
+//  built-in to its left, which settles three of the four things the first
+//  reading could not:
+//
+//      frame               3840 × 2160 @1x at the origin
+//      visibleFrame        the same rect — it reserves nothing at the top
+//      safeAreaInsets.top  0.0
+//      auxiliary areas     none, so `Shell.pill`
+//      => window           (1737, 2073, 366 × 80), centred, on whole points
+//
+//    - the no-notch fallback runs, on a real screen without a cutout, and
+//      lands on whole points at 1x, where a half point would have been half a
+//      pixel;
+//    - the screen is chosen by the pointer, against a second display, in both
+//      directions — including the case the first version got wrong, a pointer
+//      resting on a screen's own top edge (see `ScreenGeometry.index(of:in:)`);
+//    - the `NSStatusBar.thickness` fallback fires: a secondary display with no
+//      menu bar of its own reserves nothing at the top, which is the same
+//      branch an auto-hidden menu bar takes. The SETTING itself is still
+//      untested, so what that branch does when the bar is hidden on the screen
+//      that owns it remains #121's.
+//
+//  Still not verified, and not to be taken as working:
+//    - the 16" cutout: a different machine, so a different number;
+//    - the menu bar set to auto-hide, per above;
+//    - full-screen apps and multiple Spaces.
 //
 
 import CoreGraphics
