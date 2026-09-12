@@ -340,18 +340,9 @@ public final class IslandController {
     /// (#194).
     private func place() {
         guard let panel else { return }
-        guard let metrics,
-            face.isOnScreen(hasCutout: metrics.cutout != nil, hovered: isHovered)
-        else {
+        guard let metrics else {
             settle?.cancel()
             settle = nil
-            #if DEBUG
-                if panel.isVisible {
-                    Self.log.info(
-                        "Island hidden: \(String(describing: self.face), privacy: .public) has nothing to announce and this screen has no cutout to hide in"
-                    )
-                }
-            #endif
             panel.orderOut(nil)
             return
         }
@@ -377,6 +368,24 @@ public final class IslandController {
                         "Island window trimmed to \(NSStringFromRect(target), privacy: .public)")
                 #endif
             }
+        }
+        // Sized first, shown second — including when it is not going to be
+        // shown. A hidden panel that kept a stale frame would be incoherent
+        // in two ways that both cost something: the snapshot renders the
+        // window, so an island that is currently hidden could not be rendered
+        // at all (which is how the island is looked at, since it cannot be
+        // screenshotted), and the next thing worth announcing would be shown
+        // where the last one was before being moved.
+        guard face.isOnScreen(hasCutout: metrics.cutout != nil, hovered: isHovered) else {
+            #if DEBUG
+                if panel.isVisible {
+                    Self.log.info(
+                        "Island hidden: \(String(describing: self.face), privacy: .public) has nothing to announce and this screen has no cutout to hide in"
+                    )
+                }
+            #endif
+            panel.orderOut(nil)
+            return
         }
         // Not `orderFront`: Echo is an accessory app, and the island appears
         // without activating it.
