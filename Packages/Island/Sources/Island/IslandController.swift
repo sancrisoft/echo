@@ -114,6 +114,19 @@ public final class IslandController {
         let hover = HoverGrace { [weak self] _ in self?.update() }
         self.hover = hover
 
+        let panel = IslandPanel()
+        self.panel = panel
+
+        // The state BEFORE the view. `NSHostingView` renders as it is built,
+        // and one built ahead of the first reading renders a shell with no
+        // metrics — nothing at all — so the real shell arrives a moment later
+        // as an insertion into a view that had been empty. SwiftUI does not
+        // animate an insertion and the inserted view has no previous size to
+        // spring from, which is why the first hover after launch jumped where
+        // every hover after it moved. Reading first costs nothing and makes
+        // the view's first body the shell it is going to keep.
+        refresh()
+
         let tracking = IslandHoverView(
             hosting: NSHostingView(
                 rootView: IslandRootView(controller: self, detector: detector, session: session)
@@ -122,10 +135,7 @@ public final class IslandController {
         tracking.onCrossing = { entered in
             if entered { hover.entered() } else { hover.exited() }
         }
-
-        let panel = IslandPanel()
         panel.contentView = tracking
-        self.panel = panel
 
         followScreens()
         observe()
@@ -159,7 +169,10 @@ public final class IslandController {
                     // it would have read no longer exists.
                     self?.restage?.cancel()
                     self?.restage = nil
-                    self?.place()
+                    // `update`, not `place`: which screen the island belongs on
+                    // is read in `refresh`, and a placement on its own would put
+                    // the window back exactly where it already was.
+                    self?.update()
                 }
             },
             workspace.addObserver(
@@ -189,7 +202,7 @@ public final class IslandController {
             try? await Task.sleep(for: Self.activationSettle)
             guard !Task.isCancelled, let self, self.panel != nil else { return }
             self.restage = nil
-            self.place()
+            self.update()
         }
     }
 
@@ -230,9 +243,21 @@ public final class IslandController {
         }
     }
 
-    /// Recomputes the face from both halves and puts the window where that
-    /// face belongs.
+    /// Whether the pointer is on the island, grace and all.
+    private var isHovered: Bool { hover?.isInside ?? false }
+
+    /// Recomputes what the shell is and then puts the window where that says.
     private func update() {
+        refresh()
+        place()
+    }
+
+    /// Everything the shell is, and nothing about the window it lives in.
+    ///
+    /// Split from `place()` so it can run before there is a view to place —
+    /// see `start()` — and because the two answer different questions: this
+    /// one is what the island shows, that one is where and whether.
+    private func refresh() {
         // Told first, both of them: detection's own face can change on either
         // piece of news, and the face read below has to be the one after it,
         // not before.
@@ -241,8 +266,17 @@ public final class IslandController {
 
         let detection = detector.face
         face = IslandShellFace.resolve(detection: detection, phase: session.phase)
-        isExpanded = face.isOpen(detection: detection, hovered: hover?.isInside ?? false)
-        place()
+        isExpanded = face.isOpen(detection: detection, hovered: isHovered)
+
+        if let geometry = ScreenGeometry.forShell(current: currentDisplay, hovered: isHovered) {
+            currentDisplay = geometry.displayID
+            metrics = IslandMetrics(geometry)
+        } else {
+            // No screens: nothing to hang off, and a window placed on a screen
+            // that is not there is worse than no window.
+            currentDisplay = nil
+            metrics = nil
+        }
     }
 
     private func reportRecording() {
@@ -288,22 +322,21 @@ public final class IslandController {
     /// was nothing to hover where the user had gone (#194).
     private func place() {
         guard let panel else { return }
-        guard
-            let geometry = ScreenGeometry.forShell(
-                current: currentDisplay,
-                hovered: hover?.isInside ?? false
-            )
+        guard let metrics,
+            face.isOnScreen(hasCutout: metrics.cutout != nil, hovered: isHovered)
         else {
-            // No screens: nothing to hang off, and a window placed on a
-            // screen that is not there is worse than no window.
-            metrics = nil
-            currentDisplay = nil
+            settle?.cancel()
+            settle = nil
+            #if DEBUG
+                if panel.isVisible {
+                    Self.log.info(
+                        "Island hidden: \(String(describing: self.face), privacy: .public) has nothing to announce and this screen has no cutout to hide in"
+                    )
+                }
+            #endif
             panel.orderOut(nil)
             return
         }
-        currentDisplay = geometry.displayID
-        let metrics = IslandMetrics(geometry)
-        self.metrics = metrics
         let target = IslandShellGeometry(metrics: metrics, face: face, isExpanded: isExpanded)
             .panelFrame(on: metrics)
 
@@ -338,14 +371,11 @@ public final class IslandController {
             // app on that Mac and read the log.
             let reading =
                 "\(face) \(isExpanded ? "open" : "shut")"
-                + " display \(geometry.displayID) of \(NSScreen.screens.count)"
-                + " hovered \(hover?.isInside ?? false)"
+                + " display \(metrics.displayID) of \(NSScreen.screens.count)"
+                + " hovered \(isHovered)"
                 + " pointer \(NSStringFromPoint(NSEvent.mouseLocation))"
                 + " \(metrics.shell)"
-                + " frame \(NSStringFromRect(geometry.frame))"
-                + " visible \(NSStringFromRect(geometry.visibleFrame))"
-                + " safeAreaTop \(geometry.safeAreaTop)"
-                + " statusBar \(geometry.statusBarThickness)"
+                + " frame \(NSStringFromRect(metrics.screenFrame))"
                 + " menuBar \(metrics.menuBarHeight)"
                 + " scale \(panel.backingScaleFactor)"
                 + " shell \(NSStringFromRect(target))"

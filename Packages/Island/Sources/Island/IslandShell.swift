@@ -144,7 +144,11 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
     @ViewBuilder
     private var gap: some View {
         if let cutoutWidth = geometry.cutoutWidth {
-            Color.clear.frame(width: cutoutWidth)
+            // Never wider than the shell holding it. The idle shell is
+            // NARROWER than the cutout — it hides inside it rather than
+            // hanging off it — and a hole wider than its shell would squeeze
+            // both ears to nothing and spill past the clip.
+            Color.clear.frame(width: min(cutoutWidth, geometry.shellSize.width))
         } else {
             Spacer(minLength: EchoSpacing.s)
         }

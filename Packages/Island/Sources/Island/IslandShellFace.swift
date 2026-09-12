@@ -38,6 +38,17 @@ public nonisolated enum IslandShellFace: Equatable, Sendable, CaseIterable {
     /// The summary is being written.
     case summarizing
 
+    /// Whether this face has anything to announce.
+    ///
+    /// `idle` does not. It is the app being present, not the app having news,
+    /// and it is the only face that is on screen because nothing is happening
+    /// rather than because something is. Two things turn on that difference:
+    /// what the collapsed shell is as wide as, and — on a screen with no
+    /// cutout to hide in — whether there is a shell at all.
+    public var announces: Bool {
+        self != .idle
+    }
+
     /// This face's width, collapsed and expanded.
     public var width: IslandWidth {
         switch self {
@@ -107,6 +118,32 @@ extension IslandShellFace {
         case .callDetected, .callEnded, .saved: return true
         case .idle, .recording, .summarizing: return false
         }
+    }
+
+    /// Whether the island is on screen at all, wearing this face.
+    ///
+    /// On a screen with a cutout it always is. The idle shell IS the cutout —
+    /// it hides inside the hole and costs the user nothing — and that
+    /// permanent presence is how a recording gets started from the island at
+    /// all: you hover the notch.
+    ///
+    /// A screen without one has no hole to hide in, and the same permanence is
+    /// a black bar over the top of the desktop for the whole life of the app,
+    /// saying nothing, on a surface somebody is trying to work on. So there the
+    /// island is up only while it has something to announce, and goes away
+    /// again when that is over.
+    ///
+    /// `hovered` is the exception that applies to both: the island is never
+    /// taken out from under a pointer that is on it. That is the same rule
+    /// that defers a move between screens, and it keeps the hover grace honest
+    /// — a window ordered out from under the pointer would leave the grace
+    /// believing the island was still hovered, with no crossing coming to
+    /// correct it.
+    ///
+    /// The product owner's decision (2026-09-12), against a design whose
+    /// fallback pill is as permanent as the notched shell.
+    public func isOnScreen(hasCutout: Bool, hovered: Bool) -> Bool {
+        hasCutout || announces || hovered
     }
 
     /// Whether the shell is open.

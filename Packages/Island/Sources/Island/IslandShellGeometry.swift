@@ -49,11 +49,13 @@ public nonisolated struct IslandShellGeometry: Equatable, Sendable {
     public init(metrics: IslandMetrics, face: IslandShellFace, isExpanded: Bool) {
         switch metrics.shell {
         case .notch(let cutout):
+            flare = EchoLayout.islandFlare
             shellSize = CGSize(
-                width: isExpanded ? face.width.expanded : face.width.collapsed,
+                width: isExpanded
+                    ? face.width.expanded
+                    : Self.collapsedWidth(face: face, cutout: cutout, flare: flare),
                 height: isExpanded ? EchoLayout.islandExpandedHeight : metrics.collapsedHeight
             )
-            flare = EchoLayout.islandFlare
             // The flares widen the window and nothing heightens it: the top
             // edge is flush with the top of the screen, so there is no above
             // to reach into.
@@ -85,6 +87,40 @@ public nonisolated struct IslandShellGeometry: Equatable, Sendable {
             cutoutWidth = nil
             castsShadow = true
         }
+    }
+
+    /// How wide the collapsed shell is on a notched screen.
+    ///
+    /// A face with something to say is as wide as the design draws it: wider
+    /// than the cutout, because what it says lives in the ears either side of
+    /// the hole.
+    ///
+    /// The idle face says nothing, and the design gives it empty ears — so the
+    /// only thing those ears put on screen is black, on the bezel, for the
+    /// whole life of the app. Worse than it looks on paper, because the flares
+    /// are drawn OUTSIDE the shell's own width: the drawn black is the face's
+    /// width plus a flare at each end, which on the 14" M4 Pro is 232 pt of
+    /// shell hanging off a 185 pt cutout. That is the black bar the island was
+    /// reported as.
+    ///
+    /// So the idle shell is the cutout, flares included — the width is what is
+    /// left of the hole once both flares have taken their room. The black then
+    /// ends exactly where the cutout does and the app's permanent presence is
+    /// invisible, which is what "permanent" can only mean on a screen the user
+    /// is trying to work on.
+    ///
+    /// Taking it out of the flares rather than dropping them is deliberate:
+    /// the flare is the same corner at every size and does not animate, so a
+    /// shell that had none while collapsed would have to grow two of them in
+    /// the first frame of every expansion.
+    ///
+    /// The product owner's decision (2026-09-12), against a design that draws
+    /// the idle face wider than the hole.
+    private static func collapsedWidth(
+        face: IslandShellFace, cutout: CGRect, flare: CGFloat
+    ) -> CGFloat {
+        guard !face.announces else { return face.width.collapsed }
+        return max(0, cutout.width - 2 * flare)
     }
 
     /// What the window has to be: the shell plus its margins.

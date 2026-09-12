@@ -65,6 +65,12 @@ public nonisolated struct IslandMetrics: Equatable, Sendable {
 
     public let shell: Shell
 
+    /// Which display these are. Carried so that a view can tell one screen's
+    /// shell from another's without going back to `NSScreen`: moving to
+    /// another display is not a shell changing size, it is a different shell,
+    /// and the spring must not be asked to travel between them.
+    public let displayID: CGDirectDisplayID
+
     /// The frame of the screen these metrics describe. Kept so that a caller
     /// holding metrics never has to go back to `NSScreen` to place anything.
     public let screenFrame: CGRect
@@ -73,6 +79,7 @@ public nonisolated struct IslandMetrics: Equatable, Sendable {
     public let menuBarHeight: CGFloat
 
     public init(_ geometry: ScreenGeometry) {
+        displayID = geometry.displayID
         screenFrame = geometry.frame
         // `visibleFrame` reserves nothing at the top when the menu bar is set
         // to auto-hide, and the pill would then float inside the strip it is

@@ -42,6 +42,14 @@ struct IslandRootView: View {
                 trailingEar: { EmptyView() },
                 row: { row }
             )
+            // A different display is a different shell, not the same one
+            // changing size. Without this the spring is handed a move from a
+            // notched shell on one screen to a pill on another — different
+            // width, height, radius, flares and shadow — while the window it
+            // lives in has already teleported, and the two together read as a
+            // blink. Giving the shell the screen's identity makes the crossing
+            // a cut, which is the only honest way to draw it.
+            .id(metrics.displayID)
         }
     }
 
