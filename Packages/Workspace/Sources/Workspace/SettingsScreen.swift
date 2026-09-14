@@ -3,7 +3,7 @@
 //  Workspace
 //
 //  The settings that exist for the library: launch at login, recordings,
-//  summaries, storage. Sections for call detection, models and updates arrive
+//  summaries, updates, storage. Sections for call detection and models arrive
 //  with the packages that own them. Launch at login reads `SMAppService`, the
 //  OS's own answer, and is never mirrored into `settings.json`: the user can
 //  change login items in System Settings behind our back.
@@ -12,12 +12,16 @@
 import DesignSystem
 import EchoCore
 import Meetings
+import Recording
 import ServiceManagement
 import SwiftUI
+import Updates
 
 struct SettingsScreen: View {
     @Environment(AppSettings.self) private var settings
     @Environment(MeetingLibrary.self) private var library
+    @Environment(RecordingSession.self) private var session
+    @Environment(UpdateChecker.self) private var updates
 
     let dataRoot: DataRoot
 
@@ -25,6 +29,11 @@ struct SettingsScreen: View {
     @State private var launchAtLoginError: String?
     @State private var confirmDeleteRecordings = false
     @State private var confirmEmptyTrash = false
+
+    /// Shown under the update buttons when the updater could not be started,
+    /// with the command to paste instead. This run's problem only: the report
+    /// a previous failed update left behind belongs to `UpdateChecker`.
+    @State private var updateActionError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -38,6 +47,7 @@ struct SettingsScreen: View {
                 general
                 recordings
                 summaries
+                updatesSection
                 storage
                 about
             }
@@ -124,6 +134,76 @@ struct SettingsScreen: View {
         }
     }
 
+    private var updatesSection: some View {
+        Section {
+            LabeledContent("Version", value: AppIdentity.version.display)
+
+            HStack(alignment: .firstTextBaseline, spacing: EchoSpacing.m) {
+                VStack(alignment: .leading, spacing: EchoSpacing.xxs) {
+                    Text(updateStatusText)
+                    if let checked = updates.lastCheckedAt {
+                        Text("Checked \(checked.formatted(.relative(presentation: .named)))")
+                            .font(EchoFont.micro)
+                            .foregroundStyle(EchoColor.textTertiary)
+                    }
+                }
+                Spacer()
+                Button(updates.isChecking ? "Checking…" : "Check for Updates") {
+                    Task { await updates.check() }
+                }
+                .buttonStyle(.echoSecondary)
+                .disabled(updates.isChecking)
+            }
+
+            if let release = updates.availableRelease {
+                HStack(spacing: EchoSpacing.s) {
+                    // Updating quits Echo; a recording in progress would be
+                    // lost, so the button waits for it to stop.
+                    Button("Update Now") { updateNow() }
+                        .buttonStyle(.echoPrimary)
+                        .disabled(session.phase.isRecording)
+                    Button("View Release Notes") { UpdateInstaller.openReleasePage(release) }
+                        .buttonStyle(.echoSecondary)
+                }
+                if session.phase.isRecording {
+                    Text("Updating quits Echo — it can update once this recording stops.")
+                        .font(EchoFont.micro)
+                        .foregroundStyle(EchoColor.textSecondary)
+                }
+            }
+
+            // Either this run's failure to start the updater, or the report a
+            // failed update left behind before Echo reopened.
+            if let problem = updateActionError ?? updates.lastInstallFailure {
+                Text(problem)
+                    .font(EchoFont.micro)
+                    .foregroundStyle(EchoColor.warning)
+                    .textSelection(.enabled)
+            }
+
+            // A closure, not the method reference: passing the isolated method
+            // directly crashes the Swift 6.3 compiler in IRGen.
+            Toggle(
+                "Check for updates automatically",
+                isOn: Binding(
+                    get: { settings.checkForUpdatesAutomatically },
+                    set: { setAutomaticUpdateChecks($0) }
+                )
+            )
+        } header: {
+            Text("Updates")
+        } footer: {
+            Text(
+                """
+                Echo asks GitHub once a day whether a newer release exists. That request carries Echo's version \
+                and nothing about you or your meetings. Update Now quits Echo, runs the same install script as \
+                the README, and reopens Echo on the new version; if anything fails, the Echo you had reopens \
+                and the reason shows here.
+                """
+            )
+        }
+    }
+
     private var storage: some View {
         Section {
             storageRow("Meetings", library.storage?.meetingsBytes)
@@ -154,6 +234,45 @@ struct SettingsScreen: View {
     }
 
     // MARK: Helpers
+
+    private var updateStatusText: String {
+        switch updates.status {
+        case .idle:
+            return updates.isChecking ? "Checking GitHub…" : "Echo checks GitHub's releases for newer versions."
+        case .upToDate:
+            return "You're up to date."
+        case .available(let release):
+            var text = "Echo \(release.version) is available"
+            if let published = release.publishedAt {
+                text += ", released \(published.formatted(.relative(presentation: .named)))"
+            }
+            return text + "."
+        case .failed(let message):
+            return message
+        }
+    }
+
+    /// Returns only if the updater could not be started; otherwise Echo quits
+    /// here and the updater reopens it. The installer is a value over the data
+    /// root, not state: building one at the click is the same shape as
+    /// `MeetingActions.revealInFinder`.
+    private func updateNow() {
+        do {
+            try UpdateInstaller(dataRoot: dataRoot).updateAndRelaunch()
+        } catch {
+            ErrorTrace.record("Starting the updater failed", error: error, category: "Updates")
+            updateActionError = "\(error). Paste this into a terminal instead:  \(GitHubReleaseFeed.installCommand)"
+        }
+    }
+
+    private func setAutomaticUpdateChecks(_ enabled: Bool) {
+        settings.setCheckForUpdates(automatically: enabled)
+        // Turning it on is a request for an answer; give one now instead of at
+        // the next daily tick.
+        if enabled, updates.lastCheckedAt == nil {
+            Task { await updates.check() }
+        }
+    }
 
     private func storageRow(_ title: String, _ bytes: Int64?) -> some View {
         LabeledContent(title) {

@@ -10,7 +10,7 @@ Nothing leaves your Mac. Audio, transcripts and notes are plain files in your
 home folder, produced by models that run on-device.
 
 > **This is the v2 branch: a rebuild in progress.** The app that ships today
-> lives on `main` (v0.0.13) and is installed with the command in its README.
+> lives on `main` (v0.0.13) and is installed with the command below.
 > v2 is being built feature by feature on a new architecture; it reads the same
 > data folder as v1, so a library recorded with v1 opens in v2 unchanged. What
 > works today on this branch is listed below.
@@ -46,6 +46,15 @@ home folder, produced by models that run on-device.
 - To build: Xcode 26.6 or later. The Metal toolchain
   (`xcodebuild -downloadComponent MetalToolchain`) is needed once the
   summarization package lands.
+
+## Install the shipping app
+
+One command, no GitHub account and no other tools. It is also the script Echo
+runs for itself when you click Update Now:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash
+```
 
 ## Setup and run
 
