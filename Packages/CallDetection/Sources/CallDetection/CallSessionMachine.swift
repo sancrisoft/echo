@@ -168,6 +168,16 @@ public struct CallSessionMachine {
     /// resets it except the island saying so.
     public private(set) var isHovered = false
 
+    /// Every catalogued app that has captured the mic during this call.
+    ///
+    /// Kept so that an app JOINING one can be told from the apps already in
+    /// it. Without that, a machine already in a call ignores every later
+    /// report but for re-attribution — so somebody who leaves a catalogued app
+    /// holding the mic all day is never offered a recording for anything else
+    /// they join, on any screen. Reported 2026-09-14, with Discord holding the
+    /// mic and a Meet joined under it.
+    public private(set) var appsThisCall: Set<ProcessSelector> = []
+
     /// Set by ✕ and by a manual stop mid-call: this call gets no further start
     /// prompt. Scoped to the call — it resets when capture stops, so the next
     /// call prompts again.
@@ -276,6 +286,7 @@ public struct CallSessionMachine {
             guard let first = apps.first else { return [] }
             phase = .candidate
             currentApp = first
+            appsThisCall = Set(apps)
             dismissedThisCall = false
             return [.startDebounceTimer]
 
@@ -289,15 +300,15 @@ public struct CallSessionMachine {
             }
             // The reported set changed shape while the debounce runs (a helper
             // process joined, a second app opened the mic): same pending call,
-            // re-attributed, timer untouched.
+            // re-attributed, timer untouched. Nothing has been offered yet, so
+            // everything capturing by the time it is counts as part of it.
             currentApp = first
+            appsThisCall.formUnion(apps)
             return []
 
         case .inCall:
             guard apps.isEmpty else {
-                // Capture continues; only attribution can change.
-                currentApp = apps[0]
-                return []
+                return handleAppsJoiningACall(apps)
             }
             guard isRecording else {
                 // The call ended with nothing recording: retract whatever the
@@ -330,6 +341,35 @@ public struct CallSessionMachine {
             face = nil
             return [.cancelGraceTimer, .setFace(nil)]
         }
+    }
+
+    /// Catalogued capture continues, and the reported set may have grown.
+    ///
+    /// A process that is part of the call already changes nothing: helpers
+    /// come and go inside one call and re-announcing it would nag. An app that
+    /// was NOT part of it is a second call joined under the first — the case
+    /// that used to fall through this branch in silence — and it gets the
+    /// offer it would have got on its own, attributed to itself, because the
+    /// meeting somebody wants recorded is the one they just joined.
+    ///
+    /// Each app offers at most once per call: the set only grows until the
+    /// call ends. A running recording still suppresses it, and so does a ✕ —
+    /// whether a dismissal should cover an app that had not joined yet is a
+    /// product question, and the narrower answer is the one that cannot nag.
+    private mutating func handleAppsJoiningACall(_ apps: [ProcessSelector]) -> [Action] {
+        let joined = apps.first { !appsThisCall.contains($0) }
+        appsThisCall.formUnion(apps)
+
+        // Attribution follows the app that is still capturing, so a helper
+        // dropping out does not rename a live call.
+        if let current = currentApp, !apps.contains(current) {
+            currentApp = apps[0]
+        }
+
+        guard let joined, !isRecording, !dismissedThisCall else { return [] }
+        currentApp = joined
+        face = promptFace
+        return [.setFace(face)] + armRetract
     }
 
     private mutating func handleDebounceFired() -> [Action] {
@@ -506,6 +546,7 @@ public struct CallSessionMachine {
     private mutating func endCall() {
         phase = .idle
         currentApp = nil
+        appsThisCall = []
         dismissedThisCall = false
         face = nil
     }
@@ -515,6 +556,7 @@ public struct CallSessionMachine {
     private mutating func resetCallState() {
         phase = .idle
         currentApp = nil
+        appsThisCall = []
         dismissedThisCall = false
         keptRecordingLatch = false
         face = nil

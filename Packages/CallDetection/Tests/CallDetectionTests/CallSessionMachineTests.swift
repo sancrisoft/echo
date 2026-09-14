@@ -718,6 +718,96 @@ struct CallSessionMachineTests {
         #expect(machine.handle(.graceFired).contains(.requestStopRecording))
     }
 
+    // MARK: - A second call, joined under the first
+
+    @Test func anAppJoiningACallInProgressIsOfferedARecording() {
+        // Reported 2026-09-14: somebody leaves a catalogued app holding the
+        // mic all day, joins a meeting under it, and is never offered a
+        // recording. It read as a screen problem — the offer showed up once an
+        // external display was plugged in — but nothing here looks at a
+        // screen. What changed was whether the machine happened to be idle.
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.debounceFired)
+        machine.handle(.retractFired)  // the first offer was ignored, not refused
+        #expect(machine.phase == .inCall)
+
+        let actions = machine.handle(.matchedAppsChanged([chrome, zoom]))
+
+        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer])
+        // Attributed to the app just joined: that is the meeting somebody
+        // wants recorded, not the one that has been open since breakfast.
+        #expect(machine.currentApp == zoom)
+        #expect(machine.phase == .inCall)
+    }
+
+    @Test func anAppAlreadyInTheCallIsNotOfferedAgain() {
+        // Helper processes come and go inside one call. Re-announcing it every
+        // time one does would be the nagging the retract exists to avoid.
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.debounceFired)
+        machine.handle(.retractFired)
+
+        #expect(machine.handle(.matchedAppsChanged([chrome, zoom])).count == 2)
+        machine.handle(.retractFired)
+        #expect(machine.handle(.matchedAppsChanged([chrome, zoom])).isEmpty)
+        #expect(machine.handle(.matchedAppsChanged([zoom])).isEmpty)
+        #expect(machine.handle(.matchedAppsChanged([zoom, chrome])).isEmpty)
+    }
+
+    @Test func anAppJoiningWhileRecordingIsNotOffered() {
+        // Rule 5 holds wherever a prompt could come from: the island never
+        // nags about something the user already did.
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.debounceFired)
+        machine.handle(.recordingChanged(true))
+
+        #expect(machine.handle(.matchedAppsChanged([chrome, zoom])).isEmpty)
+        #expect(machine.face == nil)
+    }
+
+    @Test func anAppJoiningAfterADismissalIsNotOffered() {
+        // The narrower answer: "no" covers the call, newcomers included. The
+        // wider one — that a dismissal only covers the app it was aimed at —
+        // is a product question, and this is the reading that cannot nag.
+        var machine = promptingMachine()
+        machine.handle(.dismissTapped)
+
+        #expect(machine.handle(.matchedAppsChanged([zoom, chrome])).isEmpty)
+        #expect(machine.face == nil)
+    }
+
+    @Test func theAppsOfACallAreForgottenWhenItEnds() {
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.debounceFired)
+        machine.handle(.matchedAppsChanged([chrome, zoom]))
+        #expect(machine.appsThisCall == [chrome, zoom])
+
+        machine.handle(.matchedAppsChanged([]))  // everything let the mic go
+        #expect(machine.appsThisCall.isEmpty)
+
+        // So the same app is offered again next time, rather than being
+        // remembered as already asked about.
+        machine.handle(.matchedAppsChanged([zoom]))
+        #expect(
+            machine.handle(.debounceFired) == [
+                .setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer,
+            ])
+    }
+
+    @Test func aCallConfirmedWithSeveralAppsOffersOnlyOnce() {
+        // Everything capturing by the time the debounce elapses is part of the
+        // call it confirms — one offer, not one per app.
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.matchedAppsChanged([chrome, zoom]))
+        #expect(machine.handle(.debounceFired).count == 2)
+        #expect(machine.handle(.matchedAppsChanged([chrome, zoom])).isEmpty)
+    }
+
     // MARK: - Global safety sweeps
 
     /// Every event the machine has except `startTapped` — the sweep's whole
