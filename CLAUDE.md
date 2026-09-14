@@ -25,10 +25,13 @@ behaviors and measured constants a port must preserve, with their reasons.
 
 ```
 App/                 composition root + scenes. Nothing else.
-  EchoApp.swift        scenes: menu bar item, main window, ⌘, command
+  EchoApp.swift        scenes: the main window, ⌘, and the app menu's commands
   AppComposition.swift builds every long-lived object; start() runs all launch side effects
-  ActivationPolicy.swift · WindowOpener.swift · MenuBarMenu.swift · UpdatePrompt.swift
+  ActivationPolicy.swift · WindowOpener.swift · UpdatePrompt.swift
   WindowSnapshot.swift (DEBUG)
+  MenuBarItem.swift    the NSStatusItem: left click opens the window, right click
+                       the menu; it also carries the openWindow bridge
+  MenuBarMenu.swift    what that menu contains
 AppTests/            hosted tests only for what needs the real app (TestHost tripwire)
 Packages/<Name>/     one local Swift package per capability
   Package.swift
