@@ -376,11 +376,11 @@ public final class IslandController {
         // at all (which is how the island is looked at, since it cannot be
         // screenshotted), and the next thing worth announcing would be shown
         // where the last one was before being moved.
-        guard face.isOnScreen(hasCutout: metrics.cutout != nil, hovered: isHovered) else {
+        guard face.isOnScreen(hasCutout: metrics.cutout != nil, isOpen: isExpanded) else {
             #if DEBUG
                 if panel.isVisible {
                     Self.log.info(
-                        "Island hidden: \(String(describing: self.face), privacy: .public) has nothing to announce and this screen has no cutout to hide in"
+                        "Island hidden: \(String(describing: self.face), privacy: .public) is not open and this screen has no cutout to hide it in"
                     )
                 }
             #endif
