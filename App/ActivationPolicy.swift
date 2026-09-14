@@ -6,7 +6,7 @@
 //  macOS hides accessory apps from Cmd-Tab and the Dock even while they own a
 //  visible window — the window shows up in Mission Control but there is no way
 //  to switch back to it, which reads as "the app is open but gone". So the
-//  activation policy follows the main window: `.regular` while it is on screen
+//  activation policy follows the main window: `.regular` while the app has one
 //  (minimized counts — it stays switchable), `.accessory` otherwise.
 //
 //  The delegate is also where a reopen arrives — asking for an app that is
@@ -53,9 +53,10 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
     /// by name.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         // `hasVisibleWindows` is AppKit's answer about every window the app
-        // owns; the question here is only ever about the main one. A minimized
-        // main window counts as on screen, and returning true then is exactly
-        // right: AppKit's own reopen deminiaturizes it.
+        // owns; the question here is only ever about the main one, minimized
+        // included. There is nothing to open in that case — the window exists —
+        // so the reopen goes back to AppKit, whose normal task for one is to
+        // deminiaturize.
         guard Self.mainWindow == nil else { return true }
         Self.openMainWindow?()
         return false
@@ -73,13 +74,19 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
         self.openMainWindow = openMainWindow
     }
 
-    /// The main window while it is on screen. Minimized counts: it stays
-    /// switchable, and a reopen is what brings it back.
+    /// The main window, while the app still has one. Minimized counts, and has
+    /// to be asked for separately: `isVisible` is false for the whole time a
+    /// window is miniaturized (measured 2026-09-14). Missing that demotes the
+    /// app to `.accessory` the next time anything makes the policy settle,
+    /// which takes a minimized window out of Cmd-Tab and the Dock and leaves
+    /// no way back to it.
     private static var mainWindow: NSWindow? {
-        NSApp.windows.first { $0.isVisible && $0.identifier?.rawValue == EchoWindow.main }
+        NSApp.windows.first {
+            ($0.isVisible || $0.isMiniaturized) && $0.identifier?.rawValue == EchoWindow.main
+        }
     }
 
-    /// Promotes to `.regular` iff the main window is visible; demotes otherwise.
+    /// Promotes to `.regular` iff the app has a main window; demotes otherwise.
     private static func sync() {
         let mainWindow = Self.mainWindow
         let wanted: NSApplication.ActivationPolicy = mainWindow == nil ? .accessory : .regular
