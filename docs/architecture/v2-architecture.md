@@ -87,7 +87,7 @@ Each package answers "who owns this?" for one product capability from
 | **DesignSystem** | Semantic color tokens for light and dark, the type scale over the two bundled typefaces, spacing, radii and control geometry, the durations and curves the design states (`EchoMotion`), and the primitives every surface repeats: buttons, chips, property rows, tab strips, list rows, meta strips, status badges, level gauge, empty state. No product logic. | — | — |
 | **Workspace** | The main window: sidebar with meetings grouped by date, the document (summary and transcript), trash, the settings screen, first-run banners, search, the Markdown renderer, `WorkspaceModel` (selection, section, search, sort — the window's single navigation truth), display-state resolution. | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem | — |
 | **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, and the no-notch pill fallback), the shell itself (its outline with the two concave flares, the ears either side of the cutout, the one-row expansion), `IslandController` (the non-activating `NSPanel`, which face the shell wears, where the window goes, and the one report detection needs about the session), the faces. | EchoCore, CallDetection, Recording, DesignSystem | — |
-| **App** (target) | Composition root, scenes, activation policy, the menu bar item, launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
+| **App** (target) | Composition root, scenes, activation policy, the menu bar item, the update prompt (the one alert Echo raises, and the app menu's answer), launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
 
 The UI packages are built towards an internal design that is not in the
 repository (see `CLAUDE.md`, "Design"); its written spec is the reference for
@@ -334,7 +334,7 @@ One owner per kind of state. Nothing is mirrored.
 | Library (metas, trash, storage) | `MeetingLibrary` (Meetings) | Disk is the source; the library is a main-actor cache that re-reads after mutations it performs. Reading never writes: trash purge is an explicit `purgeExpiredTrash()` the composition root schedules. |
 | Model readiness (per model) | `ParakeetModel`, `SummaryModel` | Each exposes one observable state with one clamped fraction. |
 | Detection (apps in call, machine state) | `CallDetector` (CallDetection) | `appsInCall` is derived from the machine's attribution; not a second matcher. |
-| Updates | `UpdateChecker` (Updates) | |
+| Updates | `UpdateChecker` (Updates) | One instance, built by `AppComposition`. Settings, the app menu and the launch prompt all read it; none keeps a copy. Whether this launch has already interrupted is the prompt's own latch and is not persisted — Later means the next launch asks again. |
 | Preferences | `AppSettings` (EchoCore) | `settings.json`, key-by-key decode, additive. Consumers read the property at the moment they act. |
 | Launch at login | `SMAppService` (read through Workspace's settings screen) | The OS is the source of truth; never mirrored. |
 | Window navigation (section, selection, opened document, tab, search, sort) | `WorkspaceModel` (Workspace) | One object; the PoC's triple-tracked selection and dead `MeetingLibrary.selection` do not return. |

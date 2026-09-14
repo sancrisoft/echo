@@ -27,7 +27,8 @@ behaviors and measured constants a port must preserve, with their reasons.
 App/                 composition root + scenes. Nothing else.
   EchoApp.swift        scenes: menu bar item, main window, ⌘, command
   AppComposition.swift builds every long-lived object; start() runs all launch side effects
-  ActivationPolicy.swift · WindowOpener.swift · MenuBarMenu.swift · WindowSnapshot.swift (DEBUG)
+  ActivationPolicy.swift · WindowOpener.swift · MenuBarMenu.swift · UpdatePrompt.swift
+  WindowSnapshot.swift (DEBUG)
 AppTests/            hosted tests only for what needs the real app (TestHost tripwire)
 Packages/<Name>/     one local Swift package per capability
   Package.swift
@@ -79,8 +80,10 @@ packages never import each other. Engine packages never import SwiftUI, and
 AppKit only for process identity in files the boundary script allowlists.
 
 `App` also imports, directly, any engine package whose launch side effect it
-owns — `ModelDelivery`, for the retired-model cleanup, and `CallDetection`,
-whose detector it builds, serves the three requests of, and starts. That is
+owns — `ModelDelivery`, for the retired-model cleanup; `CallDetection`, whose
+detector it builds, serves the three requests of, and starts; and `Updates`,
+whose checker it builds, whose launch check it runs, and whose one
+interruption it raises. That is
 the arrow above, not an exception to it: the composition root is where launch
 work lives (architecture §6). What it may not do is link a package it does
 not itself call; everything Recording and Island pull in resolves through
