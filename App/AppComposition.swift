@@ -69,6 +69,12 @@ final class AppComposition {
     /// own (the app menu, the menu bar item).
     let windowOpener: WindowOpener
 
+    /// Whether the main window is on screen as soon as the scene is built.
+    /// True for `ECHO_OPEN_WINDOW`, and for the one launch that finds this Mac
+    /// has never run Echo before. Read by the scene, which SwiftUI builds only
+    /// after `start()` has had its say.
+    private(set) var opensWindowAtLaunch: Bool
+
     private let errorLog: ErrorTraceLog
     private var started = false
 
@@ -81,6 +87,7 @@ final class AppComposition {
         workspace = WorkspaceModel()
         windowOpener = WindowOpener()
         errorLog = ErrorTraceLog(directory: dataRoot.logs)
+        opensWindowAtLaunch = environment.opensWindowAtLaunch
 
         // Detection's three verbs, served here because this is the only place
         // that holds all of the session, the window's navigation and the
@@ -126,6 +133,15 @@ final class AppComposition {
         guard !TestHost.isActive else { return }
 
         ErrorTrace.configure(log: errorLog)
+
+        // The one launch that shows itself. A fresh install is otherwise a
+        // menu bar icon and an island hiding in the cutout: nothing that says
+        // where the app went. Marked as taken here, before the scene reads the
+        // answer, so every launch after this one is silent again.
+        if !settings.hasLaunchedBefore {
+            settings.noteLaunched()
+            opensWindowAtLaunch = true
+        }
 
         // The design's typefaces, registered with the process before anything
         // draws. Registration is a launch effect, not something a font token

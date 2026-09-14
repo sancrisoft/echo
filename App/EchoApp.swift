@@ -45,8 +45,10 @@ struct EchoApp: App {
         }
         .menuBarExtraStyle(.menu)
 
-        // The main window opens on demand — from the menu bar, ⌘, or a debug
-        // flag — never at launch on its own.
+        // The main window opens on demand — from the menu bar, ⌘, a reopen,
+        // or a debug flag — and at launch only on the first launch this Mac
+        // ever gives Echo, which is the one that would otherwise leave a new
+        // user with nothing on screen to find.
         Window("Echo", id: EchoWindow.main) {
             WorkspaceWindow(dataRoot: composition.dataRoot)
                 .environment(composition.library)
@@ -57,7 +59,7 @@ struct EchoApp: App {
                 .preferredColorScheme(colorSchemeOverride)
                 .snapshotIfRequested(composition)
         }
-        .defaultLaunchBehavior(composition.environment.opensWindowAtLaunch ? .presented : .suppressed)
+        .defaultLaunchBehavior(composition.opensWindowAtLaunch ? .presented : .suppressed)
         // No state restoration: the window opens on demand, and restoring it
         // after a force-quit can resurrect a blank window that never
         // reconnects to the scene content.

@@ -45,6 +45,11 @@ final class WindowOpener {
 
 /// A zero-size view that captures SwiftUI's `openWindow` for the opener. It
 /// sits in the menu bar item's label, the one view an agent app always has.
+///
+/// It is also where the app delegate is told how to answer a reopen: both are
+/// the same errand — handing the AppKit side a way into a SwiftUI scene — and
+/// this is the first moment either is possible, since SwiftUI builds the `App`
+/// before `NSApplication` exists.
 struct WindowOpenerBridge: View {
     @Environment(\.openWindow) private var openWindow
     let opener: WindowOpener
@@ -52,6 +57,9 @@ struct WindowOpenerBridge: View {
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
-            .onAppear { opener.register { id in openWindow(id: id) } }
+            .onAppear {
+                opener.register { id in openWindow(id: id) }
+                EchoAppDelegate.handleReopen { [opener] in opener.openMainWindow() }
+            }
     }
 }
