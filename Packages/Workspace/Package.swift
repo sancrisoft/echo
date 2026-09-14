@@ -5,6 +5,10 @@ import PackageDescription
 // Workspace is the main window: the sidebar of meetings, the document, trash
 // and the settings screen. It reads observable state from the engine packages
 // and calls their methods; it never touches disk, audio or models itself.
+//
+// Settings › Updates is why it sees Updates and Recording: the section renders
+// `UpdateChecker`'s answer, and Update Now is disabled while a session is live
+// because updating quits Echo and mid-meeting that is a lost meeting.
 let package = Package(
     name: "Workspace",
     platforms: [.macOS("15.6")],
@@ -14,6 +18,8 @@ let package = Package(
     dependencies: [
         .package(path: "../EchoCore"),
         .package(path: "../Meetings"),
+        .package(path: "../Recording"),
+        .package(path: "../Updates"),
         .package(path: "../DesignSystem"),
     ],
     targets: [
@@ -22,6 +28,8 @@ let package = Package(
             dependencies: [
                 .product(name: "EchoCore", package: "EchoCore"),
                 .product(name: "Meetings", package: "Meetings"),
+                .product(name: "Recording", package: "Recording"),
+                .product(name: "Updates", package: "Updates"),
                 .product(name: "DesignSystem", package: "DesignSystem"),
             ],
             swiftSettings: [
@@ -36,6 +44,7 @@ let package = Package(
                 .product(name: "EchoCore", package: "EchoCore"),
                 .product(name: "EchoCoreTestSupport", package: "EchoCore"),
                 .product(name: "Meetings", package: "Meetings"),
+                .product(name: "Updates", package: "Updates"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
