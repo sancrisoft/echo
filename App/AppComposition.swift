@@ -17,6 +17,7 @@ import Island
 import Meetings
 import ModelDelivery
 import Recording
+import Updates
 import Workspace
 
 @MainActor
@@ -48,6 +49,18 @@ final class AppComposition {
     /// The island: the panel, the face it wears, and the only place detection
     /// and the session meet.
     let island: IslandController
+
+    /// Whether a newer Echo exists. The one instance; Settings, the app menu
+    /// and the launch prompt all read it and none keeps a copy.
+    let updates: UpdateChecker
+
+    /// Starts an update and reads what a failed one left behind. A value over
+    /// the data root, not state.
+    let updateInstaller: UpdateInstaller
+
+    /// The only place Echo interrupts: the alert at launch, and the answer the
+    /// app menu's Check for Updates owes whoever clicked it.
+    let updatePrompt: UpdatePrompt
 
     /// The main window's navigation state.
     let workspace: WorkspaceModel
@@ -100,6 +113,10 @@ final class AppComposition {
             )
         )
         island = IslandController(detector: detector, session: session)
+
+        updates = UpdateChecker()
+        updateInstaller = UpdateInstaller(dataRoot: dataRoot)
+        updatePrompt = UpdatePrompt(checker: updates, installer: updateInstaller, session: session)
     }
 
     /// Starts every launch side effect. Idempotent; a no-op under a test host.
@@ -166,6 +183,41 @@ final class AppComposition {
         // started from.
         island.start()
         detector.start()
+
+        // A failed Update Now reopened the Echo that was there and left a
+        // report behind; Settings shows it once, and reading it consumes it.
+        if let failure = updateInstaller.takeFailureReport() {
+            updates.noteInstallFailure(failure)
+        }
+
+        // The launch check, and then the daily one. The first check is made
+        // here rather than by the timer's initial tick because its answer is
+        // the prompt's: an offer is worth more at launch than 30 seconds of
+        // quiet, and letting the timer also open with one would mean two
+        // requests inside the same minute against GitHub's 60-an-hour limit.
+        // The timer's own first tick is therefore a day away, and the
+        // preference is still read at every tick after it.
+        Task { [updates, settings, updatePrompt, environment] in
+            if settings.checkForUpdatesAutomatically {
+                await updates.check()
+                // A snapshot run renders one surface and quits, and a modal
+                // alert blocks it before it can — while `ECHO_INSTALLED_VERSION`
+                // is exactly how that surface is given an update to draw.
+                if environment.snapshotPath == nil {
+                    updatePrompt.offerIfAvailable()
+                }
+            }
+            updates.startAutomaticChecks(
+                initialDelay: .seconds(24 * 60 * 60),
+                isEnabled: { settings.checkForUpdatesAutomatically }
+            )
+        }
+    }
+
+    /// The app menu's Check for Updates: a check the user asked for, which
+    /// always answers.
+    func checkForUpdates() {
+        Task { [updatePrompt] in await updatePrompt.checkAndReport() }
     }
 
     /// Shows the settings section in the main window.

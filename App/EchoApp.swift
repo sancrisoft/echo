@@ -53,6 +53,7 @@ struct EchoApp: App {
                 .environment(composition.settings)
                 .environment(composition.workspace)
                 .environment(composition.session)
+                .environment(composition.updates)
                 .preferredColorScheme(colorSchemeOverride)
                 .snapshotIfRequested(composition)
         }
@@ -67,6 +68,12 @@ struct EchoApp: App {
         // `Settings` scene: a second, bare window with its own Cmd-Tab entry
         // was the worse of two hosts for the same screen.
         .commands {
+            // Where every Mac app puts it: under the app menu, beside
+            // Settings. Not the menu bar item — the design draws that menu
+            // with four items and this is not one of them.
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { composition.checkForUpdates() }
+            }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { composition.openSettings() }
                     .keyboardShortcut(",", modifiers: .command)

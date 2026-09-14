@@ -15,7 +15,9 @@
 		E2A0000000000000000000B6 /* ModelDelivery in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A6 /* ModelDelivery */; };
 		E2A0000000000000000000B7 /* CallDetection in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A7 /* CallDetection */; };
 		E2A0000000000000000000B8 /* Island in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A8 /* Island */; };
+		E2A0000000000000000000BA /* Updates in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000AA /* Updates */; };
 		E2A0000000000000000000B9 /* EchoCore in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000A9 /* EchoCore */; };
+		E2A0000000000000000000BB /* Updates in Frameworks */ = {isa = PBXBuildFile; productRef = E2A0000000000000000000AB /* Updates */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -72,6 +74,7 @@
 				E2A0000000000000000000B6 /* ModelDelivery in Frameworks */,
 				E2A0000000000000000000B7 /* CallDetection in Frameworks */,
 				E2A0000000000000000000B8 /* Island in Frameworks */,
+				E2A0000000000000000000BA /* Updates in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -80,6 +83,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E2A0000000000000000000B9 /* EchoCore in Frameworks */,
+				E2A0000000000000000000BB /* Updates in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -132,6 +136,7 @@
 				E2A0000000000000000000A6 /* ModelDelivery */,
 				E2A0000000000000000000A7 /* CallDetection */,
 				E2A0000000000000000000A8 /* Island */,
+				E2A0000000000000000000AA /* Updates */,
 			);
 			productName = Echo;
 			productReference = E2A00000000000000000F001 /* Echo.app */;
@@ -156,6 +161,7 @@
 			name = AppTests;
 			packageProductDependencies = (
 				E2A0000000000000000000A9 /* EchoCore */,
+				E2A0000000000000000000AB /* Updates */,
 			);
 			productName = AppTests;
 			productReference = E2A00000000000000000F002 /* AppTests.xctest */;
@@ -198,6 +204,7 @@
 				E2A000000000000000009006 /* XCLocalSwiftPackageReference "Packages/ModelDelivery" */,
 				E2A000000000000000009007 /* XCLocalSwiftPackageReference "Packages/CallDetection" */,
 				E2A000000000000000009008 /* XCLocalSwiftPackageReference "Packages/Island" */,
+				E2A000000000000000009009 /* XCLocalSwiftPackageReference "Packages/Updates" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E2A000000000000000003002 /* Products */;
@@ -546,6 +553,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/Island;
 		};
+		E2A000000000000000009009 /* XCLocalSwiftPackageReference "Packages/Updates" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/Updates;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -592,9 +603,25 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = Island;
 		};
+		/* Updates is also a DIRECT import of the app target: the composition
+		   root builds the one checker every surface reads, reads the report a
+		   failed update left behind, runs the launch check and raises the
+		   prompt — launch-time work it owns. Workspace reaches Updates through
+		   its own manifest; it is not listed here for it. */
+		E2A0000000000000000000AA /* Updates */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Updates;
+		};
 		E2A0000000000000000000A9 /* EchoCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = EchoCore;
+		};
+		/* AppTests links Updates so the prompt's rules can be stated with real
+		   `UpdateChecker.Status` values; the app itself is reached with
+		   `@testable import Echo`. */
+		E2A0000000000000000000AB /* Updates */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Updates;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
