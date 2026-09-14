@@ -31,11 +31,14 @@ final class MenuBarMenu: NSObject {
         let openSettings: () -> Void
     }
 
-    private let session: RecordingSession
+    private let phase: () -> RecordingPhase
     private let requests: Requests
 
-    init(session: RecordingSession, requests: Requests) {
-        self.session = session
+    /// `phase` is asked at build time and not held: what the menu offers is the
+    /// session's phase at the moment of the click, and the menu needs the phase
+    /// rather than the session it comes from.
+    init(phase: @escaping () -> RecordingPhase, requests: Requests) {
+        self.phase = phase
         self.requests = requests
     }
 
@@ -44,7 +47,7 @@ final class MenuBarMenu: NSObject {
     /// running recording, or a second stop over a teardown already under way.
     func build() -> NSMenu {
         let menu = NSMenu()
-        switch session.phase {
+        switch phase() {
         case .idle:
             menu.addItem(button("Record", #selector(record)))
         case .recording:
@@ -55,7 +58,13 @@ final class MenuBarMenu: NSObject {
             // phase is not this file's to do. The island reports post-stop work.
             break
         }
-        menu.addItem(.separator())
+        // Only once there is something for it to separate. SwiftUI's `Menu`
+        // dropped a leading divider; `NSMenu` draws it, and the post-stop
+        // phases put nothing above this one — a right click during a
+        // transcription pass would open on a stray rule.
+        if menu.numberOfItems > 0 {
+            menu.addItem(.separator())
+        }
         menu.addItem(button("Open Echo", #selector(openEcho)))
         menu.addItem(button("Settings…", #selector(openSettings)))
         menu.addItem(.separator())

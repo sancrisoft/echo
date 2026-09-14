@@ -140,7 +140,7 @@ final class AppComposition {
 
         menuBarItem = MenuBarItem(
             contents: MenuBarMenu(
-                session: session,
+                phase: { session.phase },
                 requests: MenuBarMenu.Requests(
                     startRecording: { Task { await session.start() } },
                     stopRecording: { Task { await session.stop() } },
