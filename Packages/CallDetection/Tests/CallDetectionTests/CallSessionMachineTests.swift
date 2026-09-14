@@ -146,8 +146,56 @@ struct CallSessionMachineTests {
         #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true))])
         #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
 
-        // The pointer leaving is what starts the interval, from the top.
+        // And the pointer leaving puts it straight back: what the pointer
+        // raised is not an announcement, it is something being read, so it
+        // lasts exactly as long as the reading does.
+        #expect(machine.handle(.hoverChanged(false)) == [.setFace(.compactPill)])
+        #expect(machine.face == .compactPill)
+        #expect(!machine.faceRaisedByPointer)
+    }
+
+    @Test func anOfferTheMachineRaisedStillKeepsItsIntervalAfterAHover() {
+        // The other half of the same rule, and the reason it needs a flag:
+        // these two faces are identical on screen and end differently. This
+        // one announced itself, so the interval counts from the moment the
+        // pointer stops reading it.
+        var machine = promptingMachine()
+        #expect(!machine.faceRaisedByPointer)
+
+        #expect(machine.handle(.hoverChanged(true)) == [.cancelRetractTimer])
         #expect(machine.handle(.hoverChanged(false)) == [.startRetractTimer])
+        #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
+    }
+
+    @Test func brushingPastTheIslandPinsNothingOpen() {
+        // The report: hovering what looked like an idle island left an offer
+        // up for ten seconds nobody asked for. It was not idle — a catalogued
+        // app had been holding the mic all day — so the pointer was
+        // un-retracting a pill each time it went past.
+        var machine = promptingMachine()
+        machine.handle(.retractFired)
+
+        for _ in 0..<3 {
+            #expect(machine.handle(.hoverChanged(true)).count == 1)
+            #expect(machine.handle(.hoverChanged(false)) == [.setFace(.compactPill)])
+            #expect(machine.face == .compactPill, "an offer stayed up after the pointer left")
+        }
+    }
+
+    @Test func aFaceTheMachineChangesUnderThePointerIsNoLongerThePointersToClose() {
+        // The flag is cleared by every face the machine shows, so a pointer
+        // that raised one and is still there when something else replaces it
+        // does not take the replacement away with it.
+        var machine = promptingMachine()
+        machine.handle(.retractFired)
+        machine.handle(.hoverChanged(true))
+        #expect(machine.faceRaisedByPointer)
+
+        // The call ends under the pointer.
+        machine.handle(.matchedAppsChanged([]))
+        #expect(machine.face == nil)
+        #expect(!machine.faceRaisedByPointer)
+        #expect(machine.handle(.hoverChanged(false)).isEmpty)
     }
 
     @Test func dismissSilencesTheIslandForTheRestOfTheCall() {
@@ -716,6 +764,96 @@ struct CallSessionMachineTests {
                 .setFace(.endGrace(appName: "Zoom")), .startGraceTimer,
             ])
         #expect(machine.handle(.graceFired).contains(.requestStopRecording))
+    }
+
+    // MARK: - A second call, joined under the first
+
+    @Test func anAppJoiningACallInProgressIsOfferedARecording() {
+        // Reported 2026-09-14: somebody leaves a catalogued app holding the
+        // mic all day, joins a meeting under it, and is never offered a
+        // recording. It read as a screen problem — the offer showed up once an
+        // external display was plugged in — but nothing here looks at a
+        // screen. What changed was whether the machine happened to be idle.
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.debounceFired)
+        machine.handle(.retractFired)  // the first offer was ignored, not refused
+        #expect(machine.phase == .inCall)
+
+        let actions = machine.handle(.matchedAppsChanged([chrome, zoom]))
+
+        #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer])
+        // Attributed to the app just joined: that is the meeting somebody
+        // wants recorded, not the one that has been open since breakfast.
+        #expect(machine.currentApp == zoom)
+        #expect(machine.phase == .inCall)
+    }
+
+    @Test func anAppAlreadyInTheCallIsNotOfferedAgain() {
+        // Helper processes come and go inside one call. Re-announcing it every
+        // time one does would be the nagging the retract exists to avoid.
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.debounceFired)
+        machine.handle(.retractFired)
+
+        #expect(machine.handle(.matchedAppsChanged([chrome, zoom])).count == 2)
+        machine.handle(.retractFired)
+        #expect(machine.handle(.matchedAppsChanged([chrome, zoom])).isEmpty)
+        #expect(machine.handle(.matchedAppsChanged([zoom])).isEmpty)
+        #expect(machine.handle(.matchedAppsChanged([zoom, chrome])).isEmpty)
+    }
+
+    @Test func anAppJoiningWhileRecordingIsNotOffered() {
+        // Rule 5 holds wherever a prompt could come from: the island never
+        // nags about something the user already did.
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.debounceFired)
+        machine.handle(.recordingChanged(true))
+
+        #expect(machine.handle(.matchedAppsChanged([chrome, zoom])).isEmpty)
+        #expect(machine.face == nil)
+    }
+
+    @Test func anAppJoiningAfterADismissalIsNotOffered() {
+        // The narrower answer: "no" covers the call, newcomers included. The
+        // wider one — that a dismissal only covers the app it was aimed at —
+        // is a product question, and this is the reading that cannot nag.
+        var machine = promptingMachine()
+        machine.handle(.dismissTapped)
+
+        #expect(machine.handle(.matchedAppsChanged([zoom, chrome])).isEmpty)
+        #expect(machine.face == nil)
+    }
+
+    @Test func theAppsOfACallAreForgottenWhenItEnds() {
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.debounceFired)
+        machine.handle(.matchedAppsChanged([chrome, zoom]))
+        #expect(machine.appsThisCall == [chrome, zoom])
+
+        machine.handle(.matchedAppsChanged([]))  // everything let the mic go
+        #expect(machine.appsThisCall.isEmpty)
+
+        // So the same app is offered again next time, rather than being
+        // remembered as already asked about.
+        machine.handle(.matchedAppsChanged([zoom]))
+        #expect(
+            machine.handle(.debounceFired) == [
+                .setFace(.startPrompt(appName: "Zoom", scoped: true)), .startRetractTimer,
+            ])
+    }
+
+    @Test func aCallConfirmedWithSeveralAppsOffersOnlyOnce() {
+        // Everything capturing by the time the debounce elapses is part of the
+        // call it confirms — one offer, not one per app.
+        var machine = CallSessionMachine()
+        machine.handle(.matchedAppsChanged([chrome]))
+        machine.handle(.matchedAppsChanged([chrome, zoom]))
+        #expect(machine.handle(.debounceFired).count == 2)
+        #expect(machine.handle(.matchedAppsChanged([chrome, zoom])).isEmpty)
     }
 
     // MARK: - Global safety sweeps

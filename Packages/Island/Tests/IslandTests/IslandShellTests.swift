@@ -126,51 +126,64 @@ struct IslandShellTests {
     func theNotchedScreenKeepsTheIsland(face: IslandShellFace) {
         // It hides in the hole, so it costs nothing to leave there — and the
         // idle face being reachable IS how a recording starts from the island.
-        for hovered in [true, false] {
-            #expect(face.isOnScreen(hasCutout: true, hovered: hovered), "\(face)")
+        for isOpen in [true, false] {
+            #expect(face.isOnScreen(hasCutout: true, isOpen: isOpen), "\(face)")
         }
     }
 
     @Test("a session's whole life, on a screen with no cutout")
     func theBareScreenFollowsTheNews() {
         // The reported behaviour, as a sequence: nothing on screen until
-        // something happens, then something on screen for as long as it is
-        // happening, then nothing again.
+        // something is being SAID, then nothing again. A face that announces
+        // something is not enough — an ignored offer shrinks to its pill and
+        // sits there for as long as the call lasts, and with one catalogued
+        // app holding the mic that is all day.
         let steps: [(detection: IslandFace?, phase: RecordingPhase, onScreen: Bool)] = [
             (nil, .idle, false),
             (.startPrompt(appName: "Zoom", scoped: true), .idle, true),
-            (.compactPill, .idle, true),
-            (nil, .recording(startedAt: Date(), scope: .everything), true),
-            (nil, .stopping, true),
-            (nil, .finalizing(meetingID: Self.meeting, progress: 0.4), true),
-            (nil, .summarizing(meetingID: Self.meeting), true),
+            // The offer was ignored: it goes back to being a pill, and a pill
+            // is ears either side of a cutout this screen does not have.
+            (.compactPill, .idle, false),
+            (nil, .recording(startedAt: Date(), scope: .everything), false),
+            (nil, .stopping, false),
+            (nil, .finalizing(meetingID: Self.meeting, progress: 0.4), false),
+            (nil, .summarizing(meetingID: Self.meeting), false),
             (.saved, .idle, true),
             (nil, .idle, false),
         ]
         for step in steps {
             let face = IslandShellFace.resolve(detection: step.detection, phase: step.phase)
+            let isOpen = face.isOpen(detection: step.detection, hovered: false)
             #expect(
-                face.isOnScreen(hasCutout: false, hovered: false) == step.onScreen,
+                face.isOnScreen(hasCutout: false, isOpen: isOpen) == step.onScreen,
                 "\(face) from \(String(describing: step.detection))/\(step.phase)")
         }
     }
 
-    @Test("a screen without one shows the island only while it has something to say")
-    func theBareScreenShowsOnlyNews() {
-        // The reported case: a black bar over the top of the desktop for the
-        // whole life of the app, saying nothing.
-        #expect(!IslandShellFace.idle.isOnScreen(hasCutout: false, hovered: false))
-        for face in IslandShellFace.allCases where face.announces {
-            #expect(face.isOnScreen(hasCutout: false, hovered: false), "\(face) had news and hid")
+    @Test("a bare screen carries the toasts and nothing else")
+    func theBareScreenCarriesOnlyToasts() {
+        // Exactly the three faces that raise themselves: an offer to record, a
+        // countdown to a stop, a meeting saved. The other three report
+        // something already known and would be a bar with nothing on it.
+        for face in IslandShellFace.allCases {
+            let raisesItself = face.expandsOnItsOwn(detection: nil)
+            #expect(
+                face.isOnScreen(hasCutout: false, isOpen: raisesItself) == raisesItself,
+                "\(face)")
         }
     }
 
     @Test("and it is never taken out from under a pointer that is on it")
     func hoverHoldsTheIslandOnScreen() {
-        // The same rule that defers a move between screens. It also keeps the
-        // grace honest: ordering the window out from under the pointer leaves
-        // nothing to send the crossing that would correct it.
-        #expect(IslandShellFace.idle.isOnScreen(hasCutout: false, hovered: true))
+        // The pointer needs no clause of its own: a hovered shell is an open
+        // one. It is the same rule that defers a move between screens, and it
+        // keeps the grace honest — ordering the window out from under the
+        // pointer leaves nothing to send the crossing that would correct it.
+        for face in IslandShellFace.allCases {
+            let hovered = face.isOpen(detection: nil, hovered: true)
+            #expect(hovered, "\(face) does not open under the pointer")
+            #expect(face.isOnScreen(hasCutout: false, isOpen: hovered), "\(face)")
+        }
     }
 
     @Test("idle is the only face with nothing to announce")

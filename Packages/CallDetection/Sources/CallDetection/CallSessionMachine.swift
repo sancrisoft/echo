@@ -162,11 +162,37 @@ public struct CallSessionMachine {
     /// it when re-enabled.
     public private(set) var isRecording = false
 
+    /// Whether what is on screen was raised by the POINTER rather than by the
+    /// machine.
+    ///
+    /// The two look identical — both are a start prompt — and they end
+    /// differently. A prompt the machine raised is an announcement, and it
+    /// stays its interval after the pointer leaves, because the interval
+    /// counts how long it went unread. A prompt the pointer raised out of a
+    /// pill it had already retracted into is not an announcement: it is being
+    /// read right now, and when the reading stops it goes back to being a
+    /// pill. Leaving it up would mean brushing past the island pins an offer
+    /// open for ten seconds nobody asked for.
+    ///
+    /// Only one assignment sets this, and every other face goes through
+    /// `show`, so the distinction cannot rot into "whichever was written last".
+    public private(set) var faceRaisedByPointer = false
+
     /// Mirrors whether the pointer is on the island. Observed external truth
     /// like `isRecording`, and tracked on the same terms: a call that ends and
     /// a setting that is toggled do not move a pointer, so nothing here
     /// resets it except the island saying so.
     public private(set) var isHovered = false
+
+    /// Every catalogued app that has captured the mic during this call.
+    ///
+    /// Kept so that an app JOINING one can be told from the apps already in
+    /// it. Without that, a machine already in a call ignores every later
+    /// report but for re-attribution — so somebody who leaves a catalogued app
+    /// holding the mic all day is never offered a recording for anything else
+    /// they join, on any screen. Reported 2026-09-14, with Discord holding the
+    /// mic and a Meet joined under it.
+    public private(set) var appsThisCall: Set<ProcessSelector> = []
 
     /// Set by ✕ and by a manual stop mid-call: this call gets no further start
     /// prompt. Scoped to the call — it resets when capture stops, so the next
@@ -203,6 +229,15 @@ public struct CallSessionMachine {
     /// `startScope`: copy and capture agree by construction.
     private var promptFace: IslandFace {
         .startPrompt(appName: appName, scoped: startScope.scopedApp != nil)
+    }
+
+    /// Shows a face the MACHINE decided on.
+    ///
+    /// Every face but one comes through here. The exception is the pointer
+    /// un-retracting a pill, which is the whole reason the flag exists.
+    private mutating func show(_ face: IslandFace?) {
+        self.face = face
+        faceRaisedByPointer = false
     }
 
     /// Whether what is on screen retracts on its own. Exactly the two faces
@@ -276,6 +311,7 @@ public struct CallSessionMachine {
             guard let first = apps.first else { return [] }
             phase = .candidate
             currentApp = first
+            appsThisCall = Set(apps)
             dismissedThisCall = false
             return [.startDebounceTimer]
 
@@ -289,15 +325,15 @@ public struct CallSessionMachine {
             }
             // The reported set changed shape while the debounce runs (a helper
             // process joined, a second app opened the mic): same pending call,
-            // re-attributed, timer untouched.
+            // re-attributed, timer untouched. Nothing has been offered yet, so
+            // everything capturing by the time it is counts as part of it.
             currentApp = first
+            appsThisCall.formUnion(apps)
             return []
 
         case .inCall:
             guard apps.isEmpty else {
-                // Capture continues; only attribution can change.
-                currentApp = apps[0]
-                return []
+                return handleAppsJoiningACall(apps)
             }
             guard isRecording else {
                 // The call ended with nothing recording: retract whatever the
@@ -317,7 +353,7 @@ public struct CallSessionMachine {
             // A recording overlapped this call and the call is over: count
             // down to the stop the user forgot.
             phase = .endGrace
-            face = .endGrace(appName: appName)
+            show(.endGrace(appName: appName))
             return [.setFace(face), .startGraceTimer]
 
         case .endGrace:
@@ -327,9 +363,38 @@ public struct CallSessionMachine {
             // debounce — recording continuity wins over re-confirmation.
             phase = .inCall
             currentApp = first
-            face = nil
+            show(nil)
             return [.cancelGraceTimer, .setFace(nil)]
         }
+    }
+
+    /// Catalogued capture continues, and the reported set may have grown.
+    ///
+    /// A process that is part of the call already changes nothing: helpers
+    /// come and go inside one call and re-announcing it would nag. An app that
+    /// was NOT part of it is a second call joined under the first — the case
+    /// that used to fall through this branch in silence — and it gets the
+    /// offer it would have got on its own, attributed to itself, because the
+    /// meeting somebody wants recorded is the one they just joined.
+    ///
+    /// Each app offers at most once per call: the set only grows until the
+    /// call ends. A running recording still suppresses it, and so does a ✕ —
+    /// whether a dismissal should cover an app that had not joined yet is a
+    /// product question, and the narrower answer is the one that cannot nag.
+    private mutating func handleAppsJoiningACall(_ apps: [ProcessSelector]) -> [Action] {
+        let joined = apps.first { !appsThisCall.contains($0) }
+        appsThisCall.formUnion(apps)
+
+        // Attribution follows the app that is still capturing, so a helper
+        // dropping out does not rename a live call.
+        if let current = currentApp, !apps.contains(current) {
+            currentApp = apps[0]
+        }
+
+        guard let joined, !isRecording, !dismissedThisCall else { return [] }
+        currentApp = joined
+        show(promptFace)
+        return [.setFace(face)] + armRetract
     }
 
     private mutating func handleDebounceFired() -> [Action] {
@@ -342,7 +407,7 @@ public struct CallSessionMachine {
         // Already recording (any surface): the offer is moot, so the call runs
         // quietly and only its end raises the island.
         guard !isRecording, !dismissedThisCall else { return [] }
-        face = promptFace
+        show(promptFace)
         return [.setFace(face)] + armRetract
     }
 
@@ -352,10 +417,10 @@ public struct CallSessionMachine {
         switch face {
         case .startPrompt:
             // Politeness: an ignored offer shrinks instead of nagging.
-            face = .compactPill
+            show(.compactPill)
             return [.setFace(face)]
         case .saved:
-            face = nil
+            show(nil)
             return [.setFace(nil)]
         case .compactPill, .endGrace, .none:
             // Nothing retractable is showing — a straggler from a cancelled
@@ -367,7 +432,7 @@ public struct CallSessionMachine {
     private mutating func handleGraceFired() -> [Action] {
         guard phase == .endGrace else { return [] }
         endCall()
-        face = .saved
+        show(.saved)
         // `isRecording` stays true until the controller reports the stop; the
         // machine is back in idle, where recording changes are tracked only.
         return [.requestStopRecording, .setFace(face)] + armRetract
@@ -384,7 +449,7 @@ public struct CallSessionMachine {
             // answered, so it goes away without a word.
             switch face {
             case .startPrompt, .compactPill:
-                face = nil
+                show(nil)
                 return [.cancelRetractTimer, .setFace(nil)]
             case .endGrace, .saved, .none:
                 return []
@@ -431,9 +496,19 @@ public struct CallSessionMachine {
     private mutating func handleHoverChanged(_ hovering: Bool) -> [Action] {
         guard hovering != isHovered else { return [] }
         isHovered = hovering
-        guard hovering else { return armRetract }
+        guard hovering else {
+            // What the pointer raised, the pointer takes away: an offer it
+            // pulled back out of its pill goes straight back into it, rather
+            // than starting an interval it was never given.
+            if faceRaisedByPointer, case .startPrompt = face {
+                show(.compactPill)
+                return [.setFace(face)]
+            }
+            return armRetract
+        }
         if phase == .inCall, face == .compactPill, !dismissedThisCall {
             face = promptFace
+            faceRaisedByPointer = true
             // No retract: the pointer that un-retracted it is still on it.
             return [.setFace(face)]
         }
@@ -445,7 +520,7 @@ public struct CallSessionMachine {
     private mutating func handleStartTapped() -> [Action] {
         // The single source of `requestStartRecording` in the whole feature.
         guard phase == .inCall, case .startPrompt = face else { return [] }
-        face = nil
+        show(nil)
         return [.cancelRetractTimer, .setFace(nil), .requestStartRecording(startScope)]
     }
 
@@ -453,7 +528,7 @@ public struct CallSessionMachine {
         switch face {
         case .startPrompt, .compactPill:
             dismissedThisCall = true
-            face = nil
+            show(nil)
             return [.cancelRetractTimer, .setFace(nil)]
         case .endGrace, .saved, .none:
             // The end-of-call countdown has its own two answers ("Stop now",
@@ -465,7 +540,7 @@ public struct CallSessionMachine {
     private mutating func handleStopNowTapped() -> [Action] {
         guard phase == .endGrace else { return [] }
         endCall()
-        face = .saved
+        show(.saved)
         return [.cancelGraceTimer, .requestStopRecording, .setFace(face)] + armRetract
     }
 
@@ -478,7 +553,7 @@ public struct CallSessionMachine {
 
     private mutating func handleOpenEchoTapped() -> [Action] {
         guard face == .saved else { return [] }
-        face = nil
+        show(nil)
         return [.cancelRetractTimer, .setFace(nil), .openWindowToSavedMeeting]
     }
 
@@ -506,8 +581,9 @@ public struct CallSessionMachine {
     private mutating func endCall() {
         phase = .idle
         currentApp = nil
+        appsThisCall = []
         dismissedThisCall = false
-        face = nil
+        show(nil)
     }
 
     /// Forgets everything about the current call. Used by the setting on both
@@ -515,8 +591,9 @@ public struct CallSessionMachine {
     private mutating func resetCallState() {
         phase = .idle
         currentApp = nil
+        appsThisCall = []
         dismissedThisCall = false
         keptRecordingLatch = false
-        face = nil
+        show(nil)
     }
 }

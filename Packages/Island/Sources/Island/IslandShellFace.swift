@@ -127,23 +127,30 @@ extension IslandShellFace {
     /// permanent presence is how a recording gets started from the island at
     /// all: you hover the notch.
     ///
-    /// A screen without one has no hole to hide in, and the same permanence is
-    /// a black bar over the top of the desktop for the whole life of the app,
-    /// saying nothing, on a surface somebody is trying to work on. So there the
-    /// island is up only while it has something to announce, and goes away
-    /// again when that is over.
+    /// A screen without one has no hole to hide in, so the island is up there
+    /// only while the shell is OPEN — while it is a toast, saying something.
+    /// Everything else is a black bar over the top of somebody's desktop.
     ///
-    /// `hovered` is the exception that applies to both: the island is never
-    /// taken out from under a pointer that is on it. That is the same rule
-    /// that defers a move between screens, and it keeps the hover grace honest
-    /// — a window ordered out from under the pointer would leave the grace
-    /// believing the island was still hovered, with no crossing coming to
-    /// correct it.
+    /// Open is the test rather than "has something to announce", and the
+    /// difference is the whole of the second report. A face that announces
+    /// something spends most of its life collapsed: an ignored offer shrinks
+    /// to its pill and stays there for as long as the call lasts, and a call
+    /// can last all day — one catalogued app that never lets the mic go is
+    /// enough. Collapsed, that pill is the ears either side of a cutout, and a
+    /// screen with no cutout has no ears: it is the bar again, by a longer
+    /// route.
     ///
-    /// The product owner's decision (2026-09-12), against a design whose
-    /// fallback pill is as permanent as the notched shell.
-    public func isOnScreen(hasCutout: Bool, hovered: Bool) -> Bool {
-        hasCutout || announces || hovered
+    /// The pointer needs no clause of its own. A hovered shell is an open one,
+    /// so the island is never taken out from under a pointer that is on it —
+    /// which is the same rule that defers a move between screens, and what
+    /// keeps the hover grace honest: a window ordered out from under the
+    /// pointer would leave the grace believing the island was still hovered,
+    /// with no crossing coming to correct it.
+    ///
+    /// The product owner's decision (2026-09-12, narrowed 2026-09-14), against
+    /// a design whose fallback pill is as permanent as the notched shell.
+    public func isOnScreen(hasCutout: Bool, isOpen: Bool) -> Bool {
+        hasCutout || isOpen
     }
 
     /// Whether the shell is open.
