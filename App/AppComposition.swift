@@ -69,6 +69,10 @@ final class AppComposition {
     /// own (the app menu, the menu bar item).
     let windowOpener: WindowOpener
 
+    /// The menu bar item: Echo's permanent presence, the click that opens the
+    /// dashboard and the menu behind the other button.
+    let menuBarItem: MenuBarItem
+
     /// Whether the main window is on screen as soon as the scene is built.
     /// True for `ECHO_OPEN_WINDOW`, and for the one launch that finds this Mac
     /// has never run Echo before. Read by the scene, which SwiftUI builds only
@@ -76,6 +80,7 @@ final class AppComposition {
     private(set) var opensWindowAtLaunch: Bool
 
     private let errorLog: ErrorTraceLog
+    private let showSettings: () -> Void
     private var started = false
 
     init(environment: LaunchEnvironment = .current) {
@@ -101,6 +106,14 @@ final class AppComposition {
         let session = session
         let workspace = workspace
         let windowOpener = windowOpener
+
+        // One definition of what opening Settings means, for the two surfaces
+        // that ask for it: the app menu's ⌘, and the menu bar item's Settings….
+        let showSettings = {
+            workspace.section = .settings
+            windowOpener.openMainWindow()
+        }
+        self.showSettings = showSettings
         detector = CallDetector(
             settings: settings,
             requests: CallDetectionRequests(
@@ -124,6 +137,19 @@ final class AppComposition {
         updates = UpdateChecker()
         updateInstaller = UpdateInstaller(dataRoot: dataRoot)
         updatePrompt = UpdatePrompt(checker: updates, installer: updateInstaller, session: session)
+
+        menuBarItem = MenuBarItem(
+            contents: MenuBarMenu(
+                session: session,
+                requests: MenuBarMenu.Requests(
+                    startRecording: { Task { await session.start() } },
+                    stopRecording: { Task { await session.stop() } },
+                    openEcho: { windowOpener.openMainWindow() },
+                    openSettings: showSettings
+                )
+            ),
+            windowOpener: windowOpener
+        )
     }
 
     /// Starts every launch side effect. Idempotent; a no-op under a test host.
@@ -200,6 +226,11 @@ final class AppComposition {
         island.start()
         detector.start()
 
+        // The menu bar item is AppKit's, and AppKit is not up yet: SwiftUI runs
+        // this before it creates `NSApplication`. The delegate installs it the
+        // moment there is an app to install it into.
+        EchoAppDelegate.whenLaunched { [menuBarItem] in menuBarItem.install() }
+
         // A failed Update Now reopened the Echo that was there and left a
         // report behind; Settings shows it once, and reading it consumes it.
         if let failure = updateInstaller.takeFailureReport() {
@@ -238,7 +269,6 @@ final class AppComposition {
 
     /// Shows the settings section in the main window.
     func openSettings() {
-        workspace.section = .settings
-        windowOpener.openMainWindow()
+        showSettings()
     }
 }

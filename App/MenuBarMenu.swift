@@ -11,38 +11,73 @@
 //  no control here, such a screen has no way to start a session, which is a
 //  hole rather than a simplification.
 //
+//  An `NSMenu` and not SwiftUI's, because the item it hangs from is an
+//  `NSStatusItem` now: `MenuBarExtra` opens its menu on either mouse button and
+//  cannot tell them apart, and the left one belongs to the dashboard.
+//
 
+import AppKit
 import EchoCore
 import Recording
-import SwiftUI
 
-struct MenuBarMenu: View {
-    let composition: AppComposition
+final class MenuBarMenu: NSObject {
 
-    /// The session's own phase decides which of the two is offered, so the
-    /// menu can never ask for a start over a running recording or a second
-    /// stop over a teardown that has already begun. Same gated calls every
-    /// other surface makes.
-    var body: some View {
-        switch composition.session.phase {
-        case .idle:
-            Button("Record") { Task { await composition.session.start() } }
-        case .recording:
-            Button("Stop Recording") { Task { await composition.session.stop() } }
-        case .stopping, .finalizing, .summarizing:
-            // Work the user cannot answer, and no copy for it: the design
-            // draws this menu with four items and inventing a fifth to
-            // narrate a phase is not this file's to do. The island is where
-            // post-stop work is reported.
-            EmptyView()
-        }
-        Divider()
-        Button("Open Echo") { composition.windowOpener.openMainWindow() }
-        Button("Settings…") { composition.openSettings() }
-        Divider()
-        Text(AppIdentity.version.display)
-        Divider()
-        Button("Quit Echo") { NSApplication.shared.terminate(nil) }
-            .keyboardShortcut("q", modifiers: .command)
+    /// Everything the menu can ask of the rest of the app. The same gated calls
+    /// every other surface makes; nothing wider is representable from here.
+    struct Requests {
+        let startRecording: () -> Void
+        let stopRecording: () -> Void
+        let openEcho: () -> Void
+        let openSettings: () -> Void
     }
+
+    private let session: RecordingSession
+    private let requests: Requests
+
+    init(session: RecordingSession, requests: Requests) {
+        self.session = session
+        self.requests = requests
+    }
+
+    /// Built fresh for each click, so what it offers is the session's phase at
+    /// the moment of that click: the menu can never ask for a start over a
+    /// running recording, or a second stop over a teardown already under way.
+    func build() -> NSMenu {
+        let menu = NSMenu()
+        switch session.phase {
+        case .idle:
+            menu.addItem(button("Record", #selector(record)))
+        case .recording:
+            menu.addItem(button("Stop Recording", #selector(stop)))
+        case .stopping, .finalizing, .summarizing:
+            // Work the user cannot answer, and no copy for it: the design draws
+            // this menu with four items and inventing a fifth to narrate a
+            // phase is not this file's to do. The island reports post-stop work.
+            break
+        }
+        menu.addItem(.separator())
+        menu.addItem(button("Open Echo", #selector(openEcho)))
+        menu.addItem(button("Settings…", #selector(openSettings)))
+        menu.addItem(.separator())
+        // No action, so `autoenablesItems` draws it as the label it is.
+        menu.addItem(NSMenuItem(title: AppIdentity.version.display, action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
+        let quit = button("Quit Echo", #selector(quit))
+        quit.keyEquivalent = "q"
+        quit.keyEquivalentModifierMask = .command
+        menu.addItem(quit)
+        return menu
+    }
+
+    private func button(_ title: String, _ action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    @objc private func record() { requests.startRecording() }
+    @objc private func stop() { requests.stopRecording() }
+    @objc private func openEcho() { requests.openEcho() }
+    @objc private func openSettings() { requests.openSettings() }
+    @objc private func quit() { NSApp.terminate(nil) }
 }

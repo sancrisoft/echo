@@ -24,6 +24,13 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
     /// Echo delegate per process, so one place to leave this is enough.
     private static var openMainWindow: (() -> Void)?
 
+    /// Launch work that cannot run until AppKit exists. SwiftUI builds the
+    /// `App` — and with it runs `AppComposition.start()` — before it creates
+    /// `NSApplication`, so `NSApp` is nil there and a status item cannot be
+    /// made yet. The composition root leaves the work here and the delegate
+    /// runs it the moment the app is up.
+    private static var launchWork: (() -> Void)?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let center = NotificationCenter.default
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification] {
@@ -35,6 +42,7 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         Self.sync()
+        Self.launchWork?()
     }
 
     /// The menu bar item is the app, not the window: closing the window must
@@ -72,6 +80,11 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
     /// which is the first moment a reopen could arrive anyway.
     static func handleReopen(by openMainWindow: @escaping () -> Void) {
         self.openMainWindow = openMainWindow
+    }
+
+    /// Runs `work` once the app has finished launching — see `launchWork`.
+    static func whenLaunched(run work: @escaping () -> Void) {
+        launchWork = work
     }
 
     /// The main window, while the app still has one. Minimized counts, and has
