@@ -28,6 +28,7 @@ public final class AppSettings {
         var autoGenerateSummaries = true
         var disabledCallApps: [String] = []
         var checkForUpdatesAutomatically = true
+        var hasLaunchedBefore = false
 
         init() {}
 
@@ -58,6 +59,9 @@ public final class AppSettings {
             checkForUpdatesAutomatically =
                 try container.decodeIfPresent(Bool.self, forKey: .checkForUpdatesAutomatically)
                 ?? defaults.checkForUpdatesAutomatically
+            hasLaunchedBefore =
+                try container.decodeIfPresent(Bool.self, forKey: .hasLaunchedBefore)
+                ?? defaults.hasLaunchedBefore
         }
     }
 
@@ -91,6 +95,14 @@ public final class AppSettings {
     /// request leaves the app until the user clicks Check for Updates.
     public private(set) var checkForUpdatesAutomatically: Bool
 
+    /// Whether Echo has ever launched on this Mac. False exactly once, and the
+    /// one launch that puts the window on screen by itself: a fresh install is
+    /// otherwise a menu bar icon, an island hiding in the cutout, and nothing
+    /// else to find. A settings file written before this key existed reads as
+    /// false too, so an install that predates it gets that one window as well —
+    /// the same promise, one launch late.
+    public private(set) var hasLaunchedBefore: Bool
+
     @ObservationIgnored private let fileURL: URL
 
     /// Loads the preferences from `fileURL`, falling back to defaults when the
@@ -104,6 +116,7 @@ public final class AppSettings {
         self.autoGenerateSummaries = stored.autoGenerateSummaries
         self.disabledCallApps = stored.disabledCallApps
         self.checkForUpdatesAutomatically = stored.checkForUpdatesAutomatically
+        self.hasLaunchedBefore = stored.hasLaunchedBefore
     }
 
     /// The app's preferences, at the data root's `settings.json`.
@@ -161,6 +174,14 @@ public final class AppSettings {
         persist()
     }
 
+    /// Records that Echo has launched, and persists the change. One-way, like
+    /// the privacy banner: nothing ever unsets it.
+    public func noteLaunched() {
+        guard !hasLaunchedBefore else { return }
+        hasLaunchedBefore = true
+        persist()
+    }
+
     private static func load(from url: URL) -> Stored {
         guard let data = try? Data(contentsOf: url) else { return Stored() }
         do {
@@ -179,6 +200,7 @@ public final class AppSettings {
         stored.autoGenerateSummaries = autoGenerateSummaries
         stored.disabledCallApps = disabledCallApps
         stored.checkForUpdatesAutomatically = checkForUpdatesAutomatically
+        stored.hasLaunchedBefore = hasLaunchedBefore
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),

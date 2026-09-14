@@ -34,19 +34,14 @@ struct EchoApp: App {
 
     var body: some Scene {
         // Echo lives in the menu bar as an LSUIElement agent: closing the window
-        // never quits it. The label is the one view an agent app always has
-        // instantiated, so it hosts the bridge that captures `openWindow` for
-        // the app menu and the AppKit side.
-        MenuBarExtra {
-            MenuBarMenu(composition: composition)
-        } label: {
-            Image(systemName: "waveform")
-                .background(WindowOpenerBridge(opener: composition.windowOpener))
-        }
-        .menuBarExtraStyle(.menu)
-
-        // The main window opens on demand — from the menu bar, ⌘, or a debug
-        // flag — never at launch on its own.
+        // never quits it. The menu bar item itself is not a scene — it is an
+        // `NSStatusItem` built in `MenuBarItem`, because `MenuBarExtra` cannot
+        // tell a left click from a right one and the two mean different things.
+        //
+        // The main window opens on demand — from the menu bar, ⌘, a reopen,
+        // or a debug flag — and at launch only on the first launch this Mac
+        // ever gives Echo, which is the one that would otherwise leave a new
+        // user with nothing on screen to find.
         Window("Echo", id: EchoWindow.main) {
             WorkspaceWindow(dataRoot: composition.dataRoot)
                 .environment(composition.library)
@@ -57,7 +52,7 @@ struct EchoApp: App {
                 .preferredColorScheme(colorSchemeOverride)
                 .snapshotIfRequested(composition)
         }
-        .defaultLaunchBehavior(composition.environment.opensWindowAtLaunch ? .presented : .suppressed)
+        .defaultLaunchBehavior(composition.opensWindowAtLaunch ? .presented : .suppressed)
         // No state restoration: the window opens on demand, and restoring it
         // after a force-quit can resurrect a blank window that never
         // reconnects to the scene content.

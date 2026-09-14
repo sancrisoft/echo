@@ -200,6 +200,7 @@ struct AppSettingsPreferencesTests {
             settings.setAutoGenerateSummaries(enabled: false)
             settings.setCallApp("Slack", enabled: false)
             settings.setCheckForUpdates(automatically: false)
+            settings.noteLaunched()
 
             let reloaded = AppSettings(fileURL: url)
             #expect(reloaded.privacyBannerDismissed)
@@ -208,6 +209,7 @@ struct AppSettingsPreferencesTests {
             #expect(!reloaded.autoGenerateSummaries)
             #expect(reloaded.disabledCallApps == ["Slack"])
             #expect(!reloaded.checkForUpdatesAutomatically)
+            #expect(reloaded.hasLaunchedBefore)
         }
     }
 
@@ -228,6 +230,62 @@ struct AppSettingsPreferencesTests {
             settings.setKeepRecordings(enabled: true)
             settings.setCallApp("Zoom", enabled: true)
             #expect((try? Data(contentsOf: url)) == before)
+        }
+    }
+}
+
+@Suite("AppSettings — the first launch")
+@MainActor
+struct AppSettingsFirstLaunchTests {
+
+    @Test func aMacThatHasNeverRunEchoSaysSo() throws {
+        try withTempSettingsFile { url in
+            #expect(!AppSettings(fileURL: url).hasLaunchedBefore)
+        }
+    }
+
+    /// The whole point of the flag: the window opens on the launch that finds
+    /// it false, and the next launch reads true and stays quiet.
+    @Test func theSecondLaunchIsNoLongerTheFirst() throws {
+        try withTempSettingsFile { url in
+            let first = AppSettings(fileURL: url)
+            #expect(!first.hasLaunchedBefore)
+            first.noteLaunched()
+
+            // A relaunch is a second `AppSettings` over the same file.
+            #expect(AppSettings(fileURL: url).hasLaunchedBefore)
+        }
+    }
+
+    /// An install that predates the flag has a settings file without the key.
+    /// It reads as never launched, so it gets the one window too — one launch
+    /// later than a fresh install, which is the intended concession.
+    @Test func aSettingsFileWrittenBeforeTheFlagReadsAsNeverLaunched() throws {
+        try withTempSettingsFile { url in
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data(#"{"callDetectionEnabled":false,"privacyBannerDismissed":true}"#.utf8).write(to: url)
+
+            let settings = AppSettings(fileURL: url)
+            #expect(!settings.hasLaunchedBefore)
+            // …and reading it did not cost the user the settings they chose.
+            #expect(settings.privacyBannerDismissed)
+            #expect(!settings.callDetectionEnabled)
+        }
+    }
+
+    /// One-way, like the privacy banner: the second call is a no-op and does
+    /// not rewrite the file.
+    @Test func notingItTwiceLeavesTheFileAlone() throws {
+        try withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            settings.noteLaunched()
+            let written = try? Data(contentsOf: url)
+
+            settings.noteLaunched()
+            #expect(settings.hasLaunchedBefore)
+            #expect((try? Data(contentsOf: url)) == written)
         }
     }
 }
