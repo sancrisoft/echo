@@ -14,13 +14,15 @@ fail() { echo "boundary: $1"; failures=$((failures + 1)); }
 ENGINE_PACKAGES=(EchoCore Audio Transcription Summarization ModelDelivery Meetings Recording CallDetection Updates)
 UI_PACKAGES=(DesignSystem Workspace Island)
 
-# The few engine files that legitimately need AppKit for process identity
-# (NSWorkspace / NSRunningApplication), never for drawing.
+# The few engine files that legitimately need AppKit for process work — the
+# identity of a running app (NSWorkspace / NSRunningApplication), opening a URL,
+# leaving the app — and never for drawing.
 APPKIT_ALLOWLIST=(
   "Packages/Audio/Sources/Audio/AppBundleIdentity.swift"
   "Packages/Audio/Sources/Audio/SystemAudioCapture.swift"
   "Packages/CallDetection/Sources/CallDetection/BrowserCatalog.swift"
   "Packages/CallDetection/Sources/CallDetection/MicActivityMonitor.swift"
+  "Packages/Updates/Sources/Updates/UpdateInstaller.swift"
 )
 
 # Which packages each package may depend on (the downward-only graph). A
