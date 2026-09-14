@@ -65,7 +65,7 @@ Makefile             the commands
 | `Summarization` | `TextGenerating`/`GenerationParams` (the engine seam and its presets), `Summarizer` (routing, prompts, NDJSON facts, caption), `SummaryDocument`/`SummaryPhase`, `SummaryFacts` (`ChunkMapResult`/`MergedFacts`/`SummaryMerge`), `NDJSONLineValidator`, `TranscriptChunking`, `MLXTextEngine`, `SummaryModel` (identity, state, download/pause/load/unload), `SummarizationError`/`SummaryModelError` | EchoCore, ModelDelivery, mlx-swift-lm, mlx-swift, swift-transformers (`Tokenizers`) |
 | `Recording` | `RecordingSession` (`@Observable @MainActor`: `phase`, `levels`, `notices`, `currentMeetingID`, `queuedMeetingIDs`, `terminalFailureMeetingIDs`, `start`/`stop`, `retryTranscription`/`retranscribe`/`requestSummary`, `resumePendingFinalizations`/`kickSummaryBackfill`), `RecordingPhase`, `RecordingNotice`, `CaptureLevels`, `FinalizationMachine`, `SummaryBackfillPolicy`; internally `FinalizationDriver`, `SummaryScheduler`, `LevelWindow`/`ChannelFrameCounter`, the `CaptureScope` → `CaptureScopeRecord` mapping, and the capture/pass/summary seams the tests drive | EchoCore, Audio, Transcription, Summarization, ModelDelivery, Meetings |
 | `CallDetection` | `CallAppCatalog` (the curated table, the matcher and the disabled-apps filter), `BrowserCatalog` (every installed browser, from LaunchServices), `MicActivityMonitor` (the Core Audio shim, wildcard listeners, 80 ms-coalesced), `MicCaptureClient`, `CallSessionMachine`/`CallDetectionTiming`/`IslandFace`, `CallDetector` (`@Observable @MainActor`: `face`, `graceDeadline`, `appsInCall`, the taps, the three timers) and `CallDetectionRequests` (the three verbs it asks of the surface above) | EchoCore, Audio |
-| `Updates` *(pending)* | release feed, checker, updater | EchoCore |
+| `Updates` | `ReleaseVersion` (the arithmetic behind a `vX.Y.Z` tag, plus the version this build compares against), `LatestRelease`/`UpdateCheckFailure`, `GitHubReleaseFeed` (every user-reachable URL derived from the one repository string), `UpdateChecker` (the daily timer, the shared in-flight request, the last answer that survives a re-check), `UpdaterPlan`/`UpdateInstaller`/`UpdateInstallFailure` (the bash the updater runs, and the report a failed update leaves for the next launch) | EchoCore |
 | `Island` | `ScreenGeometry`/`IslandMetrics` (where the shell sits per screen, the cutout read from the gap between the menu bar's strips, the no-notch pill), `IslandShellFace` (the six silhouettes and the resolver over detection + phase), `IslandShellGeometry`, `IslandShellShape`/`IslandShell` (the outline, the flares, the ears, the one-row expansion), `IslandPanel`, `IslandController`, `IslandHoverView`/`HoverGrace` (the tracking area and the grace that are all hover can be), `IslandWindowTransition` (the window that has to hold a shell the spring is still moving), `IslandGallery`/`HoverBench` (DEBUG) | EchoCore, CallDetection, Recording, DesignSystem |
 
 The dependency table above is enforced by `scripts/check_boundaries.sh`; the
@@ -93,7 +93,8 @@ their own manifests.
 - `grep -rn "public " Packages/<Name>/Sources` shows a package's API.
 - Side effects: disk is in `MeetingStore` (meetings), `RetainedAudioWriter`
   (a session's staged audio), `SnapshotDownloader`/`ResumableFileDownload`
-  (model files) and `ErrorTraceLog` (logs); the network is in `ModelDelivery`
+  (model files), `UpdateInstaller` (the updater's log and its failure report)
+  and `ErrorTraceLog` (logs); the network is in `ModelDelivery` and `Updates`
   alone; audio devices are in `Audio`; the pasteboard, save panels and Finder
   are in `Workspace/MeetingActions.swift`; launch-time work is in
   `App/AppComposition.swift` — nowhere else.
@@ -185,7 +186,7 @@ reactions are method calls by the object that knows, not observation chains.
   named files, never sweeps; schemas are additive with tolerant decoding and an
   old `meta.json` must stay byte-identical after a read (ADR-005).
 - No `UserDefaults`. No `~/Documents`. No caches outside the data root.
-- Network exists only in `ModelDelivery` and `Updates` (pending), each owning
+- Network exists only in `ModelDelivery` and `Updates`, each owning
   its client. Nothing else makes requests.
 
 ## Errors
