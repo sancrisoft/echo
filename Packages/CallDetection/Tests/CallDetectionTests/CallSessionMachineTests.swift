@@ -146,8 +146,56 @@ struct CallSessionMachineTests {
         #expect(actions == [.setFace(.startPrompt(appName: "Zoom", scoped: true))])
         #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
 
-        // The pointer leaving is what starts the interval, from the top.
+        // And the pointer leaving puts it straight back: what the pointer
+        // raised is not an announcement, it is something being read, so it
+        // lasts exactly as long as the reading does.
+        #expect(machine.handle(.hoverChanged(false)) == [.setFace(.compactPill)])
+        #expect(machine.face == .compactPill)
+        #expect(!machine.faceRaisedByPointer)
+    }
+
+    @Test func anOfferTheMachineRaisedStillKeepsItsIntervalAfterAHover() {
+        // The other half of the same rule, and the reason it needs a flag:
+        // these two faces are identical on screen and end differently. This
+        // one announced itself, so the interval counts from the moment the
+        // pointer stops reading it.
+        var machine = promptingMachine()
+        #expect(!machine.faceRaisedByPointer)
+
+        #expect(machine.handle(.hoverChanged(true)) == [.cancelRetractTimer])
         #expect(machine.handle(.hoverChanged(false)) == [.startRetractTimer])
+        #expect(machine.face == .startPrompt(appName: "Zoom", scoped: true))
+    }
+
+    @Test func brushingPastTheIslandPinsNothingOpen() {
+        // The report: hovering what looked like an idle island left an offer
+        // up for ten seconds nobody asked for. It was not idle — a catalogued
+        // app had been holding the mic all day — so the pointer was
+        // un-retracting a pill each time it went past.
+        var machine = promptingMachine()
+        machine.handle(.retractFired)
+
+        for _ in 0..<3 {
+            #expect(machine.handle(.hoverChanged(true)).count == 1)
+            #expect(machine.handle(.hoverChanged(false)) == [.setFace(.compactPill)])
+            #expect(machine.face == .compactPill, "an offer stayed up after the pointer left")
+        }
+    }
+
+    @Test func aFaceTheMachineChangesUnderThePointerIsNoLongerThePointersToClose() {
+        // The flag is cleared by every face the machine shows, so a pointer
+        // that raised one and is still there when something else replaces it
+        // does not take the replacement away with it.
+        var machine = promptingMachine()
+        machine.handle(.retractFired)
+        machine.handle(.hoverChanged(true))
+        #expect(machine.faceRaisedByPointer)
+
+        // The call ends under the pointer.
+        machine.handle(.matchedAppsChanged([]))
+        #expect(machine.face == nil)
+        #expect(!machine.faceRaisedByPointer)
+        #expect(machine.handle(.hoverChanged(false)).isEmpty)
     }
 
     @Test func dismissSilencesTheIslandForTheRestOfTheCall() {
