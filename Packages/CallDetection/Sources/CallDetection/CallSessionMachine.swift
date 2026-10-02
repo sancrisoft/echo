@@ -530,7 +530,14 @@ public struct CallSessionMachine {
             dismissedThisCall = true
             show(nil)
             return [.cancelRetractTimer, .setFace(nil)]
-        case .endGrace, .saved, .none:
+        case .saved:
+            // The redesign puts a ✕ on the saved face. It only says sooner
+            // what the retract would have said anyway, so it is the retract
+            // brought forward: the face goes, the pending timer with it, and
+            // nothing about the next call changes — this is not a "no".
+            show(nil)
+            return [.cancelRetractTimer, .setFace(nil)]
+        case .endGrace, .none:
             // The end-of-call countdown has its own two answers ("Stop now",
             // "Keep recording"); it carries no ✕.
             return []

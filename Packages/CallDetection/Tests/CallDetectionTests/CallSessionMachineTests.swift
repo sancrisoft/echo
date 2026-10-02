@@ -224,6 +224,25 @@ struct CallSessionMachineTests {
         #expect(machine.dismissedThisCall)
     }
 
+    @Test func dismissingTheSavedFaceIsItsRetractBroughtForward() {
+        // The redesign's ✕ on the saved face: the face goes now instead of
+        // after the retract, and the retract is cancelled with it. It is not a
+        // "no" — nothing about the next call is silenced.
+        var machine = promptingMachine()
+        machine.handle(.startTapped)
+        machine.handle(.recordingChanged(true))
+        machine.handle(.matchedAppsChanged([]))
+        machine.handle(.graceFired)
+        #expect(machine.face == .saved)
+
+        let actions = machine.handle(.dismissTapped)
+
+        #expect(actions == [.cancelRetractTimer, .setFace(nil)])
+        #expect(machine.face == nil)
+        #expect(!machine.dismissedThisCall)
+        #expect(machine.handle(.retractFired).isEmpty)
+    }
+
     @Test func theNextCallPromptsAgainAfterADismissal() {
         var machine = promptingMachine()
         machine.handle(.dismissTapped)
