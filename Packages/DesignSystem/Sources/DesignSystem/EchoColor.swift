@@ -178,6 +178,9 @@ public nonisolated enum EchoColor {
         /// The unspent part of the end-of-call countdown ring.
         public static let ringTrack = Color.white.opacity(0.16)
 
+        /// The track of the progress hairline along the bottom edge.
+        public static let progressTrack = Color.white.opacity(0.10)
+
         /// The unfilled part of a level gauge.
         public static let gaugeTrack = Color.white.opacity(0.13)
 

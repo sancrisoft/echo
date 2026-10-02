@@ -311,8 +311,13 @@ names inside a package are free to change.
 - `IslandController` (`@Observable @MainActor`: `face`, `isExpanded`,
   `metrics`, `start()`/`stop()`; built with the detector, the session and an
   `IslandMeetings` — the newest meeting and one by id, closures the composition
-  root answers from `MeetingLibrary`, because the island may not import it),
-  `IslandPanel`, `IslandMeeting` (title, duration, words when known). The controller is also the one
+  root answers from `MeetingLibrary`, because the island may not import it —
+  and an `openMeeting` the root serves with the window, which the island does
+  not have), `IslandPanel`, `IslandMeeting` (title, duration, words when
+  known). `IslandShell` takes an optional `progress`, drawn as the hairline
+  along the open shell's bottom edge and passed only when it is real: the
+  transcription pass's fraction, never the summary's, which has none the
+  island can read. The controller is also the one
   place detection and the session meet — neither package can observe the other
   — so it reports `recordingChanged` and `hoverChanged` down, once per change
   each. It follows the active screen from three notifications (screen

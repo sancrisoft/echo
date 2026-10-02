@@ -80,6 +80,9 @@ import SwiftUI
             return IslandShell(
                 geometry: geometry,
                 isExpanded: isExpanded,
+                // The artboard's sheet shows the line part-way; on screen it
+                // is drawn only from a real fraction.
+                progress: face == .summarizing ? 0.46 : nil,
                 leadingEar: { leadingEar(face) },
                 trailingEar: { trailingEar(face) },
                 row: { row(face) }
@@ -91,7 +94,8 @@ import SwiftUI
         @ViewBuilder
         private func leadingEar(_ face: IslandShellFace) -> some View {
             switch face {
-            case .idle, .summarizing: EmptyView()
+            case .idle: EmptyView()
+            case .summarizing: SummarizingEars().leading
             case .callDetected: CallDetectedEars(app: "Zoom").leading
             case .recording: RecordingEars(startedAt: startedAt, stoppedAt: 0).leading
             case .callEnded: CallEndedEars(deadline: deadline).leading
@@ -102,7 +106,8 @@ import SwiftUI
         @ViewBuilder
         private func trailingEar(_ face: IslandShellFace) -> some View {
             switch face {
-            case .idle, .summarizing: EmptyView()
+            case .idle: EmptyView()
+            case .summarizing: SummarizingEars().trailing
             case .callDetected: CallDetectedEars(app: "Zoom").trailing
             case .recording: RecordingEars(startedAt: startedAt, stoppedAt: 0).trailing
             case .callEnded: CallEndedEars(deadline: deadline).trailing
@@ -130,7 +135,7 @@ import SwiftUI
             case .saved:
                 SavedRow(meeting: meeting, dismiss: {}, open: {})
             case .summarizing:
-                EmptyView()
+                SummarizingRow(pass: .summary, meeting: meeting, dismiss: {}, open: {})
             }
         }
     }

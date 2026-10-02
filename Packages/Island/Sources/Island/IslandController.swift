@@ -51,6 +51,7 @@ public final class IslandController {
     @ObservationIgnored private let detector: CallDetector
     @ObservationIgnored private let session: RecordingSession
     @ObservationIgnored private let meetings: IslandMeetings
+    @ObservationIgnored private let openMeeting: (UUID) -> Void
     @ObservationIgnored private var panel: IslandPanel?
     @ObservationIgnored private var screenObservers: [any NSObjectProtocol] = []
     @ObservationIgnored private var hover: HoverGrace?
@@ -104,13 +105,26 @@ public final class IslandController {
     /// whatever the pointer does (`chooseCapture`).
     @ObservationIgnored private var holdsOpen = false
 
-    /// - Parameter meetings: the two questions the faces ask about meetings —
-    ///   the newest, and one by id. The island cannot import the library, so
-    ///   the composition root answers them.
-    public init(detector: CallDetector, session: RecordingSession, meetings: IslandMeetings = .none) {
+    /// Whether the open face was dismissed under the pointer
+    /// (`foldUntilPointerLeaves`). Cleared the moment the pointer is gone.
+    @ObservationIgnored private var folded = false
+
+    /// - Parameters:
+    ///   - meetings: the two questions the faces ask about meetings — the
+    ///     newest, and one by id. The island cannot import the library, so the
+    ///     composition root answers them.
+    ///   - openMeeting: puts a meeting in front of the user, in the window.
+    ///     The island has no window to open; the composition root does.
+    public init(
+        detector: CallDetector,
+        session: RecordingSession,
+        meetings: IslandMeetings = .none,
+        openMeeting: @escaping (UUID) -> Void = { _ in }
+    ) {
         self.detector = detector
         self.session = session
         self.meetings = meetings
+        self.openMeeting = openMeeting
     }
 
     /// Puts the island on screen and starts following what it shows.
@@ -140,7 +154,8 @@ public final class IslandController {
         let tracking = IslandHoverView(
             hosting: NSHostingView(
                 rootView: IslandRootView(
-                    controller: self, detector: detector, session: session, meetings: meetings)
+                    controller: self, detector: detector, session: session, meetings: meetings,
+                    openMeeting: openMeeting)
             )
         )
         tracking.onCrossing = { entered in
@@ -277,7 +292,9 @@ public final class IslandController {
 
         let detection = detector.face
         face = IslandShellFace.resolve(detection: detection, phase: session.phase)
-        isExpanded = face.isOpen(detection: detection, hovered: isHovered || holdsOpen)
+        // A fold lasts exactly as long as the pointer that asked for it.
+        if !isHovered { folded = false }
+        isExpanded = face.isOpen(detection: detection, hovered: (isHovered && !folded) || holdsOpen)
 
         if let geometry = ScreenGeometry.forShell(current: currentDisplay, hovered: isHovered) {
             #if DEBUG
@@ -335,6 +352,18 @@ public final class IslandController {
         guard reportedHover != isHovering else { return }
         reportedHover = isHovering
         detector.hoverChanged(isHovering)
+    }
+
+    // MARK: - Folding under the pointer
+
+    /// Folds a face that is open only because the pointer is on it, until the
+    /// pointer leaves — the post-stop face's ✕. That face announces nothing
+    /// and asks nothing; it is open because it was hovered, and its ✕ means
+    /// "not now", which is the pointer's own decision to undo by coming back.
+    func foldUntilPointerLeaves() {
+        guard isHovered else { return }
+        folded = true
+        update()
     }
 
     // MARK: - The capture menu

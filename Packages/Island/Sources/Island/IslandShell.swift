@@ -35,6 +35,7 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
 
     private let geometry: IslandShellGeometry
     private let isExpanded: Bool
+    private let progress: Double?
     private let leadingEar: () -> Leading
     private let trailingEar: () -> Trailing
     private let row: () -> Row
@@ -43,15 +44,20 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
     ///   - leadingEar: what the collapsed shell shows left of the cutout.
     ///   - trailingEar: what it shows right of it.
     ///   - row: the single line the expanded shell shows instead.
+    ///   - progress: real progress of the work the open face reports, drawn
+    ///     as a hairline along the bottom edge; `nil` draws none. Never a
+    ///     guess: a face whose work has no measurable progress passes `nil`.
     public init(
         geometry: IslandShellGeometry,
         isExpanded: Bool,
+        progress: Double? = nil,
         @ViewBuilder leadingEar: @escaping () -> Leading,
         @ViewBuilder trailingEar: @escaping () -> Trailing,
         @ViewBuilder row: @escaping () -> Row
     ) {
         self.geometry = geometry
         self.isExpanded = isExpanded
+        self.progress = progress
         self.leadingEar = leadingEar
         self.trailingEar = trailingEar
         self.row = row
@@ -77,6 +83,7 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
                 shell
                 ears
                 openRow
+                hairline
             }
             .frame(width: geometry.shellSize.width, height: geometry.shellSize.height)
             // The shell hangs from the top of its window by the margin the
@@ -164,6 +171,34 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
             )
             .clipped()
             .padding(.top, geometry.rowTopInset)
+    }
+
+    /// The progress of the open face's work, along the shell's bottom edge
+    /// and across its whole width — under the rounded corners too, which is
+    /// why it is clipped to the shell's own outline rather than inset like
+    /// the row. It fades with the open face it belongs to.
+    @ViewBuilder
+    private var hairline: some View {
+        if let progress {
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(EchoColor.Island.progressTrack)
+                    Rectangle()
+                        .fill(EchoColor.Island.accent)
+                        .frame(width: proxy.size.width * min(max(progress, 0), 1))
+                }
+                .frame(height: EchoLayout.islandProgressHeight)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+            .frame(width: geometry.shellSize.width, height: geometry.shellSize.height)
+            .clipShape(IslandShellShape(cornerRadius: geometry.cornerRadius, flare: 0))
+            .opacity(isExpanded ? 1 : 0)
+            .animation(
+                reduceMotion ? nil : EchoMotion.islandContent(opening: isExpanded),
+                value: isExpanded
+            )
+            .allowsHitTesting(false)
+        }
     }
 
     /// The hole between the ears.

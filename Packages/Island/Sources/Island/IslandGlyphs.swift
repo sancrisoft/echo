@@ -154,3 +154,35 @@ struct LevelBarsGlyph: View {
         .frame(width: box.width, height: box.height)
     }
 }
+
+/// The summarizing spinner: an open arc of the accent, turning. With Reduce
+/// Motion it holds still — an arc that does not turn still says "working".
+struct Spinner: View {
+
+    let size: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var turning = false
+
+    /// The artboard's arc: radius 6 on the grid, from the top round to the
+    /// upper left, leaving a gap of about a fifth of a turn.
+    private static let sweep: CGFloat = 293.6 / 360
+
+    var body: some View {
+        Circle()
+            .inset(by: size * 2 / 16)
+            .trim(from: 0, to: Self.sweep)
+            .stroke(EchoColor.Island.accent, style: StrokeStyle(lineWidth: size * 2.2 / 16, lineCap: .round))
+            .rotationEffect(.degrees(-90))
+            .rotationEffect(.degrees(turning && !reduceMotion ? 360 : 0))
+            .animation(
+                reduceMotion
+                    ? nil
+                    : .linear(duration: EchoMotion.spinnerPeriod).repeatForever(autoreverses: false),
+                value: turning
+            )
+            .frame(width: size, height: size)
+            .onAppear { turning = true }
+            .accessibilityHidden(true)
+    }
+}

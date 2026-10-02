@@ -142,7 +142,11 @@ final class AppComposition {
             meetings: IslandMeetings(
                 latest: { library.metas.max { $0.startedAt < $1.startedAt }.map(Self.islandMeeting) },
                 meeting: { id in library.metas.first { $0.id == id }.map(Self.islandMeeting) }
-            )
+            ),
+            openMeeting: { id in
+                workspace.open(id)
+                windowOpener.openMainWindow()
+            }
         )
 
         updates = UpdateChecker()

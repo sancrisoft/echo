@@ -24,6 +24,7 @@ struct IslandRootView: View {
     let detector: CallDetector
     let session: RecordingSession
     let meetings: IslandMeetings
+    let openMeeting: (UUID) -> Void
 
     /// The capture the user picked from the idle face's chip. Transient, and
     /// the view's own: it does not outlive the call that offered it
@@ -47,6 +48,7 @@ struct IslandRootView: View {
                     isExpanded: controller.isExpanded
                 ),
                 isExpanded: controller.isExpanded,
+                progress: progress,
                 leadingEar: { leadingEar },
                 trailingEar: { trailingEar },
                 row: { row }
@@ -100,12 +102,30 @@ struct IslandRootView: View {
         session.phase.captureScope ?? stoppedScope
     }
 
+    /// Which pass the post-stop face reports.
+    private var afterStopPass: AfterStopPass {
+        if case .finalizing = session.phase { return .transcript }
+        return .summary
+    }
+
+    /// The progress the shell draws along its bottom edge, only where there
+    /// is a real one: the transcription pass reports its own clamped fraction.
+    /// The summary reports none the island could read, so it gets no line
+    /// rather than a guessed one.
+    private var progress: Double? {
+        guard controller.face == .summarizing, case .finalizing(_, let fraction) = session.phase else {
+            return nil
+        }
+        return fraction
+    }
+
     // MARK: - Collapsed
 
     @ViewBuilder
     private var leadingEar: some View {
         switch controller.face {
-        case .idle, .summarizing: EmptyView()
+        case .idle: EmptyView()
+        case .summarizing: SummarizingEars().leading
         case .callDetected: CallDetectedEars(app: noticedCall.app).leading
         case .recording: RecordingEars(startedAt: session.phase.startedAt, stoppedAt: stoppedAt).leading
         case .callEnded: CallEndedEars(deadline: detector.graceDeadline).leading
@@ -116,7 +136,8 @@ struct IslandRootView: View {
     @ViewBuilder
     private var trailingEar: some View {
         switch controller.face {
-        case .idle, .summarizing: EmptyView()
+        case .idle: EmptyView()
+        case .summarizing: SummarizingEars().trailing
         case .callDetected: CallDetectedEars(app: noticedCall.app).trailing
         case .recording: RecordingEars(startedAt: session.phase.startedAt, stoppedAt: stoppedAt).trailing
         case .callEnded: CallEndedEars(deadline: detector.graceDeadline).trailing
@@ -179,8 +200,13 @@ struct IslandRootView: View {
             )
 
         case .summarizing:
-            // The summarizing face is its own work (#112).
-            EmptyView()
+            let meetingID = session.phase.meetingID
+            SummarizingRow(
+                pass: afterStopPass,
+                meeting: meetingID.flatMap(meetings.meeting),
+                dismiss: { controller.foldUntilPointerLeaves() },
+                open: meetingID.map { id in { openMeeting(id) } }
+            )
         }
     }
 

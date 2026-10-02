@@ -96,6 +96,23 @@ nonisolated enum FaceText {
         scoped ? "Mic and \(app) audio, kept apart" : "Mic and system audio, kept apart"
     }
 
+    /// The post-stop face's first line, per pass. The transcript pass takes
+    /// the words the window's own finalizing state uses; the summary pass
+    /// the face's own.
+    static func afterStopTitle(_ pass: AfterStopPass) -> String {
+        switch pass {
+        case .transcript: "Finalizing transcript…"
+        case .summary: "Writing the summary"
+        }
+    }
+
+    /// Its second line: the meeting the work is for. "GoCoInvest onboarding ·
+    /// 58 min".
+    static func afterStopDetail(_ meeting: IslandMeeting?) -> String {
+        guard let meeting else { return "Meeting" }
+        return "\(meeting.title) · \(duration(meeting.duration))"
+    }
+
     /// Whole seconds left on the end-of-call countdown, rounded up so the
     /// face never reads 0 while the stop is still a second away. A cleared
     /// deadline — the stop has begun — is zero.

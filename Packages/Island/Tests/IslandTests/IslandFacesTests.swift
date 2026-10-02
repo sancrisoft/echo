@@ -61,6 +61,14 @@ struct FaceTextTests {
         #expect(FaceText.callDetail(app: "FaceTime", scoped: false) == "Mic and system audio, kept apart")
     }
 
+    @Test("the work after a stop names each pass for what it is")
+    func afterStop() {
+        #expect(FaceText.afterStopTitle(.transcript) == "Finalizing transcript…")
+        #expect(FaceText.afterStopTitle(.summary) == "Writing the summary")
+        #expect(FaceText.afterStopDetail(meeting) == "GoCoInvest onboarding · 58 min")
+        #expect(FaceText.afterStopDetail(nil) == "Meeting")
+    }
+
     @Test("the countdown rounds up, and a cleared deadline is zero")
     func secondsLeft() {
         let now = Date(timeIntervalSinceReferenceDate: 1_000)
@@ -134,11 +142,57 @@ struct FaceFitTests {
                         app: "Zoom", deadline: .now.addingTimeInterval(8), answers: (stopNow: {}, keep: {})))
             ),
             ("saved", .saved, measure(SavedRow(meeting: meeting, dismiss: {}, open: {}))),
+            (
+                "summarizing", .summarizing,
+                measure(SummarizingRow(pass: .summary, meeting: meeting, dismiss: {}, open: {}))
+            ),
+            (
+                "finalizing", .summarizing,
+                measure(SummarizingRow(pass: .transcript, meeting: meeting, dismiss: {}, open: {}))
+            ),
         ]
         for (name, width, drawn) in rows {
             let available = room(for: width)
             #expect(drawn.width <= available.width, "\(name) is \(drawn.width) wide, room for \(available.width)")
             #expect(drawn.height <= available.height, "\(name) is \(drawn.height) tall, room for \(available.height)")
+        }
+    }
+}
+
+/// The room either side of a real cutout: the island hangs centred on it, so
+/// each ear gets half of what the collapsed width leaves, less its inset.
+private func earRoom(for width: IslandWidth) -> CGFloat {
+    let cutout = IslandMetrics(IslandMetricsTests.macBookPro14).cutout?.width ?? 0
+    return (width.collapsed - cutout) / 2 - EchoLayout.islandEarInset
+}
+
+@Suite("Whether the ears fit beside the cutout")
+struct EarFitTests {
+
+    /// What the artboards put in each ear, at the widths the design draws,
+    /// measured against a real 14" cutout. Anything wider would sit under the
+    /// camera's housing, where nothing is drawn.
+    @Test("every ear's content fits its side of the cutout")
+    func everyEarFits() {
+        let start = Date.now.addingTimeInterval(-3761)
+        let ears: [(String, IslandWidth, CGSize)] = [
+            ("call detected, leading", .callDetected, measure(CallDetectedEars(app: "Zoom").leading)),
+            ("call detected, trailing", .callDetected, measure(CallDetectedEars(app: "Zoom").trailing)),
+            ("recording, leading", .recording, measure(RecordingEars(startedAt: start, stoppedAt: 0).leading)),
+            ("recording, trailing", .recording, measure(RecordingEars(startedAt: start, stoppedAt: 0).trailing)),
+            ("call ended, leading", .callEnded, measure(CallEndedEars(deadline: .now.addingTimeInterval(30)).leading)),
+            (
+                "call ended, trailing", .callEnded,
+                measure(CallEndedEars(deadline: .now.addingTimeInterval(30)).trailing)
+            ),
+            ("saved, leading", .saved, measure(SavedEars().leading)),
+            ("saved, trailing", .saved, measure(SavedEars().trailing)),
+            ("summarizing, leading", .summarizing, measure(SummarizingEars().leading)),
+        ]
+        for (name, width, drawn) in ears {
+            #expect(
+                drawn.width <= earRoom(for: width),
+                "\(name) is \(drawn.width) wide, room for \(earRoom(for: width))")
         }
     }
 }

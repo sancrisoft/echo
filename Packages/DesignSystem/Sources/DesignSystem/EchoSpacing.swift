@@ -126,6 +126,7 @@ public nonisolated enum EchoControl {
     /// countdown ring. The saved face's check is a size smaller.
     public static let islandIconSize: CGFloat = 15
     public static let islandCheckSize: CGFloat = 14
+    public static let islandSpinnerSize: CGFloat = 13
 
     /// The glyph in an ear, either side of the cutout.
     public static let earGlyphSize: CGFloat = 12
@@ -221,6 +222,9 @@ public nonisolated enum EchoLayout {
     /// Between the recording face's two level gauges.
     public static let islandGaugeGap: CGFloat = 12
 
+    /// The progress hairline along the open shell's bottom edge.
+    public static let islandProgressHeight: CGFloat = 2
+
     /// The fallback shell, on a screen with no cutout: fixed, where the notched
     /// shell is only as wide as its words need.
     public static let islandPillSize = CGSize(width: 320, height: 34)
@@ -281,7 +285,12 @@ public nonisolated struct IslandWidth: Equatable, Sendable {
     /// Nothing is happening: the app's permanent presence, with empty ears.
     public static let idle = IslandWidth(collapsed: 200, expanded: 324)
     /// A call was noticed and a recording is offered.
-    public static let callDetected = IslandWidth(collapsed: 272, expanded: 344)
+    ///
+    /// Collapsed, retaken: the artboard's 272 leaves its ears off-centre
+    /// around the cutout, and the island hangs centred on it, so each ear gets
+    /// half of what is left. On the 14" cutout the design's own fixture —
+    /// "Zoom" in the trailing ear — needs 274.
+    public static let callDetected = IslandWidth(collapsed: 274, expanded: 344)
     /// A session is live: the timer and the two levels.
     public static let recording = IslandWidth(collapsed: 320, expanded: 360)
     /// The call ended under a live recording, and the stop is counting down.

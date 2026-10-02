@@ -330,9 +330,12 @@ struct CallEndedEars {
         }
     }
 
+    /// The seconds alone. The artboard writes "stopping 8s", which is
+    /// wider than the ear beside a real cutout; the ring before it already
+    /// says what is counting down.
     var trailing: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            Text("stopping \(FaceText.secondsLeft(until: deadline, now: context.date))s")
+            Text("\(FaceText.secondsLeft(until: deadline, now: context.date))s")
                 .font(EchoFont.islandEarNumber)
                 .foregroundStyle(EchoColor.Island.recording)
                 .lineLimit(1)
@@ -376,4 +379,58 @@ struct SavedEars {
             .foregroundStyle(EchoColor.Island.earStatus)
             .lineLimit(1)
     }
+}
+
+// MARK: - After the stop
+
+/// The work after a stop: the transcription pass, then the summary. One face
+/// for both, because the design draws one, with each pass named for what it
+/// is — the pass in the words the window's own "finalizing" state uses — and
+/// nothing to decide, so no primary.
+struct SummarizingRow: View {
+
+    /// Which of the two passes is running.
+    let pass: AfterStopPass
+    let meeting: IslandMeeting?
+    let dismiss: () -> Void
+    let open: (() -> Void)?
+
+    var body: some View {
+        FaceRow {
+            Spinner(size: EchoControl.islandSpinnerSize)
+        } first: {
+            HStack(alignment: .firstTextBaseline, spacing: EchoLayout.islandTitleGap) {
+                Text(FaceText.afterStopTitle(pass)).faceTitle()
+                Spacer(minLength: 0)
+                Text("on device").faceDetail()
+            }
+        } second: {
+            Text(FaceText.afterStopDetail(meeting)).faceDetail()
+        } controls: {
+            dismissButton(dismiss)
+            if let open {
+                Button("Open", action: open).buttonStyle(.islandSecondary)
+            }
+        }
+    }
+}
+
+/// The spinner, and no word. The artboard's "Summarizing" is wider than the
+/// ear beside a real cutout, and an ear with half a word in it says less than
+/// one with none.
+struct SummarizingEars {
+
+    var leading: some View {
+        Spinner(size: EchoControl.earGlyphSize)
+    }
+
+    var trailing: some View {
+        EmptyView()
+    }
+}
+
+/// The two passes that run after a stop.
+enum AfterStopPass: Equatable {
+    case transcript
+    case summary
 }
