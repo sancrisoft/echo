@@ -98,6 +98,8 @@ public nonisolated enum EchoControl {
     public static let capsuleInsetQuiet: CGFloat = 6
     /// Between a capsule's glyph and its label.
     public static let capsuleGap: CGFloat = 6
+    /// The box a capsule's glyph is drawn in: Record's dot, Stop's square.
+    public static let capsuleGlyphSize: CGFloat = 8
 
     /// A value chip: wider where the label starts than where the chevron ends.
     public static let chipHeight: CGFloat = 24

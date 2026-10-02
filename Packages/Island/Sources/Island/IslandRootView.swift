@@ -18,6 +18,7 @@
 //  makes.
 //
 
+import Audio
 import CallDetection
 import DesignSystem
 import Recording
@@ -28,6 +29,17 @@ struct IslandRootView: View {
     let controller: IslandController
     let detector: CallDetector
     let session: RecordingSession
+
+    /// The capture the user picked from the idle face's chip. Transient, and
+    /// the view's own: it does not outlive the call that offered it
+    /// (`ScopeSelection.effective`), and it means nothing once Record is
+    /// pressed.
+    @State private var pickedScope: CaptureScope?
+
+    /// What Record will capture right now.
+    private var capture: CaptureScope {
+        ScopeSelection.effective(picked: pickedScope, appsInCall: detector.appsInCall)
+    }
 
     var body: some View {
         if let metrics = controller.metrics {
@@ -82,6 +94,12 @@ struct IslandRootView: View {
     private var controls: some View {
         switch controller.face {
         case .idle:
+            ValueChip(ScopeSelection.label(for: capture)) {
+                let options = ScopeSelection.options(appsInCall: detector.appsInCall)
+                if let picked = controller.chooseCapture(options, selected: capture) {
+                    pickedScope = picked
+                }
+            }
             recordButton
 
         case .callDetected:
@@ -91,16 +109,24 @@ struct IslandRootView: View {
                 Image(systemName: "xmark")
             }
             .buttonStyle(.islandIcon)
-            Button("Record") { detector.startTapped() }
-                .buttonStyle(.islandPrimary)
+            Button {
+                detector.startTapped()
+            } label: {
+                CapsuleLabel(title: "Record", glyph: RecordGlyph(), ink: EchoColor.Island.recording)
+            }
+            .buttonStyle(.islandPrimary)
 
         case .recording:
             // Stop is offered while capture is live and not while the session
             // is being torn down: the phase that follows it is not idle, and a
             // second Stop must not start a second teardown.
             if session.phase.isRecording {
-                Button("Stop") { Task { await session.stop() } }
-                    .buttonStyle(.islandPrimary)
+                Button {
+                    Task { await session.stop() }
+                } label: {
+                    CapsuleLabel(title: "Stop", glyph: StopGlyph(), ink: EchoColor.Island.controlLabel)
+                }
+                .buttonStyle(.islandPrimary)
             }
 
         case .callEnded:
@@ -130,9 +156,15 @@ struct IslandRootView: View {
     }
 
     /// The app's way into a recording that no call was noticed for. Everything
-    /// — the menu bar, the window, the island — runs this same gated start.
+    /// — the menu bar, the window, the island — runs this same gated start;
+    /// the island alone passes the capture its chip shows.
     private var recordButton: some View {
-        Button("Record") { Task { await session.start() } }
-            .buttonStyle(.islandPrimary)
+        Button {
+            let scope = capture
+            Task { await session.start(scope: scope) }
+        } label: {
+            CapsuleLabel(title: "Record", glyph: RecordGlyph(), ink: EchoColor.Island.recording)
+        }
+        .buttonStyle(.islandPrimary)
     }
 }

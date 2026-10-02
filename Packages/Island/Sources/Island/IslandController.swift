@@ -20,6 +20,7 @@
 //
 
 import AppKit
+import Audio
 import CallDetection
 import DesignSystem
 import EchoCore
@@ -97,6 +98,10 @@ public final class IslandController {
     /// the same reason: telling it is what suspends the retract, and detection
     /// can answer by changing its face, which comes straight back here.
     @ObservationIgnored private var reportedHover: Bool?
+
+    /// Whether a menu hanging from the shell is up, which holds the shell open
+    /// whatever the pointer does (`chooseCapture`).
+    @ObservationIgnored private var holdsOpen = false
 
     public init(detector: CallDetector, session: RecordingSession) {
         self.detector = detector
@@ -266,7 +271,7 @@ public final class IslandController {
 
         let detection = detector.face
         face = IslandShellFace.resolve(detection: detection, phase: session.phase)
-        isExpanded = face.isOpen(detection: detection, hovered: isHovered)
+        isExpanded = face.isOpen(detection: detection, hovered: isHovered || holdsOpen)
 
         if let geometry = ScreenGeometry.forShell(current: currentDisplay, hovered: isHovered) {
             #if DEBUG
@@ -324,6 +329,38 @@ public final class IslandController {
         guard reportedHover != isHovering else { return }
         reportedHover = isHovering
         detector.hoverChanged(isHovering)
+    }
+
+    // MARK: - The capture menu
+
+    /// Offers the capture choices from the idle face's chip and answers with
+    /// the one picked, or `nil` when the menu was dismissed.
+    ///
+    /// An AppKit menu, and the shell held open for as long as it is up: the
+    /// pointer leaves the island the moment it moves onto a menu, and the
+    /// hover grace would fold the shell — and the chip the menu hangs from —
+    /// away under it. `popUp` returns only once the menu has closed, so the
+    /// hold is exactly as long as the menu.
+    func chooseCapture(_ options: [CaptureScope], selected: CaptureScope) -> CaptureScope? {
+        let menu = NSMenu()
+        let picker = CaptureMenuPicker()
+        for (index, scope) in options.enumerated() {
+            let item = NSMenuItem(
+                title: ScopeSelection.label(for: scope),
+                action: #selector(CaptureMenuPicker.pick(_:)),
+                keyEquivalent: ""
+            )
+            item.target = picker
+            item.tag = index
+            item.state = scope == selected ? .on : .off
+            menu.addItem(item)
+        }
+        holdsOpen = true
+        update()
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        holdsOpen = false
+        update()
+        return picker.picked.map { options[$0] }
     }
 
     // MARK: - Placement
@@ -459,4 +496,15 @@ public final class IslandController {
             try? png?.write(to: path.deletingPathExtension().appendingPathExtension("layer.png"), options: .atomic)
         }
     #endif
+}
+
+/// The target the capture menu's items report to. `NSMenuItem` speaks
+/// target–action, and a menu that has closed has nothing left to ask.
+private final class CaptureMenuPicker: NSObject {
+
+    private(set) var picked: Int?
+
+    @objc func pick(_ sender: NSMenuItem) {
+        picked = sender.tag
+    }
 }
