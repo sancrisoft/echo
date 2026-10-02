@@ -20,16 +20,37 @@ concurrency:
 
 jobs:
   test:
-    # Branch protection requires this check by name; keep it stable.
-    name: Build and test
-    runs-on: macos-26
+    # The 26.6 leg keeps the name this job has always had, "Build and test",
+    # so a required-check rule or anything else keyed on it keeps matching. A
+    # name that uses the matrix is taken as written, with no values appended.
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    # Two toolchains, because code that compiles on one need not compile on the
+    # other (27 rejected two files 26.6 accepted). 26.6 is the floor the README
+    # promises and what releases are built with; 27.0 is what development
+    # happens on (the same build, 27A266a). The 27 runner image is a public
+    # preview, so neither leg cancels the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Build and test
+            runner: macos-26
+            xcode: /Applications/Xcode_26.6.app
+            results: AppTests-xcode-26.6
+          - name: Build and test (Xcode 27)
+            runner: xcode-27
+            xcode: /Applications/Xcode_27.0.app
+            results: AppTests-xcode-27.0
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
       - name: Set up Xcode
         uses: ./.github/actions/setup-xcode
+        with:
+          xcode: ${{ matrix.xcode }}
 
       # The formatter ships with the toolchain; the boundary script checks the
       # rules SwiftPM cannot express (dependency direction, no UI in the engine,
@@ -68,6 +89,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: AppTests.xcresult
+          name: ${{ matrix.results }}.xcresult
           path: build/AppTests.xcresult
           if-no-files-found: ignore

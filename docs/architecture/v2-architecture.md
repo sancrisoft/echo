@@ -511,8 +511,11 @@ Adopted in ADR-004.
   `ECHO_SNAPSHOT_SCENE`), the design-review tool; pixels cannot be captured from
   outside a window on this macOS.
 - CI (`.github/workflows/ci.yml`): lint, package tests, app build and hosted
-  tests, on pull requests and pushes to `main` and `v2`. Release and installer
-  workflows are unchanged: the app target is still named `Echo`.
+  tests, on pull requests and pushes to `main` and `v2`, once on Xcode 26.6
+  (`macos-26`, the "Build and test" check) and once on Xcode 27.0 (the `xcode-27`
+  runner): code that compiles on one need not compile on the other. Release
+  and installer workflows are unchanged: the app target is still named `Echo`,
+  and releases build on 26.6.
 
 ---
 
