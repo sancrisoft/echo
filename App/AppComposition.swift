@@ -148,7 +148,8 @@ final class AppComposition {
                     openSettings: showSettings
                 )
             ),
-            windowOpener: windowOpener
+            windowOpener: windowOpener,
+            phase: { session.phase }
         )
     }
 
