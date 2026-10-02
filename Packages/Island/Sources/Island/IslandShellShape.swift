@@ -31,7 +31,11 @@ import SwiftUI
 /// The top edge runs the full width, flares included: it is flush with the top
 /// of the screen, which is why the top corners are square and why nothing here
 /// rounds them.
-public struct IslandShellShape: Shape {
+///
+/// `nonisolated` because `Shape` asks for its path off the main actor, and this
+/// package's default isolation would otherwise put the conformance on it —
+/// which Swift 6.4 (Xcode 27) rejects outright.
+public nonisolated struct IslandShellShape: Shape {
 
     /// The bottom corners. The top two are always square.
     public var cornerRadius: CGFloat
