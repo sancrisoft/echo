@@ -218,6 +218,12 @@ reactions are method calls by the object that knows, not observation chains.
   cleanups and utility measurements the composition root or a library owns.
 - Known toolchain trap (Swift 6.3.3): passing an isolated method reference as a
   `Binding` setter crashes the compiler in IRGen; wrap it in a closure.
+- Known toolchain traps (Swift 6.4, Xcode 27; CI is still on 26.6, so code has
+  to compile on both): an escaping closure that captures a `Mutex` fails with
+  "copy of noncopyable typed value" — use a copyable lock such as
+  `OSAllocatedUnfairLock`; and in a UI package a type conforming to a
+  nonisolated protocol like `Shape` must be declared `nonisolated`, or the
+  main-actor default makes the conformance an error.
 
 ## Configuration
 

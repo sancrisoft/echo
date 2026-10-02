@@ -43,9 +43,9 @@ home folder, produced by models that run on-device.
 ## Requirements
 
 - An Apple Silicon Mac running macOS 15.6 or later.
-- To build: Xcode 26.6 or later. The Metal toolchain
-  (`xcodebuild -downloadComponent MetalToolchain`) is needed once the
-  summarization package lands.
+- To build: Xcode 26.6 or later. Each Xcode install also needs the Metal
+  toolchain once (`xcodebuild -downloadComponent MetalToolchain`), which the
+  summarization engine compiles its kernels with.
 
 ## Install the shipping app
 
