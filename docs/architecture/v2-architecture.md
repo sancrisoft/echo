@@ -87,7 +87,7 @@ Each package answers "who owns this?" for one product capability from
 | **Updates** | Version arithmetic (`ReleaseVersion`, and the version this build compares against), the GitHub release feed and the one repository string every user-reachable URL derives from, the daily checker with its shared in-flight request, and the updater that renders the bash handed to `/bin/bash` and hands off to the same install script the README quotes. No UI: the three surfaces a user meets it through are Workspace's settings screen and the app target's menu item and launch prompt. | EchoCore | — |
 | **DesignSystem** | Semantic color tokens for light and dark, the type scale over the two bundled typefaces, spacing, radii and control geometry, the durations and curves the design states (`EchoMotion`), and the primitives every surface repeats: buttons, chips, property rows, tab strips, list rows, meta strips, status badges, level gauge, empty state. No product logic. | — | — |
 | **Workspace** | The main window: sidebar with meetings grouped by date, the document (summary and transcript), trash, the settings screen, first-run banners, search, the Markdown renderer, `WorkspaceModel` (selection, section, search, sort — the window's single navigation truth), display-state resolution. | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem | — |
-| **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, and the no-notch pill fallback), the shell itself (its outline with the two concave flares, the ears either side of the cutout, the one-row expansion), `IslandController` (the non-activating `NSPanel`, which face the shell wears, where the window goes, and the one report detection needs about the session), the faces. | EchoCore, CallDetection, Recording, DesignSystem | — |
+| **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, and the no-notch pill fallback), the shell itself (its outline with the two concave flares, the ears either side of the cutout, the one-row expansion), `IslandController` (the non-activating `NSPanel`, which face the shell wears, where the window goes, and the one report detection needs about the session), the faces, and the capture choice the idle face offers (`ScopeSelection`, ported from the PoC). | EchoCore, Audio, CallDetection, Recording, DesignSystem | — |
 | **App** (target) | Composition root, scenes, activation policy and the reopen that answers a request for an already running app, the menu bar item — an `NSStatusItem` managed by hand, not a `MenuBarExtra` scene, because only that tells a left click from a right one — the update prompt (the one alert Echo raises, and the app menu's answer), launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
 
 The UI packages are built towards an internal design that is not in the
@@ -131,6 +131,11 @@ Rules the graph encodes:
   explicit edges above (`Transcription`/`Summarization → ModelDelivery`,
   `CallDetection → Audio`). `Meetings` knows nothing about audio capture,
   transcription or summarization: it stores what it is given.
+- **`Island → Audio` names values, never capture.** The idle face offers a
+  choice of what to record, and that choice is an `Audio.CaptureScope` built
+  from `Audio.ProcessSelector`s, so the island imports the package that owns
+  those two types. It starts nothing in it: the choice goes to
+  `RecordingSession.start(scope:)` like every other start.
 - **EchoCore is an allowlist, not a bucket.** Something enters it only if at
   least three packages need it, it has no UI, and it is not a capability of its
   own. Anything else stays with its owner even if two packages use it.
@@ -198,7 +203,7 @@ names inside a package are free to change.
   - `AECAcceptanceTests` → `Recording`, under `.acceptance`. It replays fixtures through `SwitchingAECStage` and then asserts on the segments the Parakeet pass produces; strip the transcription and no assertion is left.
   - `ExternalInputMeasurementTests` → `Recording`. It transcribes fixtures for the same reason.
   - `MicActivityMonitor` → `CallDetection`, per §2 and the boundary allowlist, even though issue #95 names it with the other monitors. Its process-enumeration technique is duplicated on both sides by necessity, since `Audio` cannot depend on `CallDetection`; both sides say so.
-  - `ScopeSelection` and `ScopeSelectionTests` → `Island` (phase 2). They derive a selection from `CallDetection`'s state, which is above this package; `CaptureScope` itself stays here.
+  - `ScopeSelection` and `ScopeSelectionTests` → `Island` (ported with #104). They derive a selection from `CallDetection`'s state, which is above this package; `CaptureScope` itself stays here.
   - `WaveformView`, `GlidingLevel` and their tables (`WaveformAmplitudeTests`, `GlidingLevelTests`) → `DesignSystem`, arriving with `Recording`. The level meter is a rendered primitive; this package only produces the numbers, per callback and never pre-averaged, so a consumer can window them in seconds.
 - No `AudioCaptureSource` protocol. The PoC declared one and nothing ever consumed it polymorphically; its only effect was to force the two capture sources to share a surface they do not share.
 - No `@Observable` and no `@MainActor`. The observable façade over a session is `RecordingSession`, in Recording.

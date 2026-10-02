@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "Island", targets: ["Island"])
     ],
     dependencies: [
+        .package(path: "../Audio"),
         .package(path: "../CallDetection"),
         .package(path: "../DesignSystem"),
         .package(path: "../EchoCore"),
@@ -22,6 +23,7 @@ let package = Package(
         .target(
             name: "Island",
             dependencies: [
+                .product(name: "Audio", package: "Audio"),
                 .product(name: "CallDetection", package: "CallDetection"),
                 .product(name: "DesignSystem", package: "DesignSystem"),
                 .product(name: "EchoCore", package: "EchoCore"),
@@ -36,6 +38,7 @@ let package = Package(
             name: "IslandTests",
             dependencies: [
                 "Island",
+                .product(name: "Audio", package: "Audio"),
                 .product(name: "CallDetection", package: "CallDetection"),
                 .product(name: "DesignSystem", package: "DesignSystem"),
                 .product(name: "Recording", package: "Recording"),

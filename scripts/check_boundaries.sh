@@ -40,7 +40,7 @@ allowed_deps() {
     Updates)        echo "EchoCore" ;;
     DesignSystem)   echo "" ;;
     Workspace)      echo "EchoCore Meetings Recording ModelDelivery Updates CallDetection DesignSystem" ;;
-    Island)         echo "EchoCore CallDetection Recording DesignSystem" ;;
+    Island)         echo "EchoCore Audio CallDetection Recording DesignSystem" ;;
     *)              echo "__unknown__" ;;
   esac
 }
