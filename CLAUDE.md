@@ -50,7 +50,7 @@ Packages/DesignSystem/
 docs/architecture/   v2-discovery.md · v2-architecture.md · adr/
 docs/design/         local only (gitignored): the redesign as a written spec
 .design/             local only (gitignored): the design canvas working copy
-scripts/             check_boundaries.sh · snapshot.sh · install.sh
+scripts/             check_boundaries.sh · snapshot.sh · install.sh · generate_app_icon.swift
 Fixtures/            real recordings, local-only (gitignored except README.md)
 Makefile             the commands
 ```
@@ -258,6 +258,7 @@ make test                     # every package + hosted AppTests
 make test-package P=Meetings
 make lint                     # swift-format --strict + scripts/check_boundaries.sh
 make format
+make app-icon                 # render the app icon set from the mark's geometry
 scripts/snapshot.sh [scene…]  # render library|summary|transcript|trash|settings to build/snapshots/
 ECHO_DATA_ROOT=/tmp/x ECHO_OPEN_WINDOW=1 build/Build/Products/Debug/Echo.app/Contents/MacOS/Echo
 ```

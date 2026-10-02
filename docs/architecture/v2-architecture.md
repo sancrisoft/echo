@@ -506,6 +506,10 @@ Adopted in ADR-004.
   formatter, configured in `.swift-format`) plus `scripts/check_boundaries.sh`.
 - `make format` — `swift format --in-place --recursive`.
 - `make run` — build and open the app.
+- `make app-icon` — compile `scripts/generate_app_icon.swift` together with
+  `EchoMarkGeometry.swift` and render every slot of `AppIcon.appiconset` from
+  the mark's geometry. Rerun it when the mark changes; the PNGs are output,
+  never edited by hand.
 - `scripts/snapshot.sh [scene…]` — render the main window's scenes to PNGs
   against a copy of the real library (`ECHO_SNAPSHOT_PATH`,
   `ECHO_SNAPSHOT_SCENE`), the design-review tool; pixels cannot be captured from
