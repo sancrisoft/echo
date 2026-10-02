@@ -8,7 +8,7 @@
 //
 
 import AVFoundation
-import Synchronization
+import os
 
 /// The canonical ingest format and the buffer sizes the two taps run at.
 public enum AudioConstants {
@@ -157,8 +157,11 @@ public final class BufferResampler {
         // the buffer over yet" flag cannot be a captured `var`. The block runs
         // synchronously on this thread for the duration of `convert`, so the
         // lock is never contended; it exists to satisfy the closure's
-        // Sendability, not to arbitrate between threads.
-        let consumed = Mutex(false)
+        // Sendability, not to arbitrate between threads. Not a `Mutex`: it is
+        // noncopyable, and Swift 6.4 (Xcode 27) rejects capturing one in this
+        // escaping block with "copy of noncopyable typed value", a compiler
+        // bug by its own account. This lock is a copyable reference.
+        let consumed = OSAllocatedUnfairLock(initialState: false)
         // The block is typed `@Sendable` but `AVAudioConverter` calls it
         // synchronously, on this thread, before `convert` returns — the
         // buffer never actually crosses a thread, and there is no other
