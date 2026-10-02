@@ -106,6 +106,7 @@ final class AppComposition {
         let session = session
         let workspace = workspace
         let windowOpener = windowOpener
+        let library = library
 
         // One definition of what opening Settings means, for the two surfaces
         // that ask for it: the app menu's ⌘, and the menu bar item's Settings….
@@ -132,7 +133,17 @@ final class AppComposition {
                 }
             )
         )
-        island = IslandController(detector: detector, session: session)
+        island = IslandController(
+            detector: detector,
+            session: session,
+            // The two questions the island's faces ask, answered from the
+            // library. Read inside the island's body, so its faces follow the
+            // library through observation rather than through a copy.
+            meetings: IslandMeetings(
+                latest: { library.metas.max { $0.startedAt < $1.startedAt }.map(Self.islandMeeting) },
+                meeting: { id in library.metas.first { $0.id == id }.map(Self.islandMeeting) }
+            )
+        )
 
         updates = UpdateChecker()
         updateInstaller = UpdateInstaller(dataRoot: dataRoot)
@@ -151,6 +162,11 @@ final class AppComposition {
             windowOpener: windowOpener,
             phase: { session.phase }
         )
+    }
+
+    /// A meeting, as the island speaks of it.
+    private static func islandMeeting(_ meta: MeetingMeta) -> IslandMeeting {
+        IslandMeeting(title: meta.title, duration: meta.duration, words: meta.wordCount)
     }
 
     /// Starts every launch side effect. Idempotent; a no-op under a test host.

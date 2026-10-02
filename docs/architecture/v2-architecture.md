@@ -309,7 +309,10 @@ names inside a package are free to change.
   outside each top corner) and `IslandShell` (the chrome: the black, the two
   ears and the row).
 - `IslandController` (`@Observable @MainActor`: `face`, `isExpanded`,
-  `metrics`, `start()`/`stop()`), `IslandPanel`. The controller is also the one
+  `metrics`, `start()`/`stop()`; built with the detector, the session and an
+  `IslandMeetings` — the newest meeting and one by id, closures the composition
+  root answers from `MeetingLibrary`, because the island may not import it),
+  `IslandPanel`, `IslandMeeting` (title, duration, words when known). The controller is also the one
   place detection and the session meet — neither package can observe the other
   — so it reports `recordingChanged` and `hoverChanged` down, once per change
   each. It follows the active screen from three notifications (screen
@@ -326,7 +329,12 @@ names inside a package are free to change.
   it takes the union of where the shell is and where it is going, and is
   trimmed when the spring settles — a window cut to the shell would clip the
   animation at its own edge).
-- `IslandGallery` (DEBUG): every face, collapsed and expanded, on one sheet.
+- The faces (internal, `IslandFaces.swift`): one open row and two ears per face,
+  drawn from values and handing taps back as closures, so the gallery and the
+  tests draw them with fixtures and `IslandRootView` is the one place live
+  sources become words. `FaceText` holds their sentences as pure functions.
+- `IslandGallery` (DEBUG): every face, collapsed and expanded, on one sheet,
+  with the artboards' fixtures.
 
 ---
 

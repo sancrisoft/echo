@@ -2,9 +2,9 @@
 //  IslandGallery.swift
 //  Island
 //
-//  Every face's silhouette, collapsed and expanded, on one sheet — the way the
-//  shell is reviewed against what it should be, without a Mac, a call and a
-//  meeting to put it into each state.
+//  Every face, collapsed and expanded, on one sheet — the way the island is
+//  reviewed against the artboards without a Mac, a call and a meeting to put
+//  it into each state.
 //
 //  The same idea as `DesignGallery`, for the same reason: the island is a
 //  window nobody can screenshot from outside, so the only way to look at it is
@@ -12,21 +12,32 @@
 //  scroll view's visible slice, and a gallery nobody can render in full is not
 //  a review tool.
 //
+//  The faces are the real ones, given the artboards' own fixtures: a Zoom call,
+//  twelve minutes in, a meeting of fifty-eight minutes.
+//
 
+import Audio
 import DesignSystem
+import Recording
 import SwiftUI
 
 #if DEBUG
-    /// The shell in every state, against a fixture screen.
+    /// The island in every state, against a fixture screen.
     public struct IslandGallery: View {
 
         private let metrics: IslandMetrics
 
+        /// The instant the fixtures are measured back from. The faces' clocks
+        /// read the real time, as they do on screen, so the fixtures sit that
+        /// far behind it: twelve minutes forty-one in, eight seconds left.
+        private let now: Date
+
         /// - Parameter metrics: which screen to draw the shell for. The
         ///   notched and the pill cases are different shapes, so both are
         ///   worth a sheet.
-        public init(metrics: IslandMetrics) {
+        public init(metrics: IslandMetrics, now: Date = .now) {
             self.metrics = metrics
+            self.now = now
         }
 
         public var body: some View {
@@ -46,6 +57,17 @@ import SwiftUI
             .padding(EchoSpacing.xl)
         }
 
+        // MARK: Fixtures
+
+        private var meeting: IslandMeeting {
+            IslandMeeting(title: "GoCoInvest onboarding", duration: 58 * 60, words: 5_512)
+        }
+
+        private var startedAt: Date { now.addingTimeInterval(-761) }
+        private var deadline: Date { now.addingTimeInterval(8) }
+
+        // MARK: Drawing
+
         /// Drawn over a ground that is not the shell's own black, so the
         /// flares are visible as flares: what they expose is whatever is
         /// behind the island, and against black they expose nothing.
@@ -58,29 +80,58 @@ import SwiftUI
             return IslandShell(
                 geometry: geometry,
                 isExpanded: isExpanded,
-                leadingEar: {
-                    Circle()
-                        .fill(EchoColor.Island.recording)
-                        .frame(width: EchoControl.recordingDotSize, height: EchoControl.recordingDotSize)
-                },
-                trailingEar: {
-                    Text("00:00")
-                        .font(EchoFont.mono(11.5, weight: .medium))
-                        .foregroundStyle(EchoColor.Island.controlLabel)
-                        // Never wrapped: an ear too narrow for its own words
-                        // has to look too narrow, not two lines tall.
-                        .lineLimit(1)
-                        .fixedSize()
-                },
-                row: {
-                    HStack(spacing: EchoControl.capsuleGap) {
-                        Spacer(minLength: EchoSpacing.s)
-                        Button("Primary") {}.buttonStyle(.islandPrimary)
-                    }
-                }
+                leadingEar: { leadingEar(face) },
+                trailingEar: { trailingEar(face) },
+                row: { row(face) }
             )
             .frame(width: geometry.panelSize.width, height: geometry.panelSize.height)
             .background(EchoColor.surface)
+        }
+
+        @ViewBuilder
+        private func leadingEar(_ face: IslandShellFace) -> some View {
+            switch face {
+            case .idle, .summarizing: EmptyView()
+            case .callDetected: CallDetectedEars(app: "Zoom").leading
+            case .recording: RecordingEars(startedAt: startedAt, stoppedAt: 0).leading
+            case .callEnded: CallEndedEars(deadline: deadline).leading
+            case .saved: SavedEars().leading
+            }
+        }
+
+        @ViewBuilder
+        private func trailingEar(_ face: IslandShellFace) -> some View {
+            switch face {
+            case .idle, .summarizing: EmptyView()
+            case .callDetected: CallDetectedEars(app: "Zoom").trailing
+            case .recording: RecordingEars(startedAt: startedAt, stoppedAt: 0).trailing
+            case .callEnded: CallEndedEars(deadline: deadline).trailing
+            case .saved: SavedEars().trailing
+            }
+        }
+
+        @ViewBuilder
+        private func row(_ face: IslandShellFace) -> some View {
+            switch face {
+            case .idle:
+                IdleRow(lastMeeting: meeting, capture: "Everything", chooseCapture: {}, record: {})
+            case .callDetected:
+                CallDetectedRow(app: "Zoom", scoped: true, dismiss: {}, record: {})
+            case .recording:
+                RecordingRow(
+                    startedAt: startedAt,
+                    stoppedAt: 0,
+                    capture: "Zoom only",
+                    levels: { CaptureLevels(you: 0.64, others: 0.27) },
+                    stop: {}
+                )
+            case .callEnded:
+                CallEndedRow(app: "Zoom", deadline: deadline, answers: (stopNow: {}, keep: {}))
+            case .saved:
+                SavedRow(meeting: meeting, dismiss: {}, open: {})
+            case .summarizing:
+                EmptyView()
+            }
         }
     }
 #endif

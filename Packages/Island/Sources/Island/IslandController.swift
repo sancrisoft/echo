@@ -50,6 +50,7 @@ public final class IslandController {
 
     @ObservationIgnored private let detector: CallDetector
     @ObservationIgnored private let session: RecordingSession
+    @ObservationIgnored private let meetings: IslandMeetings
     @ObservationIgnored private var panel: IslandPanel?
     @ObservationIgnored private var screenObservers: [any NSObjectProtocol] = []
     @ObservationIgnored private var hover: HoverGrace?
@@ -103,9 +104,13 @@ public final class IslandController {
     /// whatever the pointer does (`chooseCapture`).
     @ObservationIgnored private var holdsOpen = false
 
-    public init(detector: CallDetector, session: RecordingSession) {
+    /// - Parameter meetings: the two questions the faces ask about meetings —
+    ///   the newest, and one by id. The island cannot import the library, so
+    ///   the composition root answers them.
+    public init(detector: CallDetector, session: RecordingSession, meetings: IslandMeetings = .none) {
         self.detector = detector
         self.session = session
+        self.meetings = meetings
     }
 
     /// Puts the island on screen and starts following what it shows.
@@ -134,7 +139,8 @@ public final class IslandController {
 
         let tracking = IslandHoverView(
             hosting: NSHostingView(
-                rootView: IslandRootView(controller: self, detector: detector, session: session)
+                rootView: IslandRootView(
+                    controller: self, detector: detector, session: session, meetings: meetings)
             )
         )
         tracking.onCrossing = { entered in
