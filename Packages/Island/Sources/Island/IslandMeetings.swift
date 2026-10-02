@@ -113,6 +113,32 @@ nonisolated enum FaceText {
         return "\(meeting.title) · \(duration(meeting.duration))"
     }
 
+    /// The call-ended face's second line: "Auto-stop in 8 s".
+    static func autoStop(_ seconds: Int) -> String {
+        "Auto-stop in \(seconds) s"
+    }
+
+    /// The countdown as the design writes it in the ear, "stopping 8s". The
+    /// island's own ear carries only the seconds, because the whole of it is
+    /// wider than the ear beside a real cutout; the menu bar has the room.
+    static func stopping(_ seconds: Int) -> String {
+        "stopping \(seconds)s"
+    }
+
+    /// The saved face's ear.
+    static let savedEar = "Saved"
+
+    /// The post-stop face's ear, as the menu bar writes it: the design's word
+    /// for the summary, and the window's own for the transcription pass. The
+    /// island's ear drops the word, which is wider than the ear beside a real
+    /// cutout; the menu bar has the room.
+    static func afterStopEar(_ pass: AfterStopPass) -> String {
+        switch pass {
+        case .transcript: "Finalizing"
+        case .summary: "Summarizing"
+        }
+    }
+
     /// Whole seconds left on the end-of-call countdown, rounded up so the
     /// face never reads 0 while the stop is still a second away. A cleared
     /// deadline — the stop has begun — is zero.

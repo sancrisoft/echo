@@ -112,10 +112,10 @@ public nonisolated enum EchoFont {
     public static var islandTimer: Font { mono(19, weight: .medium) }
 
     /// 11.5 / 600 — the call's app, in an ear.
-    public static var islandEarName: Font { onest(11.5, weight: 600) }
+    public static var islandEarName: Font { onest(11.5, weight: earNameWeight) }
 
     /// 11.5 / 500 — a word in an ear: "Saved", "Summarizing".
-    public static var islandEarStatus: Font { onest(11.5, weight: 500) }
+    public static var islandEarStatus: Font { onest(11.5, weight: earStatusWeight) }
 
     /// 11.5 mono — a number in an ear: the clock, the countdown.
     public static var islandEarNumber: Font { mono(11.5) }
@@ -138,6 +138,27 @@ public nonisolated enum EchoFont {
         }
         return .monospacedDigitSystemFont(ofSize: size, weight: weight == .regular ? .regular : .medium)
     }
+
+    /// The interface face for AppKit: the words the menu bar item carries
+    /// beside the mark when the island is switched off. Positioned on Onest's
+    /// weight axis like `onest`, with the system face as the same fallback.
+    public static func nsInterface(_ size: CGFloat, weight: Double) -> NSFont {
+        let descriptor = NSFontDescriptor(fontAttributes: [
+            .family: interfaceFamily,
+            NSFontDescriptor.AttributeName.variation: [weightAxis: weight],
+        ])
+        guard NSFont(name: interfacePostScriptName, size: size) != nil,
+            let font = NSFont(descriptor: descriptor, size: size)
+        else {
+            return .systemFont(ofSize: size, weight: weight >= 600 ? .semibold : .medium)
+        }
+        return font
+    }
+
+    /// The weights the island's ears set their words in, for the menu bar to
+    /// set the same words in: an app's name, and a status.
+    public static let earNameWeight: Double = 600
+    public static let earStatusWeight: Double = 500
 
     // MARK: - Leading and tracking
     //

@@ -20,6 +20,8 @@
 //
 
 import Audio
+import CallDetection
+import Observation
 
 nonisolated enum ScopeSelection {
 
@@ -52,5 +54,51 @@ nonisolated enum ScopeSelection {
         case .everything: "Everything"
         case .app(let app): "\(app.displayName) only"
         }
+    }
+}
+
+/// The capture Record will use, for every surface that offers the choice: the
+/// idle face's chip and the menu bar's submenu.
+///
+/// One owner, because the two are one choice — a pick made in the menu is what
+/// Record on the island records, and the other way round. It used to be the
+/// island view's own state, which was right while the view was the only place
+/// it could be made. It is still transient: nothing persists it, and a pick
+/// lasts only as long as the call that offered it (`ScopeSelection.effective`).
+@Observable
+@MainActor
+public final class CaptureChoice {
+
+    @ObservationIgnored private let appsInCall: @MainActor () -> [ProcessSelector]
+    private var picked: CaptureScope?
+
+    /// - Parameter appsInCall: the apps detection attributes the call to, asked
+    ///   at every read and never held — the choice follows the call.
+    public init(appsInCall: @escaping @MainActor () -> [ProcessSelector]) {
+        self.appsInCall = appsInCall
+    }
+
+    /// Following a detector, which is what every live surface does.
+    public convenience init(detector: CallDetector) {
+        self.init(appsInCall: { detector.appsInCall })
+    }
+
+    /// What Record will capture right now.
+    public var current: CaptureScope {
+        ScopeSelection.effective(picked: picked, appsInCall: appsInCall())
+    }
+
+    /// The choices, in the order a menu lists them. Never empty.
+    public var options: [CaptureScope] {
+        ScopeSelection.options(appsInCall: appsInCall())
+    }
+
+    public func pick(_ scope: CaptureScope) {
+        picked = scope
+    }
+
+    /// How a choice reads, on the chip and in the menu.
+    public static func label(for scope: CaptureScope) -> String {
+        ScopeSelection.label(for: scope)
     }
 }

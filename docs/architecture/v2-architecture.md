@@ -183,7 +183,7 @@ names inside a package are free to change.
 - `TranscriptSegment`, `AudioChannel`, `Speaker`, `TranscriptUtterance.derive(from:)`, `TranscriptSegment.wordCount(of:)`.
 - `DataRoot`: `appSupport`, `meetings`, `models`, `logs`, `settingsFile`, `summaryDownloadStateFile`. No accessor creates directories; owners do.
 - `ErrorTrace.record(_:error:category:metadata:)`, `ErrorTraceLog` (prune, reader for tests).
-- `AppSettings` (`@Observable @MainActor`): typed read-only properties plus one mutator per preference.
+- `AppSettings` (`@Observable @MainActor`): typed read-only properties plus one mutator per preference. `showsIsland` (on by default) is the island's switch: it takes the panel away and nothing else — detection keeps running and the menu bar item carries the island (DEC-1).
 - `LaunchEnvironment.current`: typed debug flags (`dataRootOverride`, `opensWindowAtLaunch`, `appearanceOverride`, `snapshotPath`, `snapshotScene`, `keepsRetainedAudio`, `installedVersionOverride`), populated only in DEBUG.
 - `TestHost.isActive`.
 - `AppIdentity`: `bundleIdentifier`, `logSubsystem`, `version` (`short`, `build`, `display`).
@@ -347,6 +347,22 @@ names inside a package are free to change.
   sources become words. `FaceText` holds their sentences as pure functions.
 - `IslandGallery` (DEBUG): every face, collapsed and expanded, on one sheet,
   with the artboards' fixtures.
+- `CaptureChoice` (`@Observable @MainActor`: `current`, `options`, `pick(_:)`,
+  `label(for:)`): the one owner of what Record captures, shared by the idle
+  face's chip and the menu's submenu. Transient — a pick lasts as long as the
+  call that offered it — and built by the composition root over the
+  detector's `appsInCall`.
+- `IslandMenu` (`ears`, `entries(now:)`), `IslandEars` (what the collapsed
+  island says: `text(now:)`, `isRecordingRed`, `ticks`) and `IslandMenuEntry`
+  (a status line, a command, or the capture choice; `takesShortcut`): the
+  island in words, for the menu bar item and its menu. Built from the same
+  sources and `FaceText` as the faces, over an internal `IslandReading` the
+  tests write down, so the bar, the menu and the island cannot disagree. The
+  menu is the same with the island switched on or off — it is the keyboard's
+  and VoiceOver's way to every face's actions (#119); only what the item shows
+  beside the mark follows the switch. `IslandController` takes `settings` and
+  `capture` too: switched off, it keeps resolving the face and reporting to
+  detection, and orders the panel out.
 
 ---
 
@@ -362,9 +378,10 @@ One owner per kind of state. Nothing is mirrored.
 | Detection (apps in call, machine state) | `CallDetector` (CallDetection) | `appsInCall` is derived from the machine's attribution; not a second matcher. |
 | Updates | `UpdateChecker` (Updates) | One instance, built by `AppComposition`. Settings, the app menu and the launch prompt all read it; none keeps a copy. Whether this launch has already interrupted is the prompt's own latch and is not persisted — Later means the next launch asks again. |
 | Preferences | `AppSettings` (EchoCore) | `settings.json`, key-by-key decode, additive. Consumers read the property at the moment they act. |
+| Capture choice (what Record captures) | `CaptureChoice` (Island) | Transient, never persisted; one pick for the island's chip and the menu's submenu, dropped when the call that offered it ends. |
 | Launch at login | `SMAppService` (read through Workspace's settings screen) | The OS is the source of truth; never mirrored. |
 | Window navigation (section, selection, opened document, tab, search, sort) | `WorkspaceModel` (Workspace) | One object; the PoC's triple-tracked selection and dead `MeetingLibrary.selection` do not return. |
-| Island face, deadline | `CallDetector` (CallDetection), composed by `IslandController` (Island) | Detection's face is the machine's output and its deadline is the real one a countdown renders. The island composes that face with the session's phase into the silhouette it wears — a pure resolver, not a second copy. |
+| Island face, deadline | `CallDetector` (CallDetection), composed by `IslandController` (Island) | Detection's face is the machine's output and its deadline is the real one a countdown renders. The island composes that face with the session's phase into the silhouette it wears — a pure resolver, not a second copy. The menu bar item and its menu read the same resolver through `IslandMenu`, never the controller. |
 | Transient UI (hover, confirmation dialogs, focus) | `@State` in the view | |
 | Derived (a meeting's display status) | Pure resolver in Workspace over `MeetingMeta` + `RecordingSession` + `FinalizationMachine` state | Computed, never stored. |
 

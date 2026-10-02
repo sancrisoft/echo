@@ -2,20 +2,19 @@
 //  MenuBarMenuTests.swift
 //  AppTests
 //
-//  What the menu is made of in each phase, and the rule that only shows up in
-//  three of them: the post-stop phases contribute no item of their own, so the
-//  divider that follows has nothing above it. SwiftUI's `Menu` elided a leading
-//  divider and `NSMenu` draws it, which is a defect the port could only inherit
-//  silently.
+//  How the menu is put together from the island's part and the app's: the
+//  island's lines and commands first, a rule only when there is something
+//  above it — SwiftUI's `Menu` elided a leading divider and `NSMenu` draws
+//  it — then the way back into the app, which never changes. What the island's
+//  part holds for each face is the island's, and tested there.
 //
 //  Hosted because the type belongs to the app target and there is no other way
 //  to reach it; the menu it builds asks nothing of the host.
 //
 
 import AppKit
-import Audio
 import Foundation
-import Recording
+import Island
 import Testing
 
 @testable import Echo
@@ -24,66 +23,106 @@ import Testing
 @MainActor
 struct MenuBarMenuTests {
 
-    /// Every phase, including the three that offer nothing.
-    private nonisolated static let phases: [RecordingPhase] = [
-        .idle,
-        .recording(startedAt: Date(), scope: .everything),
-        .stopping,
-        .finalizing(meetingID: UUID(), progress: 0.5),
-        .summarizing(meetingID: UUID()),
-    ]
-
-    private func menu(in phase: RecordingPhase) -> NSMenu {
+    private func contents(_ entries: @escaping () -> [IslandMenuEntry]) -> MenuBarMenu {
         MenuBarMenu(
-            phase: { phase },
-            requests: MenuBarMenu.Requests(
-                startRecording: {},
-                stopRecording: {},
-                openEcho: {},
-                openSettings: {}
-            )
+            island: { _ in entries() },
+            requests: MenuBarMenu.Requests(openEcho: {}, openSettings: {})
         )
-        .build()
     }
 
-    @Test("no phase opens the menu on a separator", arguments: phases)
-    func neverStartsWithASeparator(phase: RecordingPhase) throws {
-        let first = try #require(menu(in: phase).items.first)
+    private func menu(_ entries: [IslandMenuEntry]) -> NSMenu {
+        contents { entries }.build()
+    }
+
+    private func titles(_ menu: NSMenu) -> [String] {
+        menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
+    }
+
+    @Test("with nothing from the island, the menu opens at Open Echo, never on a rule")
+    func nothingFromTheIsland() throws {
+        let first = try #require(menu([]).items.first)
         #expect(!first.isSeparatorItem)
+        #expect(first.title == "Open Echo")
     }
 
-    @Test("idle offers Record at the top")
-    func idleOffersRecord() throws {
-        #expect(try #require(menu(in: .idle).items.first).title == "Record")
+    @Test("the island's part comes first, with a rule beneath it")
+    func theIslandsPartComesFirst() {
+        let menu = menu([
+            IslandMenuEntry(title: "Zoom call detected", kind: .status),
+            IslandMenuEntry(title: "Record", kind: .action({})),
+        ])
+        #expect(Array(titles(menu).prefix(4)) == ["Zoom call detected", "Record", "—", "Open Echo"])
     }
 
-    @Test("a live recording offers Stop at the top")
-    func recordingOffersStop() throws {
-        let menu = menu(in: .recording(startedAt: Date(), scope: .everything))
-        #expect(try #require(menu.items.first).title == "Stop Recording")
+    @Test("a line that says is not a command")
+    func aStatusLineDoesNothing() throws {
+        let menu = menu([IslandMenuEntry(title: "Writing the summary", kind: .status)])
+        menu.update()
+        let line = try #require(menu.items.first)
+        #expect(line.action == nil)
+        #expect(!line.isEnabled)
     }
 
-    /// Work the user cannot answer: the phase contributes nothing, so the menu
-    /// starts at the way back into the app.
-    @Test(
-        "the post-stop phases start at Open Echo",
-        arguments: [
-            RecordingPhase.stopping,
-            .finalizing(meetingID: UUID(), progress: 0.5),
-            .summarizing(meetingID: UUID()),
+    @Test("a command runs what the island handed over")
+    func aCommandRuns() throws {
+        var ran = 0
+        let menu = menu([IslandMenuEntry(title: "Stop", kind: .action({ ran += 1 }))])
+        menu.performActionForItem(at: 0)
+        #expect(ran == 1)
+    }
+
+    @Test("a disabled command stays disabled")
+    func aDisabledCommand() throws {
+        let menu = menu([IslandMenuEntry(title: "Record", kind: .action({}), isEnabled: false)])
+        menu.update()
+        #expect(try #require(menu.items.first).isEnabled == false)
+    }
+
+    @Test("the capture choice is a submenu, the choice in force checked")
+    func theCaptureChoice() throws {
+        var picked: [String] = []
+        let menu = menu([
+            IslandMenuEntry(
+                title: "Zoom only",
+                kind: .choice([
+                    .init(title: "Zoom only", isSelected: true, pick: { picked.append("zoom") }),
+                    .init(title: "Everything", isSelected: false, pick: { picked.append("everything") }),
+                ]))
+        ])
+        let submenu = try #require(menu.items.first?.submenu)
+        #expect(submenu.items.map(\.title) == ["Zoom only", "Everything"])
+        #expect(submenu.items.map(\.state) == [.on, .off])
+        submenu.performActionForItem(at: 1)
+        #expect(picked == ["everything"])
+    }
+
+    @Test("the way back, the version and Quit are always there")
+    func theRestOfTheMenuIsConstant() {
+        for entries in [[], [IslandMenuEntry(title: "Record", kind: .action({}))]] {
+            let titles = menu(entries).items.filter { !$0.isSeparatorItem }.map(\.title)
+            #expect(titles.contains("Open Echo"))
+            #expect(titles.contains("Settings…"))
+            #expect(titles.last == "Quit Echo")
+        }
+    }
+
+    @Test("a refresh replaces the island's part and leaves the rest alone")
+    func aRefreshReplacesOnlyTheIslandsPart() {
+        var entries = [
+            IslandMenuEntry(title: "00:12:41 · Everything", kind: .status),
+            IslandMenuEntry(title: "Stop", kind: .action({})),
         ]
-    )
-    func postStopStartsAtOpenEcho(phase: RecordingPhase) throws {
-        #expect(try #require(menu(in: phase).items.first).title == "Open Echo")
-    }
+        let contents = contents { entries }
+        let menu = contents.build()
+        let tail = Array(titles(menu).dropFirst(3))
 
-    /// The rest of the menu is the same in every phase, and the two dividers
-    /// inside it always have something above them.
-    @Test("the way back, the version and Quit are always there", arguments: phases)
-    func theRestOfTheMenuIsConstant(phase: RecordingPhase) {
-        let titles = menu(in: phase).items.filter { !$0.isSeparatorItem }.map(\.title)
-        #expect(titles.contains("Open Echo"))
-        #expect(titles.contains("Settings…"))
-        #expect(titles.last == "Quit Echo")
+        entries = [IslandMenuEntry(title: "Zoom call ended · Auto-stop in 8 s", kind: .status)]
+        contents.refresh(menu)
+        #expect(Array(titles(menu).prefix(2)) == ["Zoom call ended · Auto-stop in 8 s", "—"])
+        #expect(Array(titles(menu).dropFirst(2)) == tail)
+
+        entries = []
+        contents.refresh(menu)
+        #expect(titles(menu) == tail)
     }
 }

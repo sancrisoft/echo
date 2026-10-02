@@ -23,14 +23,9 @@ struct IslandRootView: View {
     let controller: IslandController
     let detector: CallDetector
     let session: RecordingSession
+    let capture: CaptureChoice
     let meetings: IslandMeetings
     let openMeeting: (UUID) -> Void
-
-    /// The capture the user picked from the idle face's chip. Transient, and
-    /// the view's own: it does not outlive the call that offered it
-    /// (`ScopeSelection.effective`), and it means nothing once Record is
-    /// pressed.
-    @State private var pickedScope: CaptureScope?
 
     /// Where the clock stopped and what was being captured, kept from the
     /// moment the session left `.recording`. The stopping phase carries
@@ -72,40 +67,12 @@ struct IslandRootView: View {
 
     // MARK: - What the sources say
 
-    /// What Record will capture right now.
-    private var capture: CaptureScope {
-        ScopeSelection.effective(picked: pickedScope, appsInCall: detector.appsInCall)
-    }
+    private var noticedCall: (app: String, scoped: Bool) { detector.noticedCall }
 
-    /// The call the detector noticed: the name its offer carries, or — once
-    /// the offer has shrunk to its pill, which carries none — the app the
-    /// detector attributes the call to. Both come from the one list, so they
-    /// cannot disagree.
-    private var noticedCall: (app: String, scoped: Bool) {
-        if case .startPrompt(let app, let scoped) = detector.face { return (app, scoped) }
-        if let first = detector.appsInCall.first { return (first.displayName, first.scopeable) }
-        return ("", false)
-    }
-
-    private var endedCallApp: String {
-        if case .endGrace(let app) = detector.face { return app }
-        return detector.appsInCall.first?.displayName ?? ""
-    }
-
-    /// The meeting the saved face is about: the one the session is carrying
-    /// through its passes, or — once those are done — the newest one.
-    private var savedMeeting: IslandMeeting? {
-        session.currentMeetingID.flatMap(meetings.meeting) ?? meetings.latest()
-    }
+    private var savedMeeting: IslandMeeting? { session.savedMeeting(in: meetings) }
 
     private var recordingScope: CaptureScope {
         session.phase.captureScope ?? stoppedScope
-    }
-
-    /// Which pass the post-stop face reports.
-    private var afterStopPass: AfterStopPass {
-        if case .finalizing = session.phase { return .transcript }
-        return .summary
     }
 
     /// The progress the shell draws along its bottom edge, only where there
@@ -153,7 +120,7 @@ struct IslandRootView: View {
         case .idle:
             IdleRow(
                 lastMeeting: meetings.latest(),
-                capture: ScopeSelection.label(for: capture),
+                capture: CaptureChoice.label(for: capture.current),
                 chooseCapture: chooseCapture,
                 record: record
             )
@@ -180,7 +147,7 @@ struct IslandRootView: View {
 
         case .callEnded:
             CallEndedRow(
-                app: endedCallApp,
+                app: detector.endedCallApp,
                 deadline: detector.graceDeadline,
                 // The countdown's two answers exist only while there is a
                 // countdown. Between "Stop now" and the meeting reaching disk
@@ -202,7 +169,7 @@ struct IslandRootView: View {
         case .summarizing:
             let meetingID = session.phase.meetingID
             SummarizingRow(
-                pass: afterStopPass,
+                pass: session.phase.afterStopPass,
                 meeting: meetingID.flatMap(meetings.meeting),
                 dismiss: { controller.foldUntilPointerLeaves() },
                 open: meetingID.map { id in { openMeeting(id) } }
@@ -213,17 +180,16 @@ struct IslandRootView: View {
     // MARK: - Taps
 
     private func chooseCapture() {
-        let options = ScopeSelection.options(appsInCall: detector.appsInCall)
-        if let picked = controller.chooseCapture(options, selected: capture) {
-            pickedScope = picked
+        if let picked = controller.chooseCapture(capture.options, selected: capture.current) {
+            capture.pick(picked)
         }
     }
 
     /// The app's way into a recording that no call was noticed for. Everything
-    /// — the menu bar, the window, the island — runs this same gated start;
-    /// the island alone passes the capture its chip shows.
+    /// — the menu bar, the window, the island — runs this same gated start,
+    /// with the capture the chip and the menu share.
     private func record() {
-        let scope = capture
+        let scope = capture.current
         Task { await session.start(scope: scope) }
     }
 }

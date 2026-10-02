@@ -115,7 +115,7 @@ final class AppComposition {
             windowOpener.openMainWindow()
         }
         self.showSettings = showSettings
-        detector = CallDetector(
+        let detector = CallDetector(
             settings: settings,
             requests: CallDetectionRequests(
                 startRecording: { scope in Task { await session.start(scope: scope) } },
@@ -133,38 +133,52 @@ final class AppComposition {
                 }
             )
         )
+        self.detector = detector
+
+        // What Record captures, one choice for the island's chip and the
+        // menu's submenu alike.
+        let capture = CaptureChoice(detector: detector)
+        // The two questions the island's faces ask, answered from the
+        // library. Read inside the island's body, so its faces follow the
+        // library through observation rather than through a copy.
+        let meetings = IslandMeetings(
+            latest: { library.metas.max { $0.startedAt < $1.startedAt }.map(Self.islandMeeting) },
+            meeting: { id in library.metas.first { $0.id == id }.map(Self.islandMeeting) }
+        )
+        let openMeeting: (UUID) -> Void = { id in
+            workspace.open(id)
+            windowOpener.openMainWindow()
+        }
         island = IslandController(
             detector: detector,
             session: session,
-            // The two questions the island's faces ask, answered from the
-            // library. Read inside the island's body, so its faces follow the
-            // library through observation rather than through a copy.
-            meetings: IslandMeetings(
-                latest: { library.metas.max { $0.startedAt < $1.startedAt }.map(Self.islandMeeting) },
-                meeting: { id in library.metas.first { $0.id == id }.map(Self.islandMeeting) }
-            ),
-            openMeeting: { id in
-                workspace.open(id)
-                windowOpener.openMainWindow()
-            }
+            settings: settings,
+            capture: capture,
+            meetings: meetings,
+            openMeeting: openMeeting
         )
+        // The island in words, for the menu bar item and its menu: the same
+        // sources and the same calls the faces make.
+        let islandMenu = IslandMenu(
+            detector: detector, session: session, meetings: meetings, capture: capture, openMeeting: openMeeting)
 
         updates = UpdateChecker()
         updateInstaller = UpdateInstaller(dataRoot: dataRoot)
         updatePrompt = UpdatePrompt(checker: updates, installer: updateInstaller, session: session)
 
+        let settings = settings
         menuBarItem = MenuBarItem(
             contents: MenuBarMenu(
-                phase: { session.phase },
+                island: { now in islandMenu.entries(now: now) },
                 requests: MenuBarMenu.Requests(
-                    startRecording: { Task { await session.start() } },
-                    stopRecording: { Task { await session.stop() } },
                     openEcho: { windowOpener.openMainWindow() },
                     openSettings: showSettings
                 )
             ),
             windowOpener: windowOpener,
-            phase: { session.phase }
+            phase: { session.phase },
+            ears: { islandMenu.ears },
+            showsIsland: { settings.showsIsland }
         )
     }
 

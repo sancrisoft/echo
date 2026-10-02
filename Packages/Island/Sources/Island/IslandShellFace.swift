@@ -84,7 +84,7 @@ extension IslandShellFace {
     ///     silhouette. There is one face for post-stop work and this is it;
     ///     whether the words on it can cover both passes honestly is a
     ///     question for whoever writes them.
-    public static func resolve(detection: IslandFace?, phase: RecordingPhase) -> IslandShellFace {
+    public nonisolated static func resolve(detection: IslandFace?, phase: RecordingPhase) -> IslandShellFace {
         switch detection {
         case .startPrompt, .compactPill: return .callDetected
         case .endGrace: return .callEnded
@@ -112,7 +112,7 @@ extension IslandShellFace {
     /// pill is retracted by definition: an ignored offer shrinks to the ears
     /// rather than nagging, and the machine that decided so is the only thing
     /// that may decide it back.
-    public func expandsOnItsOwn(detection: IslandFace?) -> Bool {
+    public nonisolated func expandsOnItsOwn(detection: IslandFace?) -> Bool {
         if detection == .compactPill { return false }
         switch self {
         case .callDetected, .callEnded, .saved: return true
@@ -144,7 +144,7 @@ extension IslandShellFace {
     /// keeps the hover grace honest: a window ordered out from under the
     /// pointer would leave the grace believing the island was still hovered,
     /// with no crossing coming to correct it.
-    public func isOnScreen(on metrics: IslandMetrics, isOpen: Bool) -> Bool {
+    public nonisolated func isOnScreen(on metrics: IslandMetrics, isOpen: Bool) -> Bool {
         guard metrics.drawsCutout, metrics.isFullScreen else { return true }
         return announces || isOpen
     }
@@ -155,7 +155,7 @@ extension IslandShellFace {
     /// the idle face is reached at all. A face that opened on its own stays
     /// open without it: the pointer can bring the shell out, never put it
     /// back.
-    public func isOpen(detection: IslandFace?, hovered: Bool) -> Bool {
+    public nonisolated func isOpen(detection: IslandFace?, hovered: Bool) -> Bool {
         hovered || expandsOnItsOwn(detection: detection)
     }
 }

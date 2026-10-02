@@ -139,7 +139,10 @@ public nonisolated enum EchoControl {
     public static let menuBarMarkSize: CGFloat = 16
     /// Between the mark and the timer beside it while a session runs.
     public static let menuBarTimerGap: CGFloat = 7
-    /// The timer's size, in the monospaced face.
+    /// The timer's size, in the monospaced face. With the island switched off
+    /// it is the size of every word the item carries beside the mark too —
+    /// the countdown in the same face, a name or a status in the interface
+    /// one — so the item has one size, the one the design draws for it.
     public static let menuBarTimerSize: CGFloat = 11
 }
 

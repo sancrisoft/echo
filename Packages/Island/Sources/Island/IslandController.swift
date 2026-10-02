@@ -50,6 +50,8 @@ public final class IslandController {
 
     @ObservationIgnored private let detector: CallDetector
     @ObservationIgnored private let session: RecordingSession
+    @ObservationIgnored private let settings: AppSettings
+    @ObservationIgnored private let capture: CaptureChoice
     @ObservationIgnored private let meetings: IslandMeetings
     @ObservationIgnored private let openMeeting: (UUID) -> Void
     @ObservationIgnored private var panel: IslandPanel?
@@ -110,6 +112,9 @@ public final class IslandController {
     @ObservationIgnored private var folded = false
 
     /// - Parameters:
+    ///   - settings: read for the one preference that is the island's own,
+    ///     whether it is shown at all.
+    ///   - capture: what Record captures, shared with the menu bar's submenu.
     ///   - meetings: the two questions the faces ask about meetings — the
     ///     newest, and one by id. The island cannot import the library, so the
     ///     composition root answers them.
@@ -118,11 +123,15 @@ public final class IslandController {
     public init(
         detector: CallDetector,
         session: RecordingSession,
+        settings: AppSettings,
+        capture: CaptureChoice,
         meetings: IslandMeetings = .none,
         openMeeting: @escaping (UUID) -> Void = { _ in }
     ) {
         self.detector = detector
         self.session = session
+        self.settings = settings
+        self.capture = capture
         self.meetings = meetings
         self.openMeeting = openMeeting
     }
@@ -154,8 +163,8 @@ public final class IslandController {
         let tracking = IslandHoverView(
             hosting: NSHostingView(
                 rootView: IslandRootView(
-                    controller: self, detector: detector, session: session, meetings: meetings,
-                    openMeeting: openMeeting)
+                    controller: self, detector: detector, session: session, capture: capture,
+                    meetings: meetings, openMeeting: openMeeting)
             )
         )
         tracking.onCrossing = { entered in
@@ -260,10 +269,16 @@ public final class IslandController {
         withObservationTracking {
             _ = detector.face
             _ = session.phase
+            _ = settings.showsIsland
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, self.panel != nil else { return }
                 self.observe()
+                // Switched off under the pointer: the window goes, and with it
+                // the crossing that would have said the pointer left. Without
+                // this the grace keeps believing it is inside, and detection
+                // keeps every retract suspended for a pointer that is not there.
+                if !self.settings.showsIsland { self.hover?.forget() }
                 self.update()
             }
         }
@@ -452,6 +467,13 @@ public final class IslandController {
         // at all (which is how the island is looked at, since it cannot be
         // screenshotted), and the next thing worth announcing would be shown
         // where the last one was before being moved.
+        // Switched off is off on every screen, and only the panel: the face is
+        // still resolved and detection still told, because the menu bar item
+        // says what the island would have said (DEC-1).
+        guard settings.showsIsland else {
+            panel.orderOut(nil)
+            return
+        }
         guard face.isOnScreen(on: metrics, isOpen: isExpanded) else {
             #if DEBUG
                 if panel.isVisible {

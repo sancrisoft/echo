@@ -10,6 +10,7 @@
 
 import Audio
 import Foundation
+import Island
 import Recording
 import Testing
 
@@ -44,5 +45,35 @@ struct MenuBarLookTests {
     )
     func afterTheStop(phase: RecordingPhase) {
         #expect(MenuBarItem.Look.of(phase, now: start) == .idle)
+    }
+
+    // MARK: With the island switched off
+
+    @Test("off, the item says what the ears would: the call's app, the status words")
+    func theEarsInWords() {
+        #expect(MenuBarItem.Look.of(IslandEars.none, now: start, stoppedAt: 0) == .idle)
+        #expect(MenuBarItem.Look.of(.call(app: "Zoom"), now: start, stoppedAt: 0) == .call("Zoom"))
+        #expect(MenuBarItem.Look.of(.saved, now: start, stoppedAt: 0) == .status("Saved"))
+        #expect(MenuBarItem.Look.of(.afterStop(.summary), now: start, stoppedAt: 0) == .status("Summarizing"))
+        #expect(MenuBarItem.Look.of(.afterStop(.transcript), now: start, stoppedAt: 0) == .status("Finalizing"))
+    }
+
+    @Test("off, the countdown is written out in full, in red")
+    func theCountdown() {
+        let look = MenuBarItem.Look.of(.countdown(deadline: start.addingTimeInterval(8)), now: start, stoppedAt: 0)
+        #expect(look == .countdown("stopping 8s"))
+    }
+
+    @Test("off, a live clock is the same red clock, and a stopped one holds where it stopped")
+    func theClock() {
+        #expect(
+            MenuBarItem.Look.of(.clock(startedAt: start), now: start.addingTimeInterval(761.6), stoppedAt: 0)
+                == .recording(elapsed: 761))
+        #expect(MenuBarItem.Look.of(.clock(startedAt: nil), now: start, stoppedAt: 761) == .recording(elapsed: 761))
+    }
+
+    @Test("a call with no name leaves the mark alone")
+    func aNamelessCall() {
+        #expect(MenuBarItem.Look.of(.call(app: ""), now: start, stoppedAt: 0) == .idle)
     }
 }

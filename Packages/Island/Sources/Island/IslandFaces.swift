@@ -306,7 +306,7 @@ struct CallEndedRow: View {
             } first: {
                 Text(FaceText.callEnded(app)).faceTitle()
             } second: {
-                Text("Auto-stop in \(FaceText.secondsLeft(until: deadline, now: context.date)) s").faceDetail()
+                Text(FaceText.autoStop(FaceText.secondsLeft(until: deadline, now: context.date))).faceDetail()
             } controls: {
                 if let answers {
                     Button("Stop now", action: answers.stopNow).buttonStyle(.islandQuiet)
@@ -374,7 +374,7 @@ struct SavedEars {
     }
 
     var trailing: some View {
-        Text("Saved")
+        Text(FaceText.savedEar)
             .font(EchoFont.islandEarStatus)
             .foregroundStyle(EchoColor.Island.earStatus)
             .lineLimit(1)
@@ -430,7 +430,7 @@ struct SummarizingEars {
 }
 
 /// The two passes that run after a stop.
-enum AfterStopPass: Equatable {
+public nonisolated enum AfterStopPass: Equatable, Sendable {
     case transcript
     case summary
 }

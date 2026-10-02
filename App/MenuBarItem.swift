@@ -15,6 +15,12 @@
 //  not a template — a template cannot be red — and it is the one thing on the
 //  bar a meeting in progress has to be visible as.
 //
+//  With the island switched off, the item says what the collapsed island
+//  would have said in its ears, in full: the call's app, the clock, the
+//  countdown to the stop in red, "Saved", the work after a stop (DEC-1,
+//  product owner 2026-10-02). The island's ears shorten some of those to fit
+//  beside a real cutout; the bar has the room.
+//
 //  It is also the one view an agent app always has on screen, so it carries the
 //  bridge that hands SwiftUI's `openWindow` to the AppKit side. Without that,
 //  the app menu, the menu's own Open Echo and a reopen all lose the only way
@@ -23,6 +29,7 @@
 
 import AppKit
 import DesignSystem
+import Island
 import Recording
 import SwiftUI
 
@@ -31,19 +38,41 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
     private let contents: MenuBarMenu
     private let windowOpener: WindowOpener
     private let phase: () -> RecordingPhase
+    private let ears: () -> IslandEars
+    private let showsIsland: () -> Bool
     private var item: NSStatusItem?
 
-    /// The clock while a session runs. It ticks on the session's own seconds,
-    /// not on whenever it happened to start, so the bar and the island turn
-    /// over together.
+    /// The clock or the countdown while one runs. It ticks on the session's
+    /// own seconds — or the deadline's — not on whenever it happened to start,
+    /// so the bar and the island turn over together.
     private var ticker: Task<Void, Never>?
+    private var tickingFrom: Date?
 
-    /// - Parameter phase: asked whenever the item draws and followed for
-    ///   changes, never held: what the bar shows is the session's phase now.
-    init(contents: MenuBarMenu, windowOpener: WindowOpener, phase: @escaping () -> RecordingPhase) {
+    /// The last whole seconds the clock read, kept for the moment the session
+    /// stops and the island's ears hold the clock where it stopped.
+    private var lastElapsed = 0
+
+    /// The open menu, while it is open: its clock and countdown move on.
+    private var openMenu: NSMenu?
+    private var menuTicker: Task<Void, Never>?
+
+    /// - Parameters:
+    ///   - phase: asked whenever the item draws and followed for changes,
+    ///     never held: what the bar shows is the session's phase now.
+    ///   - ears: what the collapsed island would say, for when it is off.
+    ///   - showsIsland: whether the island is switched on, read at each draw.
+    init(
+        contents: MenuBarMenu,
+        windowOpener: WindowOpener,
+        phase: @escaping () -> RecordingPhase,
+        ears: @escaping () -> IslandEars,
+        showsIsland: @escaping () -> Bool
+    ) {
         self.contents = contents
         self.windowOpener = windowOpener
         self.phase = phase
+        self.ears = ears
+        self.showsIsland = showsIsland
     }
 
     /// Puts the item in the menu bar. Called once the app is actually up: a
@@ -78,19 +107,42 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
 
     // MARK: - What it shows
 
-    /// What the item shows, decided from the phase alone.
+    /// What the item shows.
     enum Look: Equatable {
         /// The mark, as a template.
         case idle
         /// The mark in red and the whole seconds since the session began.
         case recording(elapsed: Int)
+        /// The mark in red and the countdown to the stop, in the clock's face.
+        case countdown(String)
+        /// The mark and the name of a call's app, in the bar's own ink.
+        case call(String)
+        /// The mark and a word of status, in the bar's own ink.
+        case status(String)
 
-        /// Only a live capture is shown. Stopping, the transcription pass and
-        /// the summary are work the user did not ask to watch from the bar;
-        /// the island reports them.
+        /// With the island up: only a live capture is shown. Stopping, the
+        /// transcription pass and the summary are work the user did not ask
+        /// to watch from the bar; the island reports them.
         static func of(_ phase: RecordingPhase, now: Date) -> Look {
             guard let startedAt = phase.startedAt else { return .idle }
             return .recording(elapsed: EchoClock.elapsedSeconds(since: startedAt, now: now))
+        }
+
+        /// With the island switched off: what its ears would say. A clock
+        /// that has stopped holds `stoppedAt`, as the ears do.
+        static func of(_ ears: IslandEars, now: Date, stoppedAt: Int) -> Look {
+            switch ears {
+            case .none: return .idle
+            case .clock(let startedAt):
+                return .recording(
+                    elapsed: startedAt.map { EchoClock.elapsedSeconds(since: $0, now: now) } ?? stoppedAt)
+            case .countdown:
+                return ears.text(now: now).map(Look.countdown) ?? .idle
+            case .call:
+                return ears.text(now: now).map(Look.call) ?? .idle
+            case .saved, .afterStop:
+                return ears.text(now: now).map(Look.status) ?? .idle
+            }
         }
     }
 
@@ -107,28 +159,44 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
 
     private func render() {
         guard let button = item?.button else { return }
-        let current = phase()
-        switch Look.of(current, now: .now) {
-        case .idle:
-            ticker?.cancel()
-            ticker = nil
-            button.image = Self.idleImage
-        case .recording(let elapsed):
-            button.image = Self.recordingImage(clock: EchoClock.compact(elapsed))
-            if ticker == nil, let startedAt = current.startedAt {
-                ticker = tick(from: startedAt)
+        let now = Date.now
+        let look: Look
+        let reference: Date?
+        if showsIsland() {
+            let current = phase()
+            look = Look.of(current, now: now)
+            reference = current.startedAt
+        } else {
+            let said = ears()
+            look = Look.of(said, now: now, stoppedAt: lastElapsed)
+            switch said {
+            case .clock(let startedAt): reference = startedAt
+            case .countdown(let deadline): reference = deadline
+            case .none, .call, .saved, .afterStop: reference = nil
             }
         }
+        if case .recording(let elapsed) = look { lastElapsed = elapsed }
+        button.image = Self.image(for: look)
+        tick(from: reference)
     }
 
-    /// Redraws at each whole second of the session. The wait is worked out
+    /// Redraws at each whole second of `reference` — the session's start, or
+    /// the countdown's deadline — while there is one. The wait is worked out
     /// again every time rather than a fixed second, so a late wake-up does not
     /// carry into the next one.
-    private func tick(from startedAt: Date) -> Task<Void, Never> {
-        Task { [weak self] in
+    private func tick(from reference: Date?) {
+        guard reference != tickingFrom else { return }
+        ticker?.cancel()
+        tickingFrom = reference
+        guard let reference else {
+            ticker = nil
+            return
+        }
+        ticker = Task { [weak self] in
             while !Task.isCancelled {
-                let into = Date.now.timeIntervalSince(startedAt).truncatingRemainder(dividingBy: 1)
-                try? await Task.sleep(for: .seconds(max(0.05, 1 - into)))
+                let into = Date.now.timeIntervalSince(reference).truncatingRemainder(dividingBy: 1)
+                let wait = into >= 0 ? 1 - into : -into
+                try? await Task.sleep(for: .seconds(max(0.05, wait)))
                 guard !Task.isCancelled else { return }
                 self?.render()
             }
@@ -137,17 +205,45 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
 
     private static let idleImage = EchoMarkImage.make(size: EchoControl.menuBarMarkSize, isTemplate: true)
 
-    /// The red mark and the clock as one image, so the gap between them is the
+    private static func image(for look: Look) -> NSImage {
+        switch look {
+        case .idle:
+            return idleImage
+        case .recording(let elapsed):
+            let clock = EchoClock.compact(elapsed)
+            return markAndWords(
+                clock, font: EchoFont.nsMono(EchoControl.menuBarTimerSize), ink: NSColor(EchoColor.recording),
+                description: "Echo, recording, \(clock)")
+        case .countdown(let words):
+            return markAndWords(
+                words, font: EchoFont.nsMono(EchoControl.menuBarTimerSize), ink: NSColor(EchoColor.recording),
+                description: "Echo, \(words)")
+        case .call(let app):
+            return markAndWords(
+                app, font: EchoFont.nsInterface(EchoControl.menuBarTimerSize, weight: EchoFont.earNameWeight),
+                ink: nil, description: "Echo, \(app)")
+        case .status(let words):
+            return markAndWords(
+                words, font: EchoFont.nsInterface(EchoControl.menuBarTimerSize, weight: EchoFont.earStatusWeight),
+                ink: nil, description: "Echo, \(words)")
+        }
+    }
+
+    /// The mark and its words as one image, so the gap between them is the
     /// design's rather than whatever a button puts between an image and a
-    /// title. `nonisolated`, so the drawing handler it builds is too: AppKit
-    /// decides which thread draws an image, and a handler bound to the main
-    /// actor would trap on any other.
-    private nonisolated static func recordingImage(clock: String) -> NSImage {
-        let ink = NSColor(EchoColor.recording)
-        let font = EchoFont.nsMono(EchoControl.menuBarTimerSize)
+    /// title. `ink` nil draws a template, which the bar inks with everything
+    /// else on it; a template cannot be red, so red is drawn in.
+    ///
+    /// `nonisolated`, so the drawing handler it builds is too: AppKit decides
+    /// which thread draws an image, and a handler bound to the main actor would
+    /// trap on any other.
+    private nonisolated static func markAndWords(
+        _ words: String, font: NSFont, ink: NSColor?, description: String
+    ) -> NSImage {
+        let color = ink ?? .black
         let markSize = EchoControl.menuBarMarkSize
         let gap = EchoControl.menuBarTimerGap
-        let measured = (clock as NSString).size(withAttributes: [.font: font])
+        let measured = (words as NSString).size(withAttributes: [.font: font])
         let size = NSSize(
             width: markSize + gap + measured.width.rounded(.up),
             height: max(markSize, measured.height.rounded(.up))
@@ -157,15 +253,16 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
             EchoMarkImage.draw(
                 in: CGRect(x: 0, y: (rect.height - markSize) / 2, width: markSize, height: markSize),
                 context: context,
-                ink: ink
+                ink: color
             )
-            (clock as NSString).draw(
+            (words as NSString).draw(
                 at: NSPoint(x: markSize + gap, y: (rect.height - measured.height) / 2),
-                withAttributes: [.font: font, .foregroundColor: ink]
+                withAttributes: [.font: font, .foregroundColor: color]
             )
             return true
         }
-        image.accessibilityDescription = "Echo, recording, \(clock)"
+        image.isTemplate = ink == nil
+        image.accessibilityDescription = description
         return image
     }
 
@@ -203,7 +300,25 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
         button.performClick(nil)
     }
 
+    /// An open menu is brought up to date once a second, so a clock or a
+    /// countdown in it is never a reading from when it was opened — the
+    /// countdown is the one that matters, because it ends in a stop.
+    func menuWillOpen(_ menu: NSMenu) {
+        openMenu = menu
+        menuTicker?.cancel()
+        menuTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self, let menu = self.openMenu else { return }
+                self.contents.refresh(menu)
+            }
+        }
+    }
+
     func menuDidClose(_ menu: NSMenu) {
+        menuTicker?.cancel()
+        menuTicker = nil
+        openMenu = nil
         menu.delegate = nil
         item?.menu = nil
     }

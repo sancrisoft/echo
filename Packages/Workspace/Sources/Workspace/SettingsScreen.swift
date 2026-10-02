@@ -2,8 +2,8 @@
 //  SettingsScreen.swift
 //  Workspace
 //
-//  The settings that exist for the library: launch at login, recordings,
-//  summaries, updates, storage. Sections for call detection and models arrive
+//  The settings that exist for the library: launch at login, the island,
+//  recordings, summaries, updates, storage. Sections for call detection and models arrive
 //  with the packages that own them. Launch at login reads `SMAppService`, the
 //  OS's own answer, and is never mirrored into `settings.json`: the user can
 //  change login items in System Settings behind our back.
@@ -91,6 +91,12 @@ struct SettingsScreen: View {
                     .font(EchoFont.micro)
                     .foregroundStyle(EchoColor.danger)
             }
+            // Every screen at once. Off hides the panel only: detection goes on,
+            // and the menu bar item says what the island would have (DEC-1).
+            Toggle(
+                "Show the island",
+                isOn: Binding(get: { settings.showsIsland }, set: { settings.setShowsIsland($0) })
+            )
         }
     }
 
