@@ -111,6 +111,15 @@ public nonisolated enum EchoFont {
         return .custom(name, fixedSize: size).monospacedDigit()
     }
 
+    /// `mono` for AppKit, where a font is an `NSFont`: the menu bar's timer.
+    /// The same family and weights, the same fallback.
+    public static func nsMono(_ size: CGFloat, weight: Font.Weight = .regular) -> NSFont {
+        if let name = monoPostScriptName(for: weight), let font = NSFont(name: name, size: size) {
+            return font
+        }
+        return .monospacedDigitSystemFont(ofSize: size, weight: weight == .regular ? .regular : .medium)
+    }
+
     // MARK: - Leading and tracking
     //
     // SwiftUI carries these on the `Text`, not on the `Font`, so they are

@@ -119,6 +119,15 @@ public nonisolated enum EchoControl {
     /// The red dot that says a session is live: on the expanded recording
     /// face, and in the ear it collapses into.
     public static let recordingDotSize: CGFloat = 7
+
+    // MARK: In the menu bar
+
+    /// The mark's grid in the menu bar: the brand sheet's 16 pt template.
+    public static let menuBarMarkSize: CGFloat = 16
+    /// Between the mark and the timer beside it while a session runs.
+    public static let menuBarTimerGap: CGFloat = 7
+    /// The timer's size, in the monospaced face.
+    public static let menuBarTimerSize: CGFloat = 11
 }
 
 public nonisolated enum EchoLayout {

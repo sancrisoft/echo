@@ -168,4 +168,45 @@ struct MarkTests {
             #expect(sample(x: 8, y: 8).a == 0)
         }
     }
+
+    // MARK: As an image
+
+    @Test("the image is the grid alone, at the mark's minimum or more")
+    func imageSize() {
+        #expect(EchoMarkImage.make(size: 16).size == NSSize(width: 16, height: 16))
+        #expect(EchoMarkImage.make(size: 8).size == NSSize(width: 16, height: 16))
+        #expect(EchoMarkImage.make(size: 22).size == NSSize(width: 22, height: 22))
+    }
+
+    @Test("a template keeps only the coverage, and the bar chooses the ink")
+    func template() {
+        #expect(EchoMarkImage.make(isTemplate: true).isTemplate)
+        #expect(!EchoMarkImage.make(ink: .red).isTemplate)
+    }
+
+    @Test("the image carries the same fraction on its far half as the view")
+    func imageInk() throws {
+        let image = EchoMarkImage.make(size: 32, ink: .black)
+        let rect = CGRect(x: 0, y: 0, width: 64, height: 64)
+        let rep = try #require(
+            NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: 64, pixelsHigh: 64, bitsPerSample: 8,
+                samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: rect)
+        NSGraphicsContext.restoreGraphicsState()
+
+        // Grid units to pixels: 64 px for 16 units.
+        func alpha(x: CGFloat, y: CGFloat) -> CGFloat {
+            rep.colorAt(x: Int(x * 4), y: Int(y * 4))?.alphaComponent ?? 0
+        }
+        let near = alpha(x: 4.65, y: 8)
+        let far = alpha(x: 11.35, y: 8)
+        #expect(near > 0.99)
+        #expect(abs(far / near - 0.42) < 0.02)
+        #expect(alpha(x: 8, y: 8) == 0)
+        #expect(alpha(x: 0.5, y: 0.5) == 0)
+    }
 }
