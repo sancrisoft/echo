@@ -3,7 +3,7 @@
 //  IslandTests
 //
 //  The shell: which face it wears for a given state, how big that makes it on
-//  each of the two kinds of screen, and whether the flares actually bend the
+//  a real cutout and on a drawn one, and whether the flares actually bend the
 //  way the design draws them.
 //
 //  The notched screen is the one spike #69 measured; the screen without a
@@ -24,6 +24,30 @@ struct IslandShellTests {
 
     static let notched = IslandMetricsTests.macBookPro14
     static let noCutout = IslandMetricsTests.externalDisplay
+
+    /// The same screen with a full-screen app on it.
+    static let noCutoutFullScreen = ScreenGeometry(
+        frame: noCutout.frame,
+        visibleFrame: noCutout.visibleFrame,
+        safeAreaTop: 0,
+        auxiliaryTopLeft: nil,
+        auxiliaryTopRight: nil,
+        statusBarThickness: noCutout.statusBarThickness,
+        displayID: noCutout.displayID,
+        isFullScreen: true
+    )
+
+    /// The notched one under a full-screen app.
+    static let notchedFullScreen = ScreenGeometry(
+        frame: notched.frame,
+        visibleFrame: notched.visibleFrame,
+        safeAreaTop: notched.safeAreaTop,
+        auxiliaryTopLeft: notched.auxiliaryTopLeft,
+        auxiliaryTopRight: notched.auxiliaryTopRight,
+        statusBarThickness: notched.statusBarThickness,
+        displayID: notched.displayID,
+        isFullScreen: true
+    )
 
     nonisolated static let meeting = UUID()
 
@@ -121,33 +145,45 @@ struct IslandShellTests {
     // MARK: Whether there is a shell at all
 
     @Test(
-        "a screen with a cutout always has the island on it",
+        "a real cutout always has the island on it, full screen or not",
         arguments: IslandShellFace.allCases)
     func theNotchedScreenKeepsTheIsland(face: IslandShellFace) {
         // It hides in the hole, so it costs nothing to leave there — and the
         // idle face being reachable IS how a recording starts from the island.
-        for isOpen in [true, false] {
-            #expect(face.isOnScreen(hasCutout: true, isOpen: isOpen), "\(face)")
+        for screen in [Self.notched, Self.notchedFullScreen] {
+            for isOpen in [true, false] {
+                #expect(face.isOnScreen(on: IslandMetrics(screen), isOpen: isOpen), "\(face)")
+            }
         }
     }
 
-    @Test("a session's whole life, on a screen with no cutout")
-    func theBareScreenFollowsTheNews() {
-        // The reported behaviour, as a sequence: nothing on screen until
-        // something is being SAID, then nothing again. A face that announces
-        // something is not enough — an ignored offer shrinks to its pill and
-        // sits there for as long as the call lasts, and with one catalogued
-        // app holding the mic that is all day.
+    @Test(
+        "a drawn cutout is on screen at rest, as the real one is",
+        arguments: IslandShellFace.allCases)
+    func theDrawnCutoutIsAlwaysThere(face: IslandShellFace) {
+        // The drawn cutout IS the idle face: the island behaves the same on
+        // every screen, and hovering the notch is how a recording starts.
+        for isOpen in [true, false] {
+            #expect(face.isOnScreen(on: IslandMetrics(Self.noCutout), isOpen: isOpen), "\(face)")
+        }
+    }
+
+    @Test("under a full-screen app, a drawn cutout shows only while it has something to say")
+    func theDrawnCutoutStepsAsideForFullScreen() {
+        // The product owner's rule, as a session's whole life: hidden at rest,
+        // and every face that says something drawn — the live recording
+        // included, because the menu bar and its red clock are hidden too.
+        let metrics = IslandMetrics(Self.noCutoutFullScreen)
         let steps: [(detection: IslandFace?, phase: RecordingPhase, onScreen: Bool)] = [
             (nil, .idle, false),
             (.startPrompt(appName: "Zoom", scoped: true), .idle, true),
-            // The offer was ignored: it goes back to being a pill, and a pill
-            // is ears either side of a cutout this screen does not have.
-            (.compactPill, .idle, false),
-            (nil, .recording(startedAt: Date(), scope: .everything), false),
-            (nil, .stopping, false),
-            (nil, .finalizing(meetingID: Self.meeting, progress: 0.4), false),
-            (nil, .summarizing(meetingID: Self.meeting), false),
+            // The offer was ignored and shrank to its ears: still news.
+            (.compactPill, .idle, true),
+            (nil, .recording(startedAt: Date(), scope: .everything), true),
+            (.endGrace(appName: "Zoom"), .recording(startedAt: Date(), scope: .everything), true),
+            (nil, .stopping, true),
+            (nil, .finalizing(meetingID: Self.meeting, progress: 0.4), true),
+            (nil, .summarizing(meetingID: Self.meeting), true),
             (.saved, .idle, true),
             (nil, .idle, false),
         ]
@@ -155,21 +191,8 @@ struct IslandShellTests {
             let face = IslandShellFace.resolve(detection: step.detection, phase: step.phase)
             let isOpen = face.isOpen(detection: step.detection, hovered: false)
             #expect(
-                face.isOnScreen(hasCutout: false, isOpen: isOpen) == step.onScreen,
+                face.isOnScreen(on: metrics, isOpen: isOpen) == step.onScreen,
                 "\(face) from \(String(describing: step.detection))/\(step.phase)")
-        }
-    }
-
-    @Test("a bare screen carries the toasts and nothing else")
-    func theBareScreenCarriesOnlyToasts() {
-        // Exactly the three faces that raise themselves: an offer to record, a
-        // countdown to a stop, a meeting saved. The other three report
-        // something already known and would be a bar with nothing on it.
-        for face in IslandShellFace.allCases {
-            let raisesItself = face.expandsOnItsOwn(detection: nil)
-            #expect(
-                face.isOnScreen(hasCutout: false, isOpen: raisesItself) == raisesItself,
-                "\(face)")
         }
     }
 
@@ -179,10 +202,11 @@ struct IslandShellTests {
         // one. It is the same rule that defers a move between screens, and it
         // keeps the grace honest — ordering the window out from under the
         // pointer leaves nothing to send the crossing that would correct it.
+        let metrics = IslandMetrics(Self.noCutoutFullScreen)
         for face in IslandShellFace.allCases {
             let hovered = face.isOpen(detection: nil, hovered: true)
             #expect(hovered, "\(face) does not open under the pointer")
-            #expect(face.isOnScreen(hasCutout: false, isOpen: hovered), "\(face)")
+            #expect(face.isOnScreen(on: metrics, isOpen: hovered), "\(face)")
         }
     }
 
@@ -239,7 +263,7 @@ struct IslandShellTests {
         // outside the shell's own width, and `panelSize` is the only number
         // that counts both.
         let metrics = IslandMetrics(Self.notched)
-        let cutout = try! #require(metrics.cutout)
+        let cutout = metrics.cutout
         let geometry = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: false)
 
         #expect(geometry.panelSize.width == cutout.width)
@@ -258,7 +282,7 @@ struct IslandShellTests {
         // flares grow in with the expansion — which is why the shape animates
         // the flare rather than stepping it.
         let metrics = IslandMetrics(Self.notched)
-        let cutout = try! #require(metrics.cutout)
+        let cutout = metrics.cutout
 
         let shut = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: false)
         #expect(shut.flare == 0)
@@ -282,17 +306,19 @@ struct IslandShellTests {
     @Test("the expanded row clears the cutout, which is not screen to draw on")
     func theRowHangsBelowTheHole() {
         let metrics = IslandMetrics(Self.notched)
-        let cutout = try! #require(metrics.cutout)
+        let cutout = metrics.cutout
         for face in IslandShellFace.allCases {
             let geometry = IslandShellGeometry(metrics: metrics, face: face, isExpanded: true)
             #expect(geometry.rowTopInset == cutout.height, "\(face)")
             // And something is left to put the row in.
             #expect(geometry.shellSize.height > geometry.rowTopInset, "\(face)")
         }
-        // A screen with no cutout has nothing in the way.
+        // A drawn cutout keeps the same band, so an open face sits the same
+        // way on every screen.
+        let drawn = IslandMetrics(Self.noCutout)
         #expect(
-            IslandShellGeometry(metrics: .init(Self.noCutout), face: .idle, isExpanded: true)
-                .rowTopInset == 0)
+            IslandShellGeometry(metrics: drawn, face: .idle, isExpanded: true).rowTopInset
+                == drawn.cutout.height)
     }
 
     @Test("a face with something to say is still as wide as the design draws it")
@@ -300,7 +326,7 @@ struct IslandShellTests {
         // Only the idle face hides in the hole. Every other one has content in
         // its ears, which is exactly why it is wider than the cutout.
         let metrics = IslandMetrics(Self.notched)
-        let cutout = try! #require(metrics.cutout)
+        let cutout = metrics.cutout
         for face in IslandShellFace.allCases where face.announces {
             let geometry = IslandShellGeometry(metrics: metrics, face: face, isExpanded: false)
             #expect(geometry.shellSize.width == face.width.collapsed, "\(face)")
@@ -324,17 +350,13 @@ struct IslandShellTests {
         // long as they are still on screen, and they are still on screen while
         // the shell opens. A hole that vanished the instant it began would
         // take them with it, mid-fade.
-        let metrics = IslandMetrics(Self.notched)
-        for isExpanded in [false, true] {
-            #expect(
-                IslandShellGeometry(metrics: metrics, face: .recording, isExpanded: isExpanded)
-                    .cutoutWidth == metrics.cutout?.width)
-        }
-        // A screen with no cutout has no hole in either state.
-        for isExpanded in [false, true] {
-            #expect(
-                IslandShellGeometry(metrics: .init(Self.noCutout), face: .recording, isExpanded: isExpanded)
-                    .cutoutWidth == nil)
+        for screen in [Self.notched, Self.noCutout] {
+            let metrics = IslandMetrics(screen)
+            for isExpanded in [false, true] {
+                #expect(
+                    IslandShellGeometry(metrics: metrics, face: .recording, isExpanded: isExpanded)
+                        .cutoutWidth == metrics.cutout.width)
+            }
         }
     }
 
@@ -356,7 +378,7 @@ struct IslandShellTests {
         // The body is therefore the assertion that matters. The bounding box
         // agreeing is necessary and nowhere near sufficient: it agreed before.
         let metrics = IslandMetrics(Self.notched)
-        let cutout = try! #require(metrics.cutout)
+        let cutout = metrics.cutout
         let geometry = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: false)
 
         #expect(geometry.shellSize.width == cutout.width, "narrower than the hole below its top edge")
@@ -373,40 +395,11 @@ struct IslandShellTests {
 
     @Test("two screens are two shells, so the spring is never asked to cross between them")
     func eachScreenIsItsOwnShell() {
-        // The blink: a notched shell on one display and a pill on another are
-        // different widths, heights, radii, flares and shadows, and the window
-        // has already teleported by the time the spring is handed the move.
-        // The shell carries the screen's identity so the crossing is a cut.
+        // The blink: the shells on two displays hug different cutouts, so
+        // they are different widths and heights, and the window has already
+        // teleported by the time the spring is handed the move. The shell
+        // carries the screen's identity so the crossing is a cut.
         #expect(IslandMetrics(Self.notched).displayID != IslandMetrics(Self.noCutout).displayID)
-    }
-
-    @Test("which outline is drawn follows the screen, never the flare")
-    func theOutlineFollowsTheScreen() {
-        // The regression this exists for: the idle shell has no flares, and a
-        // view choosing its shape by asking whether there was one sent the
-        // shell whose top edge is flush with the top of the SCREEN to the
-        // floating pill's rounded rectangle, rounding two corners the design
-        // says are always square.
-        let notched = IslandMetrics(Self.notched)
-        for face in IslandShellFace.allCases {
-            for isExpanded in [false, true] {
-                let geometry = IslandShellGeometry(metrics: notched, face: face, isExpanded: isExpanded)
-                #expect(geometry.hangsFromBezel, "\(face) \(isExpanded ? "open" : "shut")")
-            }
-        }
-        // And the one that genuinely floats does not.
-        #expect(
-            !IslandShellGeometry(metrics: .init(Self.noCutout), face: .idle, isExpanded: false)
-                .hangsFromBezel)
-        // The flare is not the question: the shell that hangs has none while
-        // it is hiding in the hole.
-        let shut = IslandShellGeometry(metrics: notched, face: .idle, isExpanded: false)
-        #expect(shut.flare == 0 && shut.hangsFromBezel)
-    }
-
-    @Test("a shell that hangs off the bezel casts nothing")
-    func theNotchedShellHasNoShadow() {
-        #expect(!IslandShellGeometry(metrics: .init(Self.notched), face: .idle, isExpanded: false).castsShadow)
     }
 
     @Test("the window hangs from the top of the screen, the shell's own top edge on it")
@@ -460,47 +453,54 @@ struct IslandShellTests {
         }
     }
 
-    // MARK: The shell's size, on a screen with no cutout
+    // MARK: The shell on a drawn cutout — UNVERIFIED (#121)
 
-    // UNVERIFIED (#121): no screen without a cutout has drawn this.
-
-    @Test("the fallback is one fixed size collapsed, whatever face is on it")
-    func theCollapsedPillIsOneSize() {
-        let sizes = Set(
-            IslandShellFace.allCases.map {
-                IslandShellGeometry(metrics: .init(Self.noCutout), face: $0, isExpanded: false).shellSize
-            })
-        #expect(sizes == [EchoLayout.islandPillSize])
+    @Test("a drawn cutout wears the notch's shell, face for face")
+    func theDrawnShellIsTheNotchsShell() {
+        // The decision is that the island is the same object everywhere: the
+        // widths, the flares and the radii are the notch's. Only the collapsed
+        // height differs, because it is the cutout's, and this one is the
+        // menu bar's.
+        let real = IslandMetrics(Self.notched)
+        let drawn = IslandMetrics(Self.noCutout)
+        for face in IslandShellFace.allCases {
+            for isExpanded in [false, true] {
+                let a = IslandShellGeometry(metrics: real, face: face, isExpanded: isExpanded)
+                let b = IslandShellGeometry(metrics: drawn, face: face, isExpanded: isExpanded)
+                #expect(a.shellSize.width == b.shellSize.width, "\(face)")
+                #expect(a.flare == b.flare, "\(face)")
+                #expect(a.cornerRadius == b.cornerRadius, "\(face)")
+                #expect(
+                    b.shellSize.height == (isExpanded ? EchoLayout.islandExpandedHeight : drawn.cutout.height),
+                    "\(face)")
+            }
+        }
     }
 
-    @Test("the fallback has no flares and casts instead")
-    func thePillCastsRatherThanFlares() {
-        let geometry = IslandShellGeometry(metrics: .init(Self.noCutout), face: .idle, isExpanded: false)
-        #expect(geometry.flare == 0)
-        #expect(geometry.cutoutWidth == nil)
-        #expect(geometry.castsShadow)
-        #expect(geometry.cornerRadius == EchoRadius.islandPill)
-    }
-
-    @Test("the fallback's window leaves room for the shadow on every side")
-    func thePillsWindowHoldsItsShadow() {
-        let geometry = IslandShellGeometry(metrics: .init(Self.noCutout), face: .idle, isExpanded: false)
-        let reach = EchoLayout.islandPillShadowRadius + EchoLayout.islandPillShadowOffset
-        #expect(geometry.panelSize.width == geometry.shellSize.width + 2 * reach)
-        #expect(geometry.panelSize.height == geometry.shellSize.height + 2 * reach)
-    }
-
-    @Test("the fallback's own top edge sits below the menu bar, not the window's")
-    func thePillHangsByItsShellAndNotByItsMargin() {
-        // The window is taller than the pill by the room the shadow needs. If
-        // the placement used the window's top edge the pill would hang a
-        // shadow's reach lower than the design puts it.
+    @Test("the idle shell on a drawn cutout is the drawn cutout, and nothing more")
+    func theDrawnIdleShellIsTheCutout() {
+        // No flares: outside the drawn notch is the menu bar, which it has to
+        // leave alone exactly as the real one does.
         let metrics = IslandMetrics(Self.noCutout)
         let geometry = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: false)
+        #expect(geometry.flare == 0)
+        #expect(geometry.panelSize == metrics.cutout.size)
         let frame = geometry.panelFrame(on: metrics)
-        let shellTop = frame.maxY - geometry.shellInset.height
-        #expect(shellTop == metrics.topEdge)
-        #expect(shellTop < metrics.screenFrame.maxY, "the fallback floats below the menu bar")
+        #expect(frame.maxY == metrics.screenFrame.maxY)
+        #expect(abs(frame.midX - metrics.centerX) <= 0.5)
+    }
+
+    @Test("a drawn cutout lands on whole points, where a half point is half a pixel")
+    func theDrawnCutoutIsPlacedOnWholePoints() {
+        // The external fixture's centre is whole and the cutout's half-width
+        // is not, so the drawn idle shell's exact origin is a half point.
+        let metrics = IslandMetrics(Self.noCutout)
+        let geometry = IslandShellGeometry(metrics: metrics, face: .idle, isExpanded: false)
+        let exact = metrics.frame(for: geometry.panelSize)
+        #expect(exact.minX != exact.minX.rounded(), "the fixture stopped being the half-point case")
+        let frame = geometry.panelFrame(on: metrics)
+        #expect(frame.minX == frame.minX.rounded())
+        #expect(frame.minY == frame.minY.rounded())
     }
 
     // MARK: The outline
@@ -540,7 +540,7 @@ struct IslandShellTests {
 
     @Test("a shell told to take no flare draws none")
     func noFlareIsAPlainTop() {
-        let bounds = IslandShellShape(cornerRadius: EchoRadius.islandPill, flare: 0)
+        let bounds = IslandShellShape(cornerRadius: EchoRadius.islandCollapsed, flare: 0)
             .path(in: Self.shellRect).boundingRect
         #expect(abs(bounds.minX - Self.shellRect.minX) < 0.5)
         #expect(abs(bounds.maxX - Self.shellRect.maxX) < 0.5)
@@ -614,7 +614,7 @@ struct IslandShellTests {
         }
     }
 
-    @Test("the gallery renders every face, on both kinds of screen")
+    @Test("the gallery renders every face, on a real cutout and a drawn one")
     func theGalleryRenders() throws {
         EchoFont.registerBundledTypefaces()
         let directory = FileManager.default.temporaryDirectory
@@ -622,7 +622,7 @@ struct IslandShellTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        for (screen, metrics) in [("notched", Self.notched), ("no-cutout", Self.noCutout)] {
+        for (screen, metrics) in [("notched", Self.notched), ("drawn", Self.noCutout)] {
             for (name, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
                 let renderer = ImageRenderer(
                     content: IslandGallery(metrics: IslandMetrics(metrics))

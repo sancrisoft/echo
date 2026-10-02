@@ -32,9 +32,9 @@ import SwiftUI
         /// far behind it: twelve minutes forty-one in, eight seconds left.
         private let now: Date
 
-        /// - Parameter metrics: which screen to draw the shell for. The
-        ///   notched and the pill cases are different shapes, so both are
-        ///   worth a sheet.
+        /// - Parameter metrics: which screen to draw the shell for. A real
+        ///   cutout and a drawn one differ in height, and the drawn one is
+        ///   seen at rest, so both are worth a sheet.
         public init(metrics: IslandMetrics, now: Date = .now) {
             self.metrics = metrics
             self.now = now

@@ -48,6 +48,14 @@ public nonisolated struct ScreenGeometry: Equatable, Sendable {
     /// only cares about geometry gets, and one that matches no display.
     public let displayID: CGDirectDisplayID
 
+    /// Whether a full-screen app has this screen, which hides its menu bar.
+    ///
+    /// Read from the window list rather than from the screen, because nothing
+    /// on `NSScreen` says so: `visibleFrame` is the same rect in and out of a
+    /// full-screen Space, and on a Mac whose menu bar auto-hides it is the
+    /// whole screen either way. See `showsFullScreenSpace(in:on:)`.
+    public let isFullScreen: Bool
+
     public init(
         frame: CGRect,
         visibleFrame: CGRect,
@@ -55,7 +63,8 @@ public nonisolated struct ScreenGeometry: Equatable, Sendable {
         auxiliaryTopLeft: CGRect?,
         auxiliaryTopRight: CGRect?,
         statusBarThickness: CGFloat,
-        displayID: CGDirectDisplayID = 0
+        displayID: CGDirectDisplayID = 0,
+        isFullScreen: Bool = false
     ) {
         self.frame = frame
         self.visibleFrame = visibleFrame
@@ -64,6 +73,20 @@ public nonisolated struct ScreenGeometry: Equatable, Sendable {
         self.auxiliaryTopRight = auxiliaryTopRight
         self.statusBarThickness = statusBarThickness
         self.displayID = displayID
+        self.isFullScreen = isFullScreen
+    }
+
+    /// The width of the cutout between the two menu bar strips, or `nil` for a
+    /// screen without one. Strips that meet leave nothing between them, which
+    /// is the same answer by a different route.
+    public var cutoutWidth: CGFloat? {
+        Self.cutoutWidth(left: auxiliaryTopLeft, right: auxiliaryTopRight)
+    }
+
+    nonisolated static func cutoutWidth(left: CGRect?, right: CGRect?) -> CGFloat? {
+        guard let left, let right else { return nil }
+        let width = right.minX - left.maxX
+        return width > 0 ? width : nil
     }
 }
 
@@ -78,8 +101,63 @@ extension ScreenGeometry {
             auxiliaryTopLeft: screen.auxiliaryTopLeftArea,
             auxiliaryTopRight: screen.auxiliaryTopRightArea,
             statusBarThickness: statusBarThickness,
-            displayID: screen.displayID
+            displayID: screen.displayID,
+            isFullScreen: Self.showsFullScreenSpace(
+                in: WindowListing.current(),
+                on: Self.quartzRect(of: screen.frame)
+            )
         )
+    }
+
+    /// The cutout of the first attached screen that has one — the built-in
+    /// display's, on a MacBook with a notch — so a screen without one can draw
+    /// a cutout as wide as the real one beside it. `nil` with no such screen
+    /// attached: a Mac mini, or a MacBook running with its lid closed.
+    @MainActor
+    public static func attachedCutoutWidth() -> CGFloat? {
+        NSScreen.screens.lazy.compactMap {
+            cutoutWidth(left: $0.auxiliaryTopLeftArea, right: $0.auxiliaryTopRightArea)
+        }.first
+    }
+
+    /// Whether the windows on screen say a full-screen Space is showing on the
+    /// screen at `screen` (in the window list's own coordinates).
+    ///
+    /// Two things together, because either alone is wrong somewhere:
+    ///
+    ///   - **A normal-level window covers the whole screen.** That is what a
+    ///     full-screen app's window is. It is also, on a Mac whose menu bar
+    ///     and Dock auto-hide, what a zoomed window is: `visibleFrame` is then
+    ///     the whole screen, and on the machine this was measured on it is.
+    ///   - **The desktop picture is not showing.** Measured on 2026-10-04 on a
+    ///     4K display, with an app put into full screen and back: an ordinary
+    ///     Space has the wallpaper's own windows below the desktop level
+    ///     (owners "Wallpaper" and "BackdropWallpaper"), and the full-screen
+    ///     Space has none of them — from the instant
+    ///     `activeSpaceDidChangeNotification` arrives, in both directions.
+    ///     What stays below the desktop level in full screen is the Window
+    ///     Server's backstop and the window manager's own backdrops, so those
+    ///     two owners do not count as a desktop. Finder's desktop window is no
+    ///     signal at all: it was absent from an ordinary Space too, after the
+    ///     window manager had rearranged it.
+    nonisolated static func showsFullScreenSpace(in windows: [WindowListing.Entry], on screen: CGRect) -> Bool {
+        let desktop = Int(CGWindowLevelForKey(.desktopWindow))
+        let normal = Int(CGWindowLevelForKey(.normalWindow))
+        let covers = { (entry: WindowListing.Entry) in entry.bounds.insetBy(dx: -0.5, dy: -0.5).contains(screen) }
+        let desktopShows = windows.contains {
+            $0.layer < desktop && !WindowListing.backdropOwners.contains($0.owner) && covers($0)
+        }
+        let windowFills = windows.contains { $0.layer == normal && covers($0) }
+        return windowFills && !desktopShows
+    }
+
+    /// `frame` in the window list's coordinates: the origin at the top-left
+    /// of the primary display and y growing downward, where AppKit's origin is
+    /// that display's bottom-left and y grows up.
+    @MainActor
+    static func quartzRect(of frame: CGRect) -> CGRect {
+        let primaryHeight = NSScreen.screens.first?.frame.maxY ?? frame.maxY
+        return CGRect(x: frame.minX, y: primaryHeight - frame.maxY, width: frame.width, height: frame.height)
     }
 
     /// The screen the shell belongs on, resolved against where it already is.
@@ -189,6 +267,40 @@ extension ScreenGeometry {
     nonisolated static func index(of point: CGPoint, in frames: [CGRect]) -> Int? {
         frames.firstIndex {
             point.x >= $0.minX && point.x <= $0.maxX && point.y >= $0.minY && point.y <= $0.maxY
+        }
+    }
+}
+
+/// The windows on screen, as much of them as the island needs: the level each
+/// sits at and where it is.
+///
+/// None of it needs the screen-recording permission Echo does not ask for —
+/// without it the list leaves out window titles, and keeps levels, owners and
+/// bounds. Measured on 2026-10-02: 0.2 ms a read once warm, so it is read with
+/// every placement rather than cached.
+nonisolated enum WindowListing {
+
+    struct Entry: Equatable, Sendable {
+        let layer: Int
+        /// The owning process's name.
+        let owner: String
+        /// In the list's own coordinates (see `ScreenGeometry.quartzRect(of:)`).
+        let bounds: CGRect
+    }
+
+    /// The owners whose windows stay below the desktop level in a full-screen
+    /// Space as well as an ordinary one, and so say nothing about which it is.
+    static let backdropOwners: Set<String> = ["Window Server", "WindowManager"]
+
+    static func current() -> [Entry] {
+        let info =
+            CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        return info.compactMap { window in
+            guard let layer = window[kCGWindowLayer as String] as? Int,
+                let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary)
+            else { return nil }
+            return Entry(layer: layer, owner: window[kCGWindowOwnerName as String] as? String ?? "", bounds: rect)
         }
     }
 }

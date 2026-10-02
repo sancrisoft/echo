@@ -87,7 +87,7 @@ Each package answers "who owns this?" for one product capability from
 | **Updates** | Version arithmetic (`ReleaseVersion`, and the version this build compares against), the GitHub release feed and the one repository string every user-reachable URL derives from, the daily checker with its shared in-flight request, and the updater that renders the bash handed to `/bin/bash` and hands off to the same install script the README quotes. No UI: the three surfaces a user meets it through are Workspace's settings screen and the app target's menu item and launch prompt. | EchoCore | — |
 | **DesignSystem** | Semantic color tokens for light and dark, the type scale over the two bundled typefaces, spacing, radii and control geometry, the durations and curves the design states (`EchoMotion`), and the primitives every surface repeats: buttons, chips, property rows, tab strips, list rows, meta strips, status badges, level gauge, empty state. No product logic. | — | — |
 | **Workspace** | The main window: sidebar with meetings grouped by date, the document (summary and transcript), trash, the settings screen, first-run banners, search, the Markdown renderer, `WorkspaceModel` (selection, section, search, sort — the window's single navigation truth), display-state resolution. | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem | — |
-| **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, and the no-notch pill fallback), the shell itself (its outline with the two concave flares, the ears either side of the cutout, the one-row expansion), `IslandController` (the non-activating `NSPanel`, which face the shell wears, where the window goes, and the one report detection needs about the session), the faces, and the capture choice the idle face offers (`ScopeSelection`, ported from the PoC). | EchoCore, Audio, CallDetection, Recording, DesignSystem | — |
+| **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, or drawn on a screen without one), the shell itself (its outline with the two concave flares, the ears either side of the cutout, the one-row expansion), `IslandController` (the non-activating `NSPanel`, which face the shell wears, where the window goes, and the one report detection needs about the session), the faces, and the capture choice the idle face offers (`ScopeSelection`, ported from the PoC). | EchoCore, Audio, CallDetection, Recording, DesignSystem | — |
 | **App** (target) | Composition root, scenes, activation policy and the reopen that answers a request for an already running app, the menu bar item — an `NSStatusItem` managed by hand, not a `MenuBarExtra` scene, because only that tells a left click from a right one — the update prompt (the one alert Echo raises, and the app menu's answer), launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
 
 The UI packages are built towards an internal design that is not in the
@@ -292,17 +292,24 @@ names inside a package are free to change.
   `forShell(current:hovered:)`, which picks the display the shell belongs on
   from the ACTIVE screen rather than the pointer, and the pure `choice` behind
   it: a shell whose display is gone moves, a shell under the pointer waits, and
-  otherwise it follows), and
-  `IslandMetrics` (`Shell.notch(cutout:)` or `Shell.pill`, `centerX`,
-  `topEdge`, `collapsedHeight`, `frame(for:)`). Both `nonisolated` value types.
-  The cutout is derived from the gap the two auxiliary areas leave between
-  them — `safeAreaInsets.top` gives only its height — because it differs by
-  machine: measured 185 × 32 on a 14" M4 Pro.
+  otherwise it follows; `isFullScreen`, read from the window list because
+  nothing on `NSScreen` says so; `cutoutWidth` and `attachedCutoutWidth()`), and
+  `IslandMetrics` (`Shell.notch(cutout:)` or `Shell.drawn(cutout:)`, `cutout`,
+  `drawsCutout`, `isFullScreen`, `centerX`, `topEdge`, `collapsedHeight`,
+  `frame(for:)`). Both `nonisolated` value types. The cutout is derived from
+  the gap the two auxiliary areas leave between them — `safeAreaInsets.top`
+  gives only its height — because it differs by machine: measured 185 × 32 on
+  a 14" M4 Pro. A screen without one gets one DRAWN (DEC-1, product owner
+  2026-10-02, replacing the floating pill): as wide as an attached notched
+  screen's cutout, else `EchoLayout.islandDrawnCutoutWidth`, as tall as that
+  screen's menu bar, centred on its top edge. Everything else about the shell
+  is the notch's.
 - `IslandShellFace` (the six faces the design draws, as silhouettes;
   `resolve(detection:phase:)` composes detection's face with the session's
-  phase, and `expandsOnItsOwn(detection:)` says which open with no pointer on
-  them) and `IslandShellGeometry` (shell size, the margin the flares or the
-  pill's shadow need inside the window, radius, cutout width, and
+  phase, `expandsOnItsOwn(detection:)` says which open with no pointer on
+  them, and `isOnScreen(on:isOpen:)` hides only the idle face of a drawn
+  cutout under a full-screen app) and `IslandShellGeometry` (shell size, the
+  margin the flares need inside the window, radius, cutout width, and
   `panelFrame(on:)` — which rounds, because a window origin is whole points and
   the cutout's centre is not).
 - `IslandShellShape` (square at the top, rounded at the bottom, a concave flare

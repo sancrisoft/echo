@@ -6,6 +6,9 @@
 //  Everything else is a fixture written by hand and marked as such: it says
 //  what the code does, not that hardware agrees. Issue #121 is the hardware.
 //
+//  A screen with no cutout gets one drawn (DEC-1, product owner 2026-10-02):
+//  as wide as the built-in display's, as tall as that screen's menu bar.
+//
 
 import CoreGraphics
 import DesignSystem
@@ -54,13 +57,13 @@ struct IslandMetricsTests {
     func cutoutWidthIsNotTheQuotedConstant() {
         // The reason the width is derived and never written down: it varies
         // between models, and this 14" reports 185.
-        #expect(IslandMetrics(Self.macBookPro14).cutout?.width == 185)
+        #expect(IslandMetrics(Self.macBookPro14).cutout.width == 185)
     }
 
     @Test("the cutout's height is the band safeAreaInsets.top also reports")
     func cutoutHeightAgreesWithSafeArea() {
         let metrics = IslandMetrics(Self.macBookPro14)
-        #expect(metrics.cutout?.height == Self.macBookPro14.safeAreaTop)
+        #expect(metrics.cutout.height == Self.macBookPro14.safeAreaTop)
         #expect(metrics.collapsedHeight == 32)
     }
 
@@ -97,30 +100,58 @@ struct IslandMetricsTests {
         #expect(collapsed.midX == expanded.midX)
     }
 
-    // MARK: The no-notch fallback — UNVERIFIED (#121)
-
-    @Test("a screen with no auxiliary areas falls back to the pill")
-    func noAuxiliaryAreasMeansPill() {
-        #expect(IslandMetrics(Self.externalDisplay).shell == .pill)
-        #expect(IslandMetrics(Self.externalDisplay).cutout == nil)
+    @Test("a screen with a cutout of its own never takes a drawn one")
+    func aRealCutoutIgnoresTheDrawnWidth() {
+        let metrics = IslandMetrics(Self.macBookPro14, drawnCutoutWidth: 240)
+        #expect(!metrics.drawsCutout)
+        #expect(metrics.cutout.width == 185)
     }
 
-    @Test("the pill floats below the menu bar rather than against it")
-    func pillFloatsBelowTheMenuBar() {
+    // MARK: The drawn cutout — UNVERIFIED (#121)
+
+    @Test("a screen with no auxiliary areas gets a cutout drawn on it")
+    func noAuxiliaryAreasMeansADrawnCutout() {
+        let metrics = IslandMetrics(Self.externalDisplay)
+        #expect(metrics.drawsCutout)
+        #expect(
+            metrics.shell
+                == .drawn(cutout: CGRect(x: 2792 - 92.5, y: 1415, width: 185, height: 25)))
+    }
+
+    @Test("with no notched screen attached, the drawn cutout is the 14\"'s measured width")
+    func theDrawnWidthDefaultsToTheMeasuredOne() {
+        // The product owner's number, and the one spike #69 read: a Mac with
+        // no notch of its own to measure draws the 14" M4 Pro's.
+        #expect(EchoLayout.islandDrawnCutoutWidth == 185)
+        #expect(IslandMetrics(Self.externalDisplay).cutout.width == 185)
+    }
+
+    @Test("beside a notched screen, the drawn cutout is that screen's real width")
+    func theDrawnWidthFollowsTheBuiltIn() {
+        // A 16" is not a 14", and the drawn notch has to match whichever one
+        // the user also has in front of them.
+        let metrics = IslandMetrics(Self.externalDisplay, drawnCutoutWidth: 190)
+        #expect(metrics.cutout.width == 190)
+        #expect(metrics.cutout.midX == metrics.screenFrame.midX)
+    }
+
+    @Test("the drawn cutout is as tall as the menu bar, so it sits flush with it")
+    func theDrawnCutoutIsTheMenuBarsHeight() {
         let metrics = IslandMetrics(Self.externalDisplay)
         #expect(metrics.menuBarHeight == 25)
-        #expect(metrics.topEdge == 1440 - 25 - EchoLayout.islandPillTopGap)
+        #expect(metrics.collapsedHeight == 25)
+        #expect(metrics.cutout.maxY == metrics.screenFrame.maxY)
     }
 
-    @Test("the pill centres on the screen and takes its fixed height")
-    func pillCentresOnTheScreen() {
+    @Test("the drawn cutout hangs from the middle of the top edge")
+    func theDrawnCutoutHangsFromTheTop() {
         let metrics = IslandMetrics(Self.externalDisplay)
         #expect(metrics.centerX == 2792)
-        #expect(metrics.collapsedHeight == EchoLayout.islandPillSize.height)
+        #expect(metrics.topEdge == 1440)
     }
 
-    @Test("auxiliary areas that meet leave no cutout, so the pill wins")
-    func touchingAuxiliaryAreasMeanPill() {
+    @Test("auxiliary areas that meet leave no cutout, so one is drawn")
+    func touchingAuxiliaryAreasMeanADrawnCutout() {
         // Defensive: a screen reporting both strips with nothing between them
         // is not a notched screen, whatever else it says.
         var geometry = Self.macBookPro14
@@ -132,7 +163,23 @@ struct IslandMetricsTests {
             auxiliaryTopRight: CGRect(x: 756, y: 950, width: 756, height: 32),
             statusBarThickness: geometry.statusBarThickness
         )
-        #expect(IslandMetrics(geometry).shell == .pill)
+        #expect(IslandMetrics(geometry).drawsCutout)
+    }
+
+    @Test("a full-screen app is carried into the metrics, as read")
+    func fullScreenIsCarried() {
+        let geometry = ScreenGeometry(
+            frame: Self.externalDisplay.frame,
+            visibleFrame: Self.externalDisplay.visibleFrame,
+            safeAreaTop: 0,
+            auxiliaryTopLeft: nil,
+            auxiliaryTopRight: nil,
+            statusBarThickness: 22,
+            displayID: 2,
+            isFullScreen: true
+        )
+        #expect(IslandMetrics(geometry).isFullScreen)
+        #expect(!IslandMetrics(Self.externalDisplay).isFullScreen)
     }
 
     // MARK: The auto-hidden menu bar — UNVERIFIED (#121)
@@ -149,7 +196,7 @@ struct IslandMetricsTests {
         )
         let metrics = IslandMetrics(hidden)
         #expect(metrics.menuBarHeight == 22)
-        #expect(metrics.topEdge == 1440 - 22 - EchoLayout.islandPillTopGap)
+        #expect(metrics.cutout.height == 22)
     }
 
     @Test("hiding the menu bar does not move a shell that hugs the cutout")
@@ -163,6 +210,7 @@ struct IslandMetricsTests {
             statusBarThickness: 22
         )
         #expect(IslandMetrics(hidden).topEdge == IslandMetrics(Self.macBookPro14).topEdge)
+        #expect(IslandMetrics(hidden).cutout == IslandMetrics(Self.macBookPro14).cutout)
     }
 
     // MARK: Per screen — UNVERIFIED (#121)
@@ -173,7 +221,7 @@ struct IslandMetricsTests {
         // every number the island places by has to come from that screen.
         let metrics = IslandMetrics(Self.externalDisplay)
         #expect(metrics.screenFrame == Self.externalDisplay.frame)
-        let frame = metrics.frame(for: EchoLayout.islandPillSize)
+        let frame = metrics.frame(for: CGSize(width: 320, height: 25))
         #expect(frame.midX == 2792)
         #expect(frame.minX > Self.macBookPro14.frame.maxX)
     }

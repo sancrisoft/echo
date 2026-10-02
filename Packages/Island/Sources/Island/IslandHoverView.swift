@@ -48,8 +48,7 @@ final class IslandHoverView: NSView {
     /// shell that changes size as it opens and closes.
     ///
     /// The area is the whole window, which is slightly more than the black:
-    /// the flares' margin at the top corners, and on a screen with no cutout
-    /// the room the pill's shadow needs. Narrowing it to the shape would cost
+    /// the flares' margin at the top corners. Narrowing it to the shape would cost
     /// the one property the spike actually verified, `.inVisibleRect`, and buy
     /// a precision that crossings do not have anyway.
     override func updateTrackingAreas() {

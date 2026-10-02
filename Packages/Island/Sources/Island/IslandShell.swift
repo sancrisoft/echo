@@ -86,9 +86,8 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
                 hairline
             }
             .frame(width: geometry.shellSize.width, height: geometry.shellSize.height)
-            // The shell hangs from the top of its window by the margin the
-            // flares or the pill's shadow need, and is centred across it.
-            .padding(.top, geometry.shellInset.height)
+            // The shell hangs from the top of its window, centred across it
+            // between the margins its flares need.
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .animation(shellMotion, value: geometry.shellSize)
         }
@@ -96,25 +95,13 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
 
     // MARK: The black
 
-    @ViewBuilder
+    /// The flares are drawn outside the shape's own rect, which is why this is
+    /// framed to the shell and not to the window.
     private var shell: some View {
-        if geometry.hangsFromBezel {
-            // The flares are drawn outside the shape's own rect, which is why
-            // this is framed to the shell and not to the window.
-            IslandShellShape(cornerRadius: geometry.cornerRadius, flare: geometry.flare)
-                .fill(EchoColor.Island.shell)
-                .animation(shellMotion, value: geometry.cornerRadius)
-                .animation(shellMotion, value: geometry.flare)
-        } else {
-            RoundedRectangle(cornerRadius: geometry.cornerRadius, style: .continuous)
-                .fill(EchoColor.Island.shell)
-                .shadow(
-                    color: geometry.castsShadow ? EchoColor.Island.pillShadow : .clear,
-                    radius: EchoLayout.islandPillShadowRadius,
-                    y: EchoLayout.islandPillShadowOffset
-                )
-                .animation(shellMotion, value: geometry.cornerRadius)
-        }
+        IslandShellShape(cornerRadius: geometry.cornerRadius, flare: geometry.flare)
+            .fill(EchoColor.Island.shell)
+            .animation(shellMotion, value: geometry.cornerRadius)
+            .animation(shellMotion, value: geometry.flare)
     }
 
     // MARK: What is on it
@@ -203,21 +190,16 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
 
     /// The hole between the ears.
     ///
-    /// A fixed width on a notched screen — the cutout's own, read from that
-    /// screen — and the shell is centred on the cutout, so a centred gap of
-    /// exactly that width lands over it. The fallback pill has no hole, so the
-    /// two ears simply take the ends of one row.
-    @ViewBuilder
+    /// A fixed width — the cutout's own, read from the screen or drawn on it —
+    /// and the shell is centred on the cutout, so a centred gap of exactly
+    /// that width lands over it.
+    ///
+    /// Never wider than the shell holding it. The idle shell is exactly the
+    /// cutout, and a closing shell passes through narrower widths on its way
+    /// there: a hole wider than its shell would squeeze both ears to nothing
+    /// and spill past the clip.
     private var gap: some View {
-        if let cutoutWidth = geometry.cutoutWidth {
-            // Never wider than the shell holding it. The idle shell is
-            // NARROWER than the cutout — it hides inside it rather than
-            // hanging off it — and a hole wider than its shell would squeeze
-            // both ears to nothing and spill past the clip.
-            Color.clear.frame(width: min(cutoutWidth, geometry.shellSize.width))
-        } else {
-            Spacer(minLength: EchoSpacing.s)
-        }
+        Color.clear.frame(width: min(geometry.cutoutWidth, geometry.shellSize.width))
     }
 
     /// One spring for the width, the height and the radius — or none at all.

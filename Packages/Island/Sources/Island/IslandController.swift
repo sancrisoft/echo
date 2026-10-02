@@ -313,13 +313,17 @@ public final class IslandController {
                         + " statusBar \(geometry.statusBarThickness)"
                         + " auxLeft \(geometry.auxiliaryTopLeft.map(NSStringFromRect) ?? "none")"
                         + " auxRight \(geometry.auxiliaryTopRight.map(NSStringFromRect) ?? "none")"
+                        + " fullScreen \(geometry.isFullScreen)"
                     Self.log.info(
                         "Island screen \(geometry.displayID, privacy: .public): \(screen, privacy: .public)"
                     )
                 }
             #endif
             currentDisplay = geometry.displayID
-            metrics = IslandMetrics(geometry)
+            metrics = IslandMetrics(
+                geometry,
+                drawnCutoutWidth: ScreenGeometry.attachedCutoutWidth() ?? EchoLayout.islandDrawnCutoutWidth
+            )
         } else {
             // No screens: nothing to hang off, and a window placed on a screen
             // that is not there is worse than no window.
@@ -448,11 +452,11 @@ public final class IslandController {
         // at all (which is how the island is looked at, since it cannot be
         // screenshotted), and the next thing worth announcing would be shown
         // where the last one was before being moved.
-        guard face.isOnScreen(hasCutout: metrics.cutout != nil, isOpen: isExpanded) else {
+        guard face.isOnScreen(on: metrics, isOpen: isExpanded) else {
             #if DEBUG
                 if panel.isVisible {
                     Self.log.info(
-                        "Island hidden: \(String(describing: self.face), privacy: .public) is not open and this screen has no cutout to hide it in"
+                        "Island hidden: \(String(describing: self.face), privacy: .public) has nothing to say over a full-screen app on a drawn cutout"
                     )
                 }
             #endif
@@ -474,6 +478,7 @@ public final class IslandController {
                 + " hovered \(isHovered)"
                 + " pointer \(NSStringFromPoint(NSEvent.mouseLocation))"
                 + " \(metrics.shell)"
+                + " fullScreen \(metrics.isFullScreen)"
                 + " frame \(NSStringFromRect(metrics.screenFrame))"
                 + " menuBar \(metrics.menuBarHeight)"
                 + " scale \(panel.backingScaleFactor)"

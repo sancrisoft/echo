@@ -162,7 +162,7 @@ struct FaceFitTests {
 /// The room either side of a real cutout: the island hangs centred on it, so
 /// each ear gets half of what the collapsed width leaves, less its inset.
 private func earRoom(for width: IslandWidth) -> CGFloat {
-    let cutout = IslandMetrics(IslandMetricsTests.macBookPro14).cutout?.width ?? 0
+    let cutout = IslandMetrics(IslandMetricsTests.macBookPro14).cutout.width
     return (width.collapsed - cutout) / 2 - EchoLayout.islandEarInset
 }
 
