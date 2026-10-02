@@ -101,6 +101,25 @@ public nonisolated enum EchoFont {
     /// 10 / 600 — the label beside a level gauge.
     public static var gaugeLabel: Font { onest(10, weight: 600) }
 
+    /// 12.5 / 600 — a face's first line: "Zoom call detected", a meeting's
+    /// title.
+    public static var islandTitle: Font { onest(12.5, weight: 600) }
+
+    /// 11 — a face's second line, and the qualifier at the end of its first.
+    public static var islandDetail: Font { onest(11, weight: 400) }
+
+    /// 19 / 500 mono — the open recording face's timer.
+    public static var islandTimer: Font { mono(19, weight: .medium) }
+
+    /// 11.5 / 600 — the call's app, in an ear.
+    public static var islandEarName: Font { onest(11.5, weight: 600) }
+
+    /// 11.5 / 500 — a word in an ear: "Saved", "Summarizing".
+    public static var islandEarStatus: Font { onest(11.5, weight: 500) }
+
+    /// 11.5 mono — a number in an ear: the clock, the countdown.
+    public static var islandEarNumber: Font { mono(11.5) }
+
     /// Monospaced with tabular digits, for anything that counts. The design
     /// draws it at 500 for a timer, 400 for inline code and a model name, and
     /// 300 nowhere yet — the three weights DM Mono ships.
@@ -149,6 +168,18 @@ public nonisolated enum EchoFont {
 
     /// −0.004em on a gauge's label.
     public static let gaugeLabelTracking: CGFloat = 10 * -0.004
+
+    /// −0.008em on a face's first line.
+    public static let islandTitleTracking: CGFloat = 12.5 * -0.008
+
+    /// −0.03em on the recording face's timer.
+    public static let islandTimerTracking: CGFloat = 19 * -0.03
+
+    /// The line boxes the open faces set their tallest lines in: the timer at
+    /// the 1.15 the design gives it, and the idle face's first line at the
+    /// same, so two lines fit under a cutout (see `EchoLayout.islandCompactLineGap`).
+    public static let islandTimerLineHeight: CGFloat = 19 * 1.15
+    public static let islandTitleLineHeight: CGFloat = 12.5 * 1.15
 
     // MARK: - The typefaces
 

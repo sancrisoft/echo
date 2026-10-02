@@ -122,6 +122,19 @@ public nonisolated enum EchoControl {
     /// face, and in the ear it collapses into.
     public static let recordingDotSize: CGFloat = 7
 
+    /// The glyph at the head of an open face: the mark, the camera, the
+    /// countdown ring. The saved face's check is a size smaller.
+    public static let islandIconSize: CGFloat = 15
+    public static let islandCheckSize: CGFloat = 14
+
+    /// The glyph in an ear, either side of the cutout.
+    public static let earGlyphSize: CGFloat = 12
+
+    /// The recording ear's level pictogram, and the gap between it and the
+    /// dot beside it.
+    public static let earLevelBars = CGSize(width: 15, height: 11)
+    public static let earGroupGap: CGFloat = 7
+
     // MARK: In the menu bar
 
     /// The mark's grid in the menu bar: the brand sheet's 16 pt template.
@@ -193,6 +206,20 @@ public nonisolated enum EchoLayout {
 
     /// Between the parts of the expanded row.
     public static let islandRowGap: CGFloat = 11
+
+    /// Between a face's two lines, and between the words of its first.
+    public static let islandLineGap: CGFloat = 5
+    public static let islandTitleGap: CGFloat = 8
+
+    /// Between the idle face's two lines. Not the design's: its second line
+    /// is a 24 pt chip, and the artboards set the open row in the whole 74 pt
+    /// of the shell, where on a Mac the top of it is the camera's cutout. The
+    /// row hangs below the cutout instead (`IslandShell`), and below a 32 pt
+    /// cutout two lines at the design's gap overflow the band that is left.
+    public static let islandCompactLineGap: CGFloat = 2
+
+    /// Between the recording face's two level gauges.
+    public static let islandGaugeGap: CGFloat = 12
 
     /// The fallback shell, on a screen with no cutout: fixed, where the notched
     /// shell is only as wide as its words need.
