@@ -218,9 +218,9 @@ reactions are method calls by the object that knows, not observation chains.
   cleanups and utility measurements the composition root or a library owns.
 - Known toolchain trap (Swift 6.3.3): passing an isolated method reference as a
   `Binding` setter crashes the compiler in IRGen; wrap it in a closure.
-- Known toolchain traps (Swift 6.4, Xcode 27; CI is still on 26.6, so code has
-  to compile on both): an escaping closure that captures a `Mutex` fails with
-  "copy of noncopyable typed value" — use a copyable lock such as
+- Known toolchain traps (Swift 6.4, Xcode 27; CI builds on 26.6 and 27.0, so
+  code has to compile on both): an escaping closure that captures a `Mutex`
+  fails with "copy of noncopyable typed value" — use a copyable lock such as
   `OSAllocatedUnfairLock`; and in a UI package a type conforming to a
   nonisolated protocol like `Shape` must be declared `nonisolated`, or the
   main-actor default makes the conformance an error.
@@ -263,7 +263,8 @@ ECHO_DATA_ROOT=/tmp/x ECHO_OPEN_WINDOW=1 build/Build/Products/Debug/Echo.app/Con
 ```
 
 CI (`.github/workflows/ci.yml`) runs lint, package tests and the hosted tests
-on pull requests and on pushes to `main` and `v2`.
+on pull requests and on pushes to `main` and `v2`, twice: on Xcode 26.6 (the
+"Build and test" check, and what releases use) and on Xcode 27.0.
 
 ## Conventions
 
