@@ -159,6 +159,29 @@ struct FaceFitTests {
     }
 }
 
+@Suite("Capture notices on the open face")
+struct CaptureNoticeFitTests {
+
+    /// The longest sentence the session raises today, twice over: a notice
+    /// takes the levels' line and the shell never grows to hold it (#118).
+    @Test("a notice in place of the levels never makes the face taller than the band")
+    func aNoticeKeepsTheBand() {
+        let notice = "Meeting audio isn't reaching the transcript — this audio device combination may be unsupported."
+        let width = room(for: .recording).width
+        let row = RecordingRow(
+            startedAt: .now.addingTimeInterval(-761), stoppedAt: 0, capture: "Zoom only", levels: { .silent },
+            notices: [notice, notice], stop: {}
+        )
+        let healthy = RecordingRow(
+            startedAt: .now.addingTimeInterval(-761), stoppedAt: 0, capture: "Zoom only", levels: { .silent },
+            stop: {})
+        let drawn = measure(row.frame(width: width))
+        #expect(drawn.width <= width)
+        #expect(drawn.height <= room(for: .recording).height)
+        #expect(drawn.height <= measure(healthy.frame(width: width)).height + 1)
+    }
+}
+
 /// The room either side of a real cutout: the island hangs centred on it, so
 /// each ear gets half of what the collapsed width leaves, less its inset.
 private func earRoom(for width: IslandWidth) -> CGFloat {

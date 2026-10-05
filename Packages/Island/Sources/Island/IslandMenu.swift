@@ -125,6 +125,8 @@ nonisolated struct IslandReading: Sendable {
     var capture: CaptureScope = .everything
     var captureOptions: [CaptureScope] = [.everything]
     var savedMeeting: IslandMeeting?
+    /// The session's notices, in its order.
+    var notices: [String] = []
 
     var face: IslandShellFace {
         IslandShellFace.resolve(detection: detection, phase: phase)
@@ -217,10 +219,11 @@ extension IslandMenuEntry {
             // face.
             guard case .recording(let startedAt, let scope) = reading.phase else { return [] }
             let clock = EchoClock.full(EchoClock.elapsedSeconds(since: startedAt, now: now))
-            return [
-                IslandMenuEntry(title: "\(clock) · \(ScopeSelection.label(for: scope))", kind: .status),
-                IslandMenuEntry(title: "Stop", kind: .action(actions.stop), takesShortcut: true),
-            ]
+            // The capture's problems, as the face shows them in place of its
+            // levels: a menu has room for each on its own line.
+            return [IslandMenuEntry(title: "\(clock) · \(ScopeSelection.label(for: scope))", kind: .status)]
+                + reading.notices.map { IslandMenuEntry(title: $0, kind: .status) }
+                + [IslandMenuEntry(title: "Stop", kind: .action(actions.stop), takesShortcut: true)]
 
         case .callEnded:
             let deadline = reading.graceDeadline
@@ -297,7 +300,8 @@ public struct IslandMenu {
             phase: session.phase,
             capture: capture.current,
             captureOptions: capture.options,
-            savedMeeting: session.savedMeeting(in: meetings)
+            savedMeeting: session.savedMeeting(in: meetings),
+            notices: session.notices.map(\.message)
         )
     }
 

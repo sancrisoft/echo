@@ -188,6 +188,11 @@ struct CallDetectedEars {
 /// A session is live: the clock, what is being captured, and the two levels,
 /// measured. While the session is stopping the clock holds where it stopped
 /// and the levels rest, because nothing is being captured any more.
+///
+/// While the capture has a problem — the mic lost, echo handling degraded,
+/// input the speech gates throw away — the session's own sentence for it takes
+/// the levels' place, and the levels come back the moment it clears (#118,
+/// product owner 2026-10-02). The open shell never grows to hold both.
 struct RecordingRow: View {
 
     /// When the live session began; `nil` once it is stopping.
@@ -196,6 +201,9 @@ struct RecordingRow: View {
     let stoppedAt: Int
     let capture: String
     let levels: () -> CaptureLevels
+    /// The session's notices, in the order it ranks them; empty while the
+    /// capture is healthy.
+    var notices: [String] = []
     /// `nil` while the session is stopping: a second Stop must not start a
     /// second teardown.
     let stop: (() -> Void)?
@@ -218,14 +226,18 @@ struct RecordingRow: View {
                 }
             }
         } second: {
-            // Redrawn as often as a level can change on screen, and only while
-            // there is something to measure.
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: startedAt == nil)) { _ in
-                let now = startedAt == nil ? .silent : levels()
-                HStack(spacing: EchoLayout.islandGaugeGap) {
-                    LevelGauge("You", level: now.you, tone: .accent)
-                    LevelGauge("Others", level: now.others, tone: .neutral)
+            if notices.isEmpty {
+                // Redrawn as often as a level can change on screen, and only
+                // while there is something to measure.
+                TimelineView(.animation(minimumInterval: 1.0 / 30, paused: startedAt == nil)) { _ in
+                    let now = startedAt == nil ? .silent : levels()
+                    HStack(spacing: EchoLayout.islandGaugeGap) {
+                        LevelGauge("You", level: now.you, tone: .accent)
+                        LevelGauge("Others", level: now.others, tone: .neutral)
+                    }
                 }
+            } else {
+                Text(FaceText.notices(notices)).faceDetail()
             }
         } controls: {
             if let stop {

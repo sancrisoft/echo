@@ -113,6 +113,13 @@ nonisolated enum FaceText {
         return "\(meeting.title) · \(duration(meeting.duration))"
     }
 
+    /// What takes a live face's information line while the capture has a
+    /// problem: the session's notices, most important first and in one line,
+    /// so the one that matters most is the one a truncation never reaches.
+    static func notices(_ messages: [String]) -> String {
+        messages.joined(separator: " · ")
+    }
+
     /// The call-ended face's second line: "Auto-stop in 8 s".
     static func autoStop(_ seconds: Int) -> String {
         "Auto-stop in \(seconds) s"

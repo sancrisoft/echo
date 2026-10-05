@@ -139,6 +139,9 @@ struct IslandRootView: View {
                 stoppedAt: stoppedAt,
                 capture: ScopeSelection.label(for: recordingScope),
                 levels: { session.levels },
+                // In the order the session ranks them, which is the order
+                // `RecordingNotice.Kind` declares.
+                notices: session.notices.map(\.message),
                 // Stop is offered while capture is live and not while the
                 // session is being torn down: the phase that follows it is not
                 // idle, and a second Stop must not start a second teardown.

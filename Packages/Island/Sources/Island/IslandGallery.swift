@@ -53,6 +53,14 @@ import SwiftUI
                         }
                     }
                 }
+                // The recording face once more, with a capture notice in place
+                // of its levels (#118).
+                VStack(alignment: .leading, spacing: EchoSpacing.s) {
+                    Text("recording, with a notice")
+                        .font(EchoFont.sectionLabel)
+                        .foregroundStyle(EchoColor.textTertiary)
+                    shell(.recording, isExpanded: true, notices: [Self.notice])
+                }
             }
             .padding(EchoSpacing.xl)
         }
@@ -64,6 +72,9 @@ import SwiftUI
         }
 
         private var startedAt: Date { now.addingTimeInterval(-761) }
+
+        /// The session's own sentence for a lost microphone.
+        private static let notice = "Microphone unavailable — recording continues with meeting audio only."
         private var deadline: Date { now.addingTimeInterval(8) }
 
         // MARK: Drawing
@@ -75,7 +86,7 @@ import SwiftUI
         /// The cell is the window's size, because the shell fills its window
         /// rather than asserting a size of its own — the gallery stands in for
         /// the window here and has to be as big as one.
-        private func shell(_ face: IslandShellFace, isExpanded: Bool) -> some View {
+        private func shell(_ face: IslandShellFace, isExpanded: Bool, notices: [String] = []) -> some View {
             let geometry = IslandShellGeometry(metrics: metrics, face: face, isExpanded: isExpanded)
             return IslandShell(
                 geometry: geometry,
@@ -85,7 +96,7 @@ import SwiftUI
                 progress: face == .summarizing ? 0.46 : nil,
                 leadingEar: { leadingEar(face) },
                 trailingEar: { trailingEar(face) },
-                row: { row(face) }
+                row: { row(face, notices: notices) }
             )
             .frame(width: geometry.panelSize.width, height: geometry.panelSize.height)
             .background(EchoColor.surface)
@@ -116,7 +127,7 @@ import SwiftUI
         }
 
         @ViewBuilder
-        private func row(_ face: IslandShellFace) -> some View {
+        private func row(_ face: IslandShellFace, notices: [String]) -> some View {
             switch face {
             case .idle:
                 IdleRow(lastMeeting: meeting, capture: "Everything", chooseCapture: {}, record: {})
@@ -128,6 +139,7 @@ import SwiftUI
                     stoppedAt: 0,
                     capture: "Zoom only",
                     levels: { CaptureLevels(you: 0.64, others: 0.27) },
+                    notices: notices,
                     stop: {}
                 )
             case .callEnded:

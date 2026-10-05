@@ -107,6 +107,20 @@ struct IslandMenuTests {
         #expect(calls.made == ["stop"])
     }
 
+    @Test("a live session's capture problems follow its clock, one line each, in the session's order")
+    func aLiveSessionWithNotices() {
+        let phase = RecordingPhase.recording(startedAt: Self.now.addingTimeInterval(-761), scope: .everything)
+        let menu = entries(IslandReading(phase: phase, notices: ["Microphone unavailable", "Echo degraded"]))
+        #expect(titles(menu) == ["00:12:41 · Everything", "Microphone unavailable", "Echo degraded", "Stop"])
+        #expect(menu.prefix(3).allSatisfy(isStatus))
+    }
+
+    @Test("notices take the face's line most important first, so a cut never reaches the first")
+    func noticesInOneLine() {
+        #expect(FaceText.notices(["first", "second"]) == "first · second")
+        #expect(FaceText.notices(["only"]) == "only")
+    }
+
     @Test("a session being torn down offers no second Stop")
     func stoppingOffersNothing() {
         #expect(entries(IslandReading(phase: .stopping)).isEmpty)
