@@ -186,12 +186,19 @@ final class AppComposition {
         )
 
         // The same gated start every surface runs, with the capture the chip
-        // and the menu share, and the same stop.
+        // and the menu share, and the same stop. A refused start opens the
+        // menu, which says why: the shortcut has no face of its own to say it
+        // on.
+        let menuBarItem = menuBarItem
         globalShortcut = GlobalShortcut(pressed: {
             switch GlobalShortcut.Press.of(session.phase) {
             case .start:
                 let scope = capture.current
-                Task { await session.start(scope: scope) }
+                Task {
+                    if await session.start(scope: scope) != nil {
+                        menuBarItem.showMenu()
+                    }
+                }
             case .stop:
                 Task { await session.stop() }
             case .nothing:
@@ -259,6 +266,13 @@ final class AppComposition {
         Task.detached(priority: .utility) { [dataRoot] in
             RetiredModelCleanup.run(modelsRoot: dataRoot.models)
         }
+
+        // The models, fetched at launch: the transcription model first, which
+        // a recording now waits for, then the summary model's eager download.
+        // Before, a fresh install fetched nothing until a recording's own
+        // prefetch ran, and a recording that waits for the model could then
+        // never start (product owner, 2026-10-02).
+        Task { [session] in await session.prepareModels() }
 
         // Pick up where a quit or a crash left off. The two staging sweeps
         // run inside this call, before the enqueue, because the order matters

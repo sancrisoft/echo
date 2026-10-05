@@ -40,7 +40,8 @@ struct IslandMenuTests {
                 stopNow: { self.made.append("stopNow") },
                 keepRecording: { self.made.append("keep") },
                 openSaved: { self.made.append("openSaved") },
-                openMeeting: { self.opened.append($0) }
+                openMeeting: { self.opened.append($0) },
+                retryModel: { self.made.append("retry") }
             )
         }
     }
@@ -119,6 +120,48 @@ struct IslandMenuTests {
     func noticesInOneLine() {
         #expect(FaceText.notices(["first", "second"]) == "first · second")
         #expect(FaceText.notices(["only"]) == "only")
+    }
+
+    // MARK: Waiting for the transcription model
+
+    @Test("at rest without the model: why, then Record held back, and no capture to choose")
+    func atRestWaiting() {
+        let menu = entries(IslandReading(readiness: .downloading(0.41)))
+        #expect(titles(menu) == ["Transcription · 41%", "Record"])
+        #expect(isStatus(menu[0]))
+        #expect(!menu[1].isEnabled)
+        #expect(menu[1].takesShortcut, "the shortcut still lands here, and opens this menu to say why")
+    }
+
+    @Test("a failed fetch adds the artboard's Retry, which runs the fetch again")
+    func aFailedFetchOffersRetry() {
+        let calls = Calls()
+        let menu = entries(IslandReading(readiness: .downloadFailed("The download stalled.")), calls)
+        #expect(titles(menu) == ["Transcription · The download stalled.", "Retry", "Record"])
+        perform(menu[1])
+        #expect(calls.made == ["retry"])
+    }
+
+    @Test("a call noticed without the model: the call, why, Record held back, Dismiss")
+    func aCallNoticedWaiting() {
+        let menu = entries(
+            IslandReading(detection: .startPrompt(appName: "Zoom", scoped: true), readiness: .waitingToDownload))
+        #expect(titles(menu) == ["Zoom call detected", "Transcription · Waiting to download", "Record", "Dismiss"])
+        #expect(!menu[2].isEnabled)
+        #expect(menu[3].isEnabled)
+    }
+
+    @Test(
+        "why, in the models artboard's words",
+        arguments: [
+            (RecordingReadiness.ready, nil),
+            (.waitingToDownload, "Transcription · Waiting to download"),
+            (.downloading(0.414), "Transcription · 41%"),
+            (.downloading(1.2), "Transcription · 100%"),
+            (.downloadFailed("No network."), "Transcription · No network."),
+        ] as [(RecordingReadiness, String?)])
+    func whyInWords(readiness: RecordingReadiness, expected: String?) {
+        #expect(FaceText.waitingFor(readiness) == expected)
     }
 
     @Test("a session being torn down offers no second Stop")

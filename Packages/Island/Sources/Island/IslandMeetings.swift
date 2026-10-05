@@ -14,6 +14,7 @@
 //
 
 import Foundation
+import Recording
 
 /// A meeting, as the island speaks of it.
 public struct IslandMeeting: Equatable, Sendable {
@@ -111,6 +112,26 @@ nonisolated enum FaceText {
     static func afterStopDetail(_ meeting: IslandMeeting?) -> String {
         guard let meeting else { return "Meeting" }
         return "\(meeting.title) · \(duration(meeting.duration))"
+    }
+
+    /// Why a recording cannot start, as the faces that offer one say it in
+    /// place of their information line: the models artboard's row label and
+    /// state ("Transcription · Waiting to download", "Transcription · 41%"),
+    /// or the fetch's own reason. Approved by the product owner, 2026-10-02.
+    /// `nil` once nothing is in the way.
+    static func waitingFor(_ readiness: RecordingReadiness) -> String? {
+        let state: String
+        switch readiness {
+        case .ready: return nil
+        case .waitingToDownload: state = "Waiting to download"
+        case .downloading(let fraction):
+            // Whole percent, rounded down so it never claims 100 before the
+            // files are verified, and written the way the English interface
+            // writes it whatever the Mac's region.
+            state = "\(Int(min(max(fraction, 0), 1) * 100))%"
+        case .downloadFailed(let reason): state = reason
+        }
+        return "Transcription · \(state)"
     }
 
     /// What takes a live face's information line while the capture has a

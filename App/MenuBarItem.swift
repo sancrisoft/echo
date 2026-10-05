@@ -292,7 +292,11 @@ final class MenuBarItem: NSObject, NSMenuDelegate {
     /// The menu is attached only while it is open. A status item with a menu
     /// set swallows the click itself, and the left button would never reach the
     /// action again.
-    private func showMenu() {
+    ///
+    /// Also opened by the global shortcut when a recording cannot start: the
+    /// shortcut has nowhere of its own to say why, and the menu holds the
+    /// reason beside the Record it holds back.
+    func showMenu() {
         guard let item, let button = item.button else { return }
         let menu = contents.build()
         menu.delegate = self

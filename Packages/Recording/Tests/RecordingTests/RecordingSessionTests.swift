@@ -92,7 +92,7 @@ struct RecordingSessionLifecycleTests {
         // the microphone and the tap running with no session behind them.
         let rig = CaptureRig()
         try await withSession(rig: rig) { harness in
-            async let starting: Void = harness.session.start()
+            async let starting = harness.session.start()
             // Stop only once the start is genuinely in flight — otherwise the
             // two child tasks can run in either order and "stop before start"
             // is a different, uninteresting case.
@@ -100,7 +100,7 @@ struct RecordingSessionLifecycleTests {
                 !rig.microphones.isEmpty
             }
             await harness.session.stop()
-            await starting
+            #expect(await starting == nil)
 
             // Serialized, the Stop waited and tore down everything the start
             // built. Unserialized, the start goes on to bring the system tap

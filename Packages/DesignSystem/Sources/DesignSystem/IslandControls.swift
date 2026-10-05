@@ -39,18 +39,37 @@ public struct IslandButtonStyle: ButtonStyle {
     }
 
     public func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(role == .primary ? EchoFont.capsulePrimary : EchoFont.capsuleSecondary)
-            .tracking(EchoFont.capsuleTracking)
-            .foregroundStyle(
-                role == .quiet ? EchoColor.Island.quietLabel : EchoColor.Island.controlLabel
-            )
-            .lineLimit(1)
-            .frame(height: EchoControl.capsuleHeight)
-            .padding(.horizontal, inset)
-            .background(fill, in: .rect(cornerRadius: EchoRadius.capsule))
-            .contentShape(.rect(cornerRadius: EchoRadius.capsule))
-            .opacity(configuration.isPressed ? 0.72 : 1)
+        Capsule(configuration: configuration, role: role, inset: inset, fill: fill)
+    }
+
+    /// The drawn capsule, a view of its own so it can read whether it is
+    /// enabled: a style cannot, and the island has one capsule that can be
+    /// held back — Record while recording would be refused (product owner,
+    /// 2026-10-02). Disabled keeps the shape and the fill and takes the quiet
+    /// control's grey for its label, so the face does not change size or
+    /// shape while it explains why.
+    private struct Capsule: View {
+        let configuration: Configuration
+        let role: Role
+        let inset: CGFloat
+        let fill: Color
+
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .font(role == .primary ? EchoFont.capsulePrimary : EchoFont.capsuleSecondary)
+                .tracking(EchoFont.capsuleTracking)
+                .foregroundStyle(
+                    role == .quiet || !isEnabled ? EchoColor.Island.quietLabel : EchoColor.Island.controlLabel
+                )
+                .lineLimit(1)
+                .frame(height: EchoControl.capsuleHeight)
+                .padding(.horizontal, inset)
+                .background(fill, in: .rect(cornerRadius: EchoRadius.capsule))
+                .contentShape(.rect(cornerRadius: EchoRadius.capsule))
+                .opacity(configuration.isPressed ? 0.72 : 1)
+        }
     }
 
     private var inset: CGFloat {

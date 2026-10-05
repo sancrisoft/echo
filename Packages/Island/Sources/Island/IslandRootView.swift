@@ -122,7 +122,8 @@ struct IslandRootView: View {
                 lastMeeting: meetings.latest(),
                 capture: CaptureChoice.label(for: capture.current),
                 chooseCapture: chooseCapture,
-                record: record
+                record: record,
+                waitingFor: FaceText.waitingFor(session.readiness)
             )
 
         case .callDetected:
@@ -130,7 +131,8 @@ struct IslandRootView: View {
                 app: noticedCall.app,
                 scoped: noticedCall.scoped,
                 dismiss: { detector.dismissTapped() },
-                record: { detector.startTapped() }
+                record: { detector.startTapped() },
+                waitingFor: FaceText.waitingFor(session.readiness)
             )
 
         case .recording:

@@ -88,12 +88,17 @@ private func glyph<S: Shape>(_ shape: S, _ ink: Color, size: CGFloat) -> some Vi
     shape.fill(ink).frame(width: size, height: size).accessibilityHidden(true)
 }
 
-/// The capsule every face that offers a recording ends with.
-private func recordCapsule(_ action: @escaping () -> Void) -> some View {
+/// The capsule every face that offers a recording ends with. Held back, it
+/// keeps its place and its shape and goes grey, glyph and all, while the face
+/// says why in its information line.
+private func recordCapsule(_ action: @escaping () -> Void, isEnabled: Bool = true) -> some View {
     Button(action: action) {
-        CapsuleLabel(title: "Record", glyph: RecordGlyph(), ink: EchoColor.Island.recording)
+        CapsuleLabel(
+            title: "Record", glyph: RecordGlyph(),
+            ink: isEnabled ? EchoColor.Island.recording : EchoColor.Island.quietLabel)
     }
     .buttonStyle(.islandPrimary)
+    .disabled(!isEnabled)
 }
 
 /// The ✕ that dismisses a face.
@@ -116,6 +121,9 @@ struct IdleRow: View {
     let capture: String
     let chooseCapture: () -> Void
     let record: () -> Void
+    /// Why a recording cannot start, in place of the capture choice — which
+    /// has nothing to choose while there is nothing to record with.
+    var waitingFor: String?
 
     var body: some View {
         // The one face whose second line is a control, and the tallest for it:
@@ -131,13 +139,17 @@ struct IdleRow: View {
             }
             .frame(height: EchoFont.islandTitleLineHeight)
         } second: {
-            // Named by the window's own word for it, with the choice as its
-            // value, rather than read as a word and a chevron.
-            ValueChip(capture, action: chooseCapture)
-                .accessibilityLabel("Capture")
-                .accessibilityValue(capture)
+            if let waitingFor {
+                Text(waitingFor).faceDetail()
+            } else {
+                // Named by the window's own word for it, with the choice as
+                // its value, rather than read as a word and a chevron.
+                ValueChip(capture, action: chooseCapture)
+                    .accessibilityLabel("Capture")
+                    .accessibilityValue(capture)
+            }
         } controls: {
-            recordCapsule(record)
+            recordCapsule(record, isEnabled: waitingFor == nil)
         }
     }
 }
@@ -152,6 +164,8 @@ struct CallDetectedRow: View {
     let scoped: Bool
     let dismiss: () -> Void
     let record: () -> Void
+    /// Why a recording cannot start, in place of what it would capture.
+    var waitingFor: String?
 
     var body: some View {
         FaceRow {
@@ -159,10 +173,10 @@ struct CallDetectedRow: View {
         } first: {
             Text(FaceText.callNoticed(app)).faceTitle()
         } second: {
-            Text(FaceText.callDetail(app: app, scoped: scoped)).faceDetail()
+            Text(waitingFor ?? FaceText.callDetail(app: app, scoped: scoped)).faceDetail()
         } controls: {
             dismissButton(dismiss)
-            recordCapsule(record)
+            recordCapsule(record, isEnabled: waitingFor == nil)
         }
     }
 }

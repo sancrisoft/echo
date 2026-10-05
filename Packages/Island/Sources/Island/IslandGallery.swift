@@ -61,6 +61,17 @@ import SwiftUI
                         .foregroundStyle(EchoColor.textTertiary)
                     shell(.recording, isExpanded: true, notices: [Self.notice])
                 }
+                // The two faces that offer a recording, while the
+                // transcription model is still on its way.
+                VStack(alignment: .leading, spacing: EchoSpacing.s) {
+                    Text("waiting for the transcription model")
+                        .font(EchoFont.sectionLabel)
+                        .foregroundStyle(EchoColor.textTertiary)
+                    HStack(alignment: .top, spacing: EchoSpacing.xl) {
+                        shell(.idle, isExpanded: true, waitingFor: Self.waiting)
+                        shell(.callDetected, isExpanded: true, waitingFor: Self.waiting)
+                    }
+                }
             }
             .padding(EchoSpacing.xl)
         }
@@ -72,6 +83,9 @@ import SwiftUI
         }
 
         private var startedAt: Date { now.addingTimeInterval(-761) }
+
+        /// The readiness line, part-way through the fetch.
+        private static let waiting = FaceText.waitingFor(.downloading(0.41))
 
         /// The session's own sentence for a lost microphone.
         private static let notice = "Microphone unavailable — recording continues with meeting audio only."
@@ -86,7 +100,9 @@ import SwiftUI
         /// The cell is the window's size, because the shell fills its window
         /// rather than asserting a size of its own — the gallery stands in for
         /// the window here and has to be as big as one.
-        private func shell(_ face: IslandShellFace, isExpanded: Bool, notices: [String] = []) -> some View {
+        private func shell(
+            _ face: IslandShellFace, isExpanded: Bool, notices: [String] = [], waitingFor: String? = nil
+        ) -> some View {
             let geometry = IslandShellGeometry(metrics: metrics, face: face, isExpanded: isExpanded)
             return IslandShell(
                 geometry: geometry,
@@ -96,7 +112,7 @@ import SwiftUI
                 progress: face == .summarizing ? 0.46 : nil,
                 leadingEar: { leadingEar(face) },
                 trailingEar: { trailingEar(face) },
-                row: { row(face, notices: notices) }
+                row: { row(face, notices: notices, waitingFor: waitingFor) }
             )
             .frame(width: geometry.panelSize.width, height: geometry.panelSize.height)
             .background(EchoColor.surface)
@@ -127,12 +143,13 @@ import SwiftUI
         }
 
         @ViewBuilder
-        private func row(_ face: IslandShellFace, notices: [String]) -> some View {
+        private func row(_ face: IslandShellFace, notices: [String], waitingFor: String?) -> some View {
             switch face {
             case .idle:
-                IdleRow(lastMeeting: meeting, capture: "Everything", chooseCapture: {}, record: {})
+                IdleRow(
+                    lastMeeting: meeting, capture: "Everything", chooseCapture: {}, record: {}, waitingFor: waitingFor)
             case .callDetected:
-                CallDetectedRow(app: "Zoom", scoped: true, dismiss: {}, record: {})
+                CallDetectedRow(app: "Zoom", scoped: true, dismiss: {}, record: {}, waitingFor: waitingFor)
             case .recording:
                 RecordingRow(
                     startedAt: startedAt,

@@ -127,6 +127,8 @@ nonisolated struct IslandReading: Sendable {
     var savedMeeting: IslandMeeting?
     /// The session's notices, in its order.
     var notices: [String] = []
+    /// Whether a recording can start.
+    var readiness: RecordingReadiness = .ready
 
     var face: IslandShellFace {
         IslandShellFace.resolve(detection: detection, phase: phase)
@@ -168,6 +170,7 @@ struct IslandMenuActions {
     var keepRecording: () -> Void
     var openSaved: () -> Void
     var openMeeting: (UUID) -> Void
+    var retryModel: () -> Void
 }
 
 extension IslandEars {
@@ -189,11 +192,31 @@ extension IslandMenuEntry {
 
     /// The open face's line and commands for this reading, at `now`.
     static func entries(for reading: IslandReading, now: Date, actions: IslandMenuActions) -> [IslandMenuEntry] {
+        // Why a recording cannot start, for the two faces that offer one: the
+        // reason as a line, Record held back, and the artboard's Retry once
+        // the fetch has failed — the one way to run it again short of a
+        // relaunch.
+        let waiting = FaceText.waitingFor(reading.readiness)
+        var waitingEntries: [IslandMenuEntry] {
+            guard let waiting else { return [] }
+            var entries = [IslandMenuEntry(title: waiting, kind: .status)]
+            if case .downloadFailed = reading.readiness {
+                entries.append(IslandMenuEntry(title: "Retry", kind: .action(actions.retryModel)))
+            }
+            return entries
+        }
+
         switch reading.face {
         case .idle:
             let current = reading.capture
+            let record = IslandMenuEntry(
+                title: "Record", kind: .action({ actions.record(current) }), isEnabled: waiting == nil,
+                takesShortcut: true)
+            // Nothing to choose while there is nothing to record with, as on
+            // the face.
+            guard waiting == nil else { return waitingEntries + [record] }
             return [
-                IslandMenuEntry(title: "Record", kind: .action({ actions.record(current) }), takesShortcut: true),
+                record,
                 IslandMenuEntry(
                     title: ScopeSelection.label(for: current),
                     kind: .choice(
@@ -206,11 +229,12 @@ extension IslandMenuEntry {
             ]
 
         case .callDetected:
-            return [
-                IslandMenuEntry(title: FaceText.callNoticed(reading.noticedCall.app), kind: .status),
-                IslandMenuEntry(title: "Record", kind: .action(actions.recordCall)),
-                IslandMenuEntry(title: "Dismiss", kind: .action(actions.dismiss)),
-            ]
+            return [IslandMenuEntry(title: FaceText.callNoticed(reading.noticedCall.app), kind: .status)]
+                + waitingEntries
+                + [
+                    IslandMenuEntry(title: "Record", kind: .action(actions.recordCall), isEnabled: waiting == nil),
+                    IslandMenuEntry(title: "Dismiss", kind: .action(actions.dismiss)),
+                ]
 
         case .recording:
             // The phase that follows Stop is not idle, so a second Stop has
@@ -301,7 +325,8 @@ public struct IslandMenu {
             capture: capture.current,
             captureOptions: capture.options,
             savedMeeting: session.savedMeeting(in: meetings),
-            notices: session.notices.map(\.message)
+            notices: session.notices.map(\.message),
+            readiness: session.readiness
         )
     }
 
@@ -315,7 +340,8 @@ public struct IslandMenu {
             stopNow: { [detector] in detector.stopNowTapped() },
             keepRecording: { [detector] in detector.keepRecordingTapped() },
             openSaved: { [detector] in detector.openEchoTapped() },
-            openMeeting: openMeeting
+            openMeeting: openMeeting,
+            retryModel: { [session] in session.retryTranscriptionModel() }
         )
     }
 }

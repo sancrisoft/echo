@@ -182,6 +182,27 @@ struct CaptureNoticeFitTests {
     }
 }
 
+@Suite("Why a recording cannot start, on the open face")
+struct WaitingForTheModelFitTests {
+
+    @Test("the reason in place of the information line keeps both faces in their band")
+    func theReasonKeepsTheBand() {
+        let reason = "Transcription · The download stalled and made no progress. Check your connection and retry."
+        let idle = room(for: .idle)
+        let call = room(for: .callDetected)
+        let idleRow = measure(
+            IdleRow(
+                lastMeeting: IslandMeeting(title: "A", duration: 3_480, words: nil), capture: "Everything",
+                chooseCapture: {}, record: {}, waitingFor: reason
+            ).frame(width: idle.width))
+        let callRow = measure(
+            CallDetectedRow(app: "Zoom", scoped: true, dismiss: {}, record: {}, waitingFor: reason)
+                .frame(width: call.width))
+        #expect(idleRow.height <= idle.height)
+        #expect(callRow.height <= call.height)
+    }
+}
+
 /// The room either side of a real cutout: the island hangs centred on it, so
 /// each ear gets half of what the collapsed width leaves, less its inset.
 private func earRoom(for width: IslandWidth) -> CGFloat {
