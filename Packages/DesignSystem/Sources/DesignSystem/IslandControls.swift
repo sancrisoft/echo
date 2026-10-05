@@ -119,6 +119,7 @@ public struct ValueChip: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: EchoControl.islandGlyphSize, weight: .semibold))
                     .foregroundStyle(EchoColor.Island.quietLabel)
+                    .accessibilityHidden(true)
             }
             .frame(height: EchoControl.chipHeight)
             .padding(.leading, EchoControl.chipLeadingInset)
@@ -180,6 +181,11 @@ public struct LevelGauge: View {
             }
             .frame(height: EchoControl.gaugeHeight)
         }
+        // One element: the label, and the level it was handed as its value —
+        // the same number the bar is drawn from, never another.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(Text(level, format: .percent.precision(.fractionLength(0))))
     }
 
     private var labelColor: Color {

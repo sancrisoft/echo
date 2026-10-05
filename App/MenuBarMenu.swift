@@ -92,7 +92,14 @@ final class MenuBarMenu: NSObject {
             // No action, so it reads as a line rather than a command.
             return NSMenuItem(title: entry.title, action: nil, keyEquivalent: "")
         case .action(let run):
-            return MenuCommand.item(entry.title, isEnabled: entry.isEnabled, run: run)
+            let item = MenuCommand.item(entry.title, isEnabled: entry.isEnabled, run: run)
+            // Shown, and live while the menu is open: the menu's own key
+            // equivalent runs the same command the global shortcut would.
+            if entry.takesShortcut {
+                item.keyEquivalent = GlobalShortcut.keyEquivalent
+                item.keyEquivalentModifierMask = GlobalShortcut.modifiers
+            }
+            return item
         case .choice(let options):
             let item = NSMenuItem(title: entry.title, action: nil, keyEquivalent: "")
             let submenu = NSMenu()

@@ -20,7 +20,9 @@ Echo/
 │   ├── EchoApp.swift         the scenes: the main window and its commands
 │   ├── AppComposition.swift  builds every service, wires them, starts side effects
 │   ├── MenuBarItem.swift     the NSStatusItem, its two buttons, the openWindow bridge
-│   ├── ActivationPolicy.swift · WindowOpener.swift · MenuBarMenu.swift
+│   ├── MenuBarMenu.swift     the island's face as a menu, then the way back into the app
+│   ├── GlobalShortcut.swift  Control + Option + E: Record at rest, Stop while recording
+│   ├── ActivationPolicy.swift · WindowOpener.swift
 │   ├── WindowSnapshot.swift  DEBUG: render a scene to a PNG (design review)
 │   ├── Info.plist · Echo.entitlements · Assets.xcassets
 ├── AppTests/                 tests that need the real app as host (few)
@@ -344,7 +346,12 @@ names inside a package are free to change.
 - The faces (internal, `IslandFaces.swift`): one open row and two ears per face,
   drawn from values and handing taps back as closures, so the gallery and the
   tests draw them with fixtures and `IslandRootView` is the one place live
-  sources become words. `FaceText` holds their sentences as pure functions.
+  sources become words. `FaceText` holds their sentences as pure functions. For VoiceOver (#119) the shell is one container named for the
+  app; each face's two lines read as one element, its controls as their own;
+  glyphs that repeat a line are hidden; and the ears and the open row are each
+  hidden while the other is on screen. The level gauges carry the measured
+  level as their value. The menu bar's menu is the full keyboard and
+  VoiceOver path; the island is a second one, not the only one.
 - `IslandGallery` (DEBUG): every face, collapsed and expanded, on one sheet,
   with the artboards' fixtures.
 - `CaptureChoice` (`@Observable @MainActor`: `current`, `options`, `pick(_:)`,
@@ -397,7 +404,7 @@ methods called by the owner, not observation chains.
 ## 5. Data flow: from a click to notes
 
 ```
-click Record (menu bar · window · island)
+click Record (menu bar · window · island · Control + Option + E)
   → RecordingSession.start(scope:)
       primes permissions (mic, then system) on the first gesture
       builds SwitchingAECStage, monitors, gap trackers, RetainedAudioWriter (staging dir)

@@ -73,6 +73,10 @@ final class AppComposition {
     /// dashboard and the menu behind the other button.
     let menuBarItem: MenuBarItem
 
+    /// Control + Option + E, from anywhere: Record at rest, Stop while
+    /// recording (#119).
+    let globalShortcut: GlobalShortcut
+
     /// Whether the main window is on screen as soon as the scene is built.
     /// True for `ECHO_OPEN_WINDOW`, and for the one launch that finds this Mac
     /// has never run Echo before. Read by the scene, which SwiftUI builds only
@@ -180,6 +184,20 @@ final class AppComposition {
             ears: { islandMenu.ears },
             showsIsland: { settings.showsIsland }
         )
+
+        // The same gated start every surface runs, with the capture the chip
+        // and the menu share, and the same stop.
+        globalShortcut = GlobalShortcut(pressed: {
+            switch GlobalShortcut.Press.of(session.phase) {
+            case .start:
+                let scope = capture.current
+                Task { await session.start(scope: scope) }
+            case .stop:
+                Task { await session.stop() }
+            case .nothing:
+                break
+            }
+        })
     }
 
     /// A meeting, as the island speaks of it.
@@ -263,8 +281,13 @@ final class AppComposition {
 
         // The menu bar item is AppKit's, and AppKit is not up yet: SwiftUI runs
         // this before it creates `NSApplication`. The delegate installs it the
-        // moment there is an app to install it into.
-        EchoAppDelegate.whenLaunched { [menuBarItem] in menuBarItem.install() }
+        // moment there is an app to install it into — and claims the global
+        // shortcut then too, whose presses arrive through the event loop that
+        // app runs.
+        EchoAppDelegate.whenLaunched { [menuBarItem, globalShortcut] in
+            menuBarItem.install()
+            globalShortcut.register()
+        }
 
         // A failed Update Now reopened the Echo that was there and left a
         // report behind; Settings shows it once, and reading it consumes it.

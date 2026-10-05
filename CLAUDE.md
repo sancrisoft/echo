@@ -30,8 +30,10 @@ App/                 composition root + scenes. Nothing else.
   ActivationPolicy.swift · WindowOpener.swift · UpdatePrompt.swift
   WindowSnapshot.swift (DEBUG)
   MenuBarItem.swift    the NSStatusItem: left click opens the window, right click
-                       the menu; it also carries the openWindow bridge
-  MenuBarMenu.swift    what that menu contains
+                       the menu; with the island off it says what the island's
+                       ears would; it also carries the openWindow bridge
+  MenuBarMenu.swift    what that menu contains: the island's face, then the way back
+  GlobalShortcut.swift Control + Option + E, registered with Carbon (no permission)
 AppTests/            hosted tests only for what needs the real app (TestHost tripwire)
 Packages/<Name>/     one local Swift package per capability
   Package.swift

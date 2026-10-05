@@ -91,6 +91,10 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .animation(shellMotion, value: geometry.shellSize)
         }
+        // The island as VoiceOver finds it: one container named for the app,
+        // holding the face that is on screen.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Echo")
     }
 
     // MARK: The black
@@ -118,6 +122,10 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
             trailingEar().frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, EchoLayout.islandEarInset)
+        // What the collapsed island says, read as one thing, and only while
+        // it is the thing on screen.
+        .accessibilityElement(children: .combine)
+        .accessibilityHidden(isExpanded)
         .opacity(isExpanded ? 0 : 1)
         // An ear that is on its way out is not a target. Without this the
         // faded-out layer still answers the pointer, over the open face.
@@ -145,6 +153,8 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
             .opacity(isExpanded ? 1 : 0)
             .offset(y: isExpanded ? 0 : EchoMotion.islandContentRise)
             .allowsHitTesting(isExpanded)
+            // A faded-out row is not read either, any more than it is tapped.
+            .accessibilityHidden(!isExpanded)
             .animation(
                 reduceMotion ? nil : EchoMotion.islandContent(opening: isExpanded),
                 value: isExpanded
@@ -185,6 +195,7 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
                 value: isExpanded
             )
             .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
 

@@ -65,6 +65,7 @@ struct CapsuleLabel<Glyph: Shape>: View {
             glyph
                 .fill(ink)
                 .frame(width: EchoControl.capsuleGlyphSize, height: EchoControl.capsuleGlyphSize)
+                .accessibilityHidden(true)
             Text(title)
         }
     }
@@ -126,6 +127,8 @@ struct CountdownRing: View {
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: size, height: size)
+        // The line beside it says the same in words.
+        .accessibilityHidden(true)
     }
 }
 
@@ -152,6 +155,7 @@ struct LevelBarsGlyph: View {
             }
         }
         .frame(width: box.width, height: box.height)
+        .accessibilityHidden(true)
     }
 }
 

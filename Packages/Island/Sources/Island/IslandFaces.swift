@@ -47,12 +47,16 @@ struct FaceRow<Icon: View, First: View, Second: View, Controls: View>: View {
 
     var body: some View {
         HStack(spacing: EchoLayout.islandRowGap) {
-            icon
+            // Every icon repeats what the first line says.
+            icon.accessibilityHidden(true)
+            // The two lines are one statement to VoiceOver, read in the order
+            // they are drawn; a control among them keeps its own element.
             VStack(alignment: .leading, spacing: lineGap) {
                 first
                 second
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
             HStack(spacing: EchoControl.capsuleGap) { controls }
                 .fixedSize()
         }
@@ -81,7 +85,7 @@ extension Text {
 
 /// A glyph at the head of an open face, or in an ear.
 private func glyph<S: Shape>(_ shape: S, _ ink: Color, size: CGFloat) -> some View {
-    shape.fill(ink).frame(width: size, height: size)
+    shape.fill(ink).frame(width: size, height: size).accessibilityHidden(true)
 }
 
 /// The capsule every face that offers a recording ends with.
@@ -127,7 +131,11 @@ struct IdleRow: View {
             }
             .frame(height: EchoFont.islandTitleLineHeight)
         } second: {
+            // Named by the window's own word for it, with the choice as its
+            // value, rather than read as a word and a chevron.
             ValueChip(capture, action: chooseCapture)
+                .accessibilityLabel("Capture")
+                .accessibilityValue(capture)
         } controls: {
             recordCapsule(record)
         }
