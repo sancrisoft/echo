@@ -7,6 +7,10 @@ on:
       - main
       - v2
       - "v2/**"
+  # Both toolchains on any branch, by hand: for a layer in the middle of a
+  # stack that is about to be merged on its own, which no pull request run
+  # covers (see the scope job).
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,30 +23,83 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Decides what a run builds, on a Linux runner that takes seconds, so a macOS
+  # job is only queued when it has something to prove. macOS runners are few
+  # and a stack of eleven pull requests used to queue twenty-two jobs of half
+  # an hour each, some waiting over an hour to start.
+  scope:
+    name: Scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
+      matrix: ${{ steps.scope.outputs.matrix }}
+    steps:
+      # Two toolchains, because code that compiles on one need not compile on
+      # the other (27 rejected two files 26.6 accepted, and their swift-format
+      # versions disagree on test code). 26.6 is the floor the README promises
+      # and what releases are built with. Development happens on 27, so a pull
+      # request builds on 26.6 alone, the toolchain its author's Mac does not
+      # check. Pushes to main and v2, and a manual run, build on both. The 27
+      # runner image is a public preview.
+      #
+      # In a stack, only the top pull request builds. Its head contains every
+      # layer below it, the stack merges as a whole, and the push to v2 after
+      # the merge builds the result on both toolchains. A pull request from a
+      # fork always builds: its branch name means nothing in this repository.
+      - name: Decide what to build
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          floor='{"name":"Build and test","runner":"macos-26","xcode":"/Applications/Xcode_26.6.app","results":"AppTests-xcode-26.6"}'
+          newest='{"name":"Build and test (Xcode 27)","runner":"xcode-27","xcode":"/Applications/Xcode_27.0.app","results":"AppTests-xcode-27.0"}'
+
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[$floor,$newest]}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "matrix={\"include\":[$floor]}" >> "$GITHUB_OUTPUT"
+
+          # gh stack opens a stack's pull requests bottom up, a few seconds
+          # apart (37 s for eleven), so the one above may not exist yet when
+          # this runs for the one below it.
+          above=""
+          if [ "$HEAD_REPO" = "$REPO" ]; then
+            sleep 30
+            above=$(gh pr list --repo "$REPO" --base "$HEAD_REF" --state open \
+              --json number --jq 'map("#\(.number)") | join(", ")')
+          fi
+
+          if [ -n "$above" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Not built here: $above is stacked on this branch, and its run covers this one." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: scope
+    if: needs.scope.outputs.run == 'true'
     # The 26.6 leg keeps the name this job has always had, "Build and test",
     # so a required-check rule or anything else keyed on it keeps matching. A
-    # name that uses the matrix is taken as written, with no values appended.
-    name: ${{ matrix.name }}
+    # name that uses the matrix is taken as written, with no values appended;
+    # a skipped job has no matrix, hence the fallback.
+    name: ${{ matrix.name || 'Build and test' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
-    # Two toolchains, because code that compiles on one need not compile on the
-    # other (27 rejected two files 26.6 accepted). 26.6 is the floor the README
-    # promises and what releases are built with; 27.0 is what development
-    # happens on (the same build, 27A266a). The 27 runner image is a public
-    # preview, so neither leg cancels the other.
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Build and test
-            runner: macos-26
-            xcode: /Applications/Xcode_26.6.app
-            results: AppTests-xcode-26.6
-          - name: Build and test (Xcode 27)
-            runner: xcode-27
-            xcode: /Applications/Xcode_27.0.app
-            results: AppTests-xcode-27.0
+      matrix: ${{ fromJSON(needs.scope.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
