@@ -22,12 +22,20 @@ import Testing
 struct ScopeSelectionTests {
 
     // Real catalogue entries, so the tables exercise the values the chip will
-    // see, and stay honest if the catalogue changes.
-    private let zoom = CallAppCatalog.match(bundleID: "us.zoom.xos")!
-    private let chrome = CallAppCatalog.match(bundleID: "com.google.Chrome")!
+    // see, and stay honest if the catalogue changes. Required rather than
+    // unwrapped: an entry that leaves the catalogue fails each case by name
+    // instead of crashing the run.
+    private let zoom: ProcessSelector
+    private let chrome: ProcessSelector
     /// The one unscopeable entry: a call attributed to Apple's AV
     /// conferencing daemon can only be recorded as Everything.
-    private let faceTimeDaemon = CallAppCatalog.match(bundleID: "com.apple.avconferenced")!
+    private let faceTimeDaemon: ProcessSelector
+
+    init() throws {
+        zoom = try #require(CallAppCatalog.match(bundleID: "us.zoom.xos"))
+        chrome = try #require(CallAppCatalog.match(bundleID: "com.google.Chrome"))
+        faceTimeDaemon = try #require(CallAppCatalog.match(bundleID: "com.apple.avconferenced"))
+    }
 
     // MARK: One call
 
