@@ -57,4 +57,15 @@ public nonisolated enum EchoMotion {
     public static func islandContent(opening: Bool) -> Animation {
         .easeOut(duration: islandContentFade).delay(opening ? islandContentDelay : 0)
     }
+
+    /// The live dot on the open recording face breathes rather than blinks:
+    /// down to `recordingBlinkDim` and back over one period, eased both ways.
+    public static let recordingBlinkPeriod: TimeInterval = 1.9
+    public static let recordingBlinkDim: Double = 0.4
+    public static var recordingBlink: Animation {
+        .easeInOut(duration: recordingBlinkPeriod / 2).repeatForever(autoreverses: true)
+    }
+
+    /// One turn of the summarizing spinner, at a constant speed.
+    public static let spinnerPeriod: TimeInterval = 1.1
 }

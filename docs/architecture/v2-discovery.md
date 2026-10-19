@@ -43,7 +43,7 @@ was never shipped.
 | Finalization lifecycle | A pure state machine admits passes (never while recording, never while a summary streams), retries twice per run, treats preemption as deferral not failure, converges to a terminal failure that keeps the audio for a manual retry, and resumes pending meetings at launch by scanning the folders. |
 | Summary | **Qwen3.5 4B OptiQ 4-bit** through MLX (~3.3 GB). Transcripts ≤ 8 000 estimated tokens get a single pass; longer ones are chunked, mapped to NDJSON facts with evidence segment IDs, merged deterministically, then reduced to one Markdown document. Adaptive sections, an Action Items checklist, owners only when someone explicitly took the task, never invented dates, language follows the transcript, small talk omitted. Streams into the UI. `summary.md` is the store. |
 | Summary scheduling | Auto after finalization (toggle), manual request, and a backfill scan (launch, each stop, dashboard open, model download completion) that summarizes one meeting at a time, newest first, only when the model is already on disk. |
-| Model delivery | Byte-honest resumable download with sha256 verification, stall watchdog with three attempts, byte-weighted progress, a completeness manifest that fails safe, pause/resume persisted across relaunch, a 6 GB free-disk floor, and launch-time deletion of retired models by name. Parakeet downloads through FluidAudio with the same stall guard. Recording never waits for a model. |
+| Model delivery | Byte-honest resumable download with sha256 verification, stall watchdog with three attempts, byte-weighted progress, a completeness manifest that fails safe, pause/resume persisted across relaunch, a 6 GB free-disk floor, and launch-time deletion of retired models by name. Parakeet downloads through FluidAudio with the same stall guard. Recording never waits for a model (reversed in v2 for the transcription model; see §7). |
 | Library | One folder per meeting under `~/Library/Application Support/Echo/Meetings/<uuid>/` with `meta.json`, `transcript.json`, `summary.md` and optional preserved `audio-*.m4a`. List grouped by date, search over title/caption/date, four sort orders, rename, trash with 30-day purge, restore, permanent delete, export to Markdown or plain text, copy summary, reveal in Finder, keep/delete/re-transcribe the preserved recording, storage breakdown. |
 | Call detection | Watches which processes hold the microphone (Core Audio process metadata, no permission). A curated catalog (Zoom, Teams, Slack, Discord, FaceTime's daemon, Webex, browsers) plus every installed browser (LaunchServices `https` handlers). After a 3 s debounce a floating non-activating island offers to record that app's audio. It never starts on its own. When the call ends during a recording, a 30 s grace countdown stops the recording unless the user keeps it. |
 | Settings | `settings.json` (never UserDefaults): call detection on/off and per-app, keep recordings, auto-summaries, auto update check; launch at login via `SMAppService`. |
@@ -465,7 +465,9 @@ reason must travel with the code into v2.
   (missing, foreign, or empty → incomplete); progress is byte-weighted; only a
   genuine stall retries (stalled *and* our cancellation); pause is a persisted
   intent recorded before cancelling; retired models are deleted by name, never by
-  sweep; disk floor 6 GB; recording never waits for a model.
+  sweep; disk floor 6 GB; recording never waits for a model. **Reversed in v2**
+  by the product owner on 2026-10-02: recording waits for the transcription
+  model (never the summary model) — see architecture §3, Recording.
 
 ### Library and settings
 

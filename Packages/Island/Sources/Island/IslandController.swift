@@ -20,6 +20,7 @@
 //
 
 import AppKit
+import Audio
 import CallDetection
 import DesignSystem
 import EchoCore
@@ -49,6 +50,10 @@ public final class IslandController {
 
     @ObservationIgnored private let detector: CallDetector
     @ObservationIgnored private let session: RecordingSession
+    @ObservationIgnored private let settings: AppSettings
+    @ObservationIgnored private let capture: CaptureChoice
+    @ObservationIgnored private let meetings: IslandMeetings
+    @ObservationIgnored private let openMeeting: (UUID) -> Void
     @ObservationIgnored private var panel: IslandPanel?
     @ObservationIgnored private var screenObservers: [any NSObjectProtocol] = []
     @ObservationIgnored private var hover: HoverGrace?
@@ -98,9 +103,37 @@ public final class IslandController {
     /// can answer by changing its face, which comes straight back here.
     @ObservationIgnored private var reportedHover: Bool?
 
-    public init(detector: CallDetector, session: RecordingSession) {
+    /// Whether a menu hanging from the shell is up, which holds the shell open
+    /// whatever the pointer does (`chooseCapture`).
+    @ObservationIgnored private var holdsOpen = false
+
+    /// Whether the open face was dismissed under the pointer
+    /// (`foldUntilPointerLeaves`). Cleared the moment the pointer is gone.
+    @ObservationIgnored private var folded = false
+
+    /// - Parameters:
+    ///   - settings: read for the one preference that is the island's own,
+    ///     whether it is shown at all.
+    ///   - capture: what Record captures, shared with the menu bar's submenu.
+    ///   - meetings: the two questions the faces ask about meetings — the
+    ///     newest, and one by id. The island cannot import the library, so the
+    ///     composition root answers them.
+    ///   - openMeeting: puts a meeting in front of the user, in the window.
+    ///     The island has no window to open; the composition root does.
+    public init(
+        detector: CallDetector,
+        session: RecordingSession,
+        settings: AppSettings,
+        capture: CaptureChoice,
+        meetings: IslandMeetings = .none,
+        openMeeting: @escaping (UUID) -> Void = { _ in }
+    ) {
         self.detector = detector
         self.session = session
+        self.settings = settings
+        self.capture = capture
+        self.meetings = meetings
+        self.openMeeting = openMeeting
     }
 
     /// Puts the island on screen and starts following what it shows.
@@ -129,7 +162,9 @@ public final class IslandController {
 
         let tracking = IslandHoverView(
             hosting: NSHostingView(
-                rootView: IslandRootView(controller: self, detector: detector, session: session)
+                rootView: IslandRootView(
+                    controller: self, detector: detector, session: session, capture: capture,
+                    meetings: meetings, openMeeting: openMeeting)
             )
         )
         tracking.onCrossing = { entered in
@@ -234,10 +269,16 @@ public final class IslandController {
         withObservationTracking {
             _ = detector.face
             _ = session.phase
+            _ = settings.showsIsland
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, self.panel != nil else { return }
                 self.observe()
+                // Switched off under the pointer: the window goes, and with it
+                // the crossing that would have said the pointer left. Without
+                // this the grace keeps believing it is inside, and detection
+                // keeps every retract suspended for a pointer that is not there.
+                if !self.settings.showsIsland { self.hover?.forget() }
                 self.update()
             }
         }
@@ -266,7 +307,9 @@ public final class IslandController {
 
         let detection = detector.face
         face = IslandShellFace.resolve(detection: detection, phase: session.phase)
-        isExpanded = face.isOpen(detection: detection, hovered: isHovered)
+        // A fold lasts exactly as long as the pointer that asked for it.
+        if !isHovered { folded = false }
+        isExpanded = face.isOpen(detection: detection, hovered: (isHovered && !folded) || holdsOpen)
 
         if let geometry = ScreenGeometry.forShell(current: currentDisplay, hovered: isHovered) {
             #if DEBUG
@@ -285,13 +328,17 @@ public final class IslandController {
                         + " statusBar \(geometry.statusBarThickness)"
                         + " auxLeft \(geometry.auxiliaryTopLeft.map(NSStringFromRect) ?? "none")"
                         + " auxRight \(geometry.auxiliaryTopRight.map(NSStringFromRect) ?? "none")"
+                        + " fullScreen \(geometry.isFullScreen)"
                     Self.log.info(
                         "Island screen \(geometry.displayID, privacy: .public): \(screen, privacy: .public)"
                     )
                 }
             #endif
             currentDisplay = geometry.displayID
-            metrics = IslandMetrics(geometry)
+            metrics = IslandMetrics(
+                geometry,
+                drawnCutoutWidth: ScreenGeometry.attachedCutoutWidth() ?? EchoLayout.islandDrawnCutoutWidth
+            )
         } else {
             // No screens: nothing to hang off, and a window placed on a screen
             // that is not there is worse than no window.
@@ -324,6 +371,50 @@ public final class IslandController {
         guard reportedHover != isHovering else { return }
         reportedHover = isHovering
         detector.hoverChanged(isHovering)
+    }
+
+    // MARK: - Folding under the pointer
+
+    /// Folds a face that is open only because the pointer is on it, until the
+    /// pointer leaves — the post-stop face's ✕. That face announces nothing
+    /// and asks nothing; it is open because it was hovered, and its ✕ means
+    /// "not now", which is the pointer's own decision to undo by coming back.
+    func foldUntilPointerLeaves() {
+        guard isHovered else { return }
+        folded = true
+        update()
+    }
+
+    // MARK: - The capture menu
+
+    /// Offers the capture choices from the idle face's chip and answers with
+    /// the one picked, or `nil` when the menu was dismissed.
+    ///
+    /// An AppKit menu, and the shell held open for as long as it is up: the
+    /// pointer leaves the island the moment it moves onto a menu, and the
+    /// hover grace would fold the shell — and the chip the menu hangs from —
+    /// away under it. `popUp` returns only once the menu has closed, so the
+    /// hold is exactly as long as the menu.
+    func chooseCapture(_ options: [CaptureScope], selected: CaptureScope) -> CaptureScope? {
+        let menu = NSMenu()
+        let picker = CaptureMenuPicker()
+        for (index, scope) in options.enumerated() {
+            let item = NSMenuItem(
+                title: ScopeSelection.label(for: scope),
+                action: #selector(CaptureMenuPicker.pick(_:)),
+                keyEquivalent: ""
+            )
+            item.target = picker
+            item.tag = index
+            item.state = scope == selected ? .on : .off
+            menu.addItem(item)
+        }
+        holdsOpen = true
+        update()
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        holdsOpen = false
+        update()
+        return picker.picked.map { options[$0] }
     }
 
     // MARK: - Placement
@@ -376,11 +467,18 @@ public final class IslandController {
         // at all (which is how the island is looked at, since it cannot be
         // screenshotted), and the next thing worth announcing would be shown
         // where the last one was before being moved.
-        guard face.isOnScreen(hasCutout: metrics.cutout != nil, isOpen: isExpanded) else {
+        // Switched off is off on every screen, and only the panel: the face is
+        // still resolved and detection still told, because the menu bar item
+        // says what the island would have said (DEC-1).
+        guard settings.showsIsland else {
+            panel.orderOut(nil)
+            return
+        }
+        guard face.isOnScreen(on: metrics, isOpen: isExpanded) else {
             #if DEBUG
                 if panel.isVisible {
                     Self.log.info(
-                        "Island hidden: \(String(describing: self.face), privacy: .public) is not open and this screen has no cutout to hide it in"
+                        "Island hidden: \(String(describing: self.face), privacy: .public) has nothing to say over a full-screen app on a drawn cutout"
                     )
                 }
             #endif
@@ -402,6 +500,7 @@ public final class IslandController {
                 + " hovered \(isHovered)"
                 + " pointer \(NSStringFromPoint(NSEvent.mouseLocation))"
                 + " \(metrics.shell)"
+                + " fullScreen \(metrics.isFullScreen)"
                 + " frame \(NSStringFromRect(metrics.screenFrame))"
                 + " menuBar \(metrics.menuBarHeight)"
                 + " scale \(panel.backingScaleFactor)"
@@ -459,4 +558,15 @@ public final class IslandController {
             try? png?.write(to: path.deletingPathExtension().appendingPathExtension("layer.png"), options: .atomic)
         }
     #endif
+}
+
+/// The target the capture menu's items report to. `NSMenuItem` speaks
+/// target–action, and a menu that has closed has nothing left to ask.
+private final class CaptureMenuPicker: NSObject {
+
+    private(set) var picked: Int?
+
+    @objc func pick(_ sender: NSMenuItem) {
+        picked = sender.tag
+    }
 }

@@ -35,6 +35,7 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
 
     private let geometry: IslandShellGeometry
     private let isExpanded: Bool
+    private let progress: Double?
     private let leadingEar: () -> Leading
     private let trailingEar: () -> Trailing
     private let row: () -> Row
@@ -43,15 +44,20 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
     ///   - leadingEar: what the collapsed shell shows left of the cutout.
     ///   - trailingEar: what it shows right of it.
     ///   - row: the single line the expanded shell shows instead.
+    ///   - progress: real progress of the work the open face reports, drawn
+    ///     as a hairline along the bottom edge; `nil` draws none. Never a
+    ///     guess: a face whose work has no measurable progress passes `nil`.
     public init(
         geometry: IslandShellGeometry,
         isExpanded: Bool,
+        progress: Double? = nil,
         @ViewBuilder leadingEar: @escaping () -> Leading,
         @ViewBuilder trailingEar: @escaping () -> Trailing,
         @ViewBuilder row: @escaping () -> Row
     ) {
         self.geometry = geometry
         self.isExpanded = isExpanded
+        self.progress = progress
         self.leadingEar = leadingEar
         self.trailingEar = trailingEar
         self.row = row
@@ -77,37 +83,29 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
                 shell
                 ears
                 openRow
+                hairline
             }
             .frame(width: geometry.shellSize.width, height: geometry.shellSize.height)
-            // The shell hangs from the top of its window by the margin the
-            // flares or the pill's shadow need, and is centred across it.
-            .padding(.top, geometry.shellInset.height)
+            // The shell hangs from the top of its window, centred across it
+            // between the margins its flares need.
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
             .animation(shellMotion, value: geometry.shellSize)
         }
+        // The island as VoiceOver finds it: one container named for the app,
+        // holding the face that is on screen.
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Echo")
     }
 
     // MARK: The black
 
-    @ViewBuilder
+    /// The flares are drawn outside the shape's own rect, which is why this is
+    /// framed to the shell and not to the window.
     private var shell: some View {
-        if geometry.hangsFromBezel {
-            // The flares are drawn outside the shape's own rect, which is why
-            // this is framed to the shell and not to the window.
-            IslandShellShape(cornerRadius: geometry.cornerRadius, flare: geometry.flare)
-                .fill(EchoColor.Island.shell)
-                .animation(shellMotion, value: geometry.cornerRadius)
-                .animation(shellMotion, value: geometry.flare)
-        } else {
-            RoundedRectangle(cornerRadius: geometry.cornerRadius, style: .continuous)
-                .fill(EchoColor.Island.shell)
-                .shadow(
-                    color: geometry.castsShadow ? EchoColor.Island.pillShadow : .clear,
-                    radius: EchoLayout.islandPillShadowRadius,
-                    y: EchoLayout.islandPillShadowOffset
-                )
-                .animation(shellMotion, value: geometry.cornerRadius)
-        }
+        IslandShellShape(cornerRadius: geometry.cornerRadius, flare: geometry.flare)
+            .fill(EchoColor.Island.shell)
+            .animation(shellMotion, value: geometry.cornerRadius)
+            .animation(shellMotion, value: geometry.flare)
     }
 
     // MARK: What is on it
@@ -124,6 +122,10 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
             trailingEar().frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, EchoLayout.islandEarInset)
+        // What the collapsed island says, read as one thing, and only while
+        // it is the thing on screen.
+        .accessibilityElement(children: .combine)
+        .accessibilityHidden(isExpanded)
         .opacity(isExpanded ? 0 : 1)
         // An ear that is on its way out is not a target. Without this the
         // faded-out layer still answers the pointer, over the open face.
@@ -151,6 +153,8 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
             .opacity(isExpanded ? 1 : 0)
             .offset(y: isExpanded ? 0 : EchoMotion.islandContentRise)
             .allowsHitTesting(isExpanded)
+            // A faded-out row is not read either, any more than it is tapped.
+            .accessibilityHidden(!isExpanded)
             .animation(
                 reduceMotion ? nil : EchoMotion.islandContent(opening: isExpanded),
                 value: isExpanded
@@ -166,23 +170,47 @@ public struct IslandShell<Leading: View, Trailing: View, Row: View>: View {
             .padding(.top, geometry.rowTopInset)
     }
 
+    /// The progress of the open face's work, along the shell's bottom edge
+    /// and across its whole width — under the rounded corners too, which is
+    /// why it is clipped to the shell's own outline rather than inset like
+    /// the row. It fades with the open face it belongs to.
+    @ViewBuilder
+    private var hairline: some View {
+        if let progress {
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(EchoColor.Island.progressTrack)
+                    Rectangle()
+                        .fill(EchoColor.Island.accent)
+                        .frame(width: proxy.size.width * min(max(progress, 0), 1))
+                }
+                .frame(height: EchoLayout.islandProgressHeight)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+            .frame(width: geometry.shellSize.width, height: geometry.shellSize.height)
+            .clipShape(IslandShellShape(cornerRadius: geometry.cornerRadius, flare: 0))
+            .opacity(isExpanded ? 1 : 0)
+            .animation(
+                reduceMotion ? nil : EchoMotion.islandContent(opening: isExpanded),
+                value: isExpanded
+            )
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+
     /// The hole between the ears.
     ///
-    /// A fixed width on a notched screen — the cutout's own, read from that
-    /// screen — and the shell is centred on the cutout, so a centred gap of
-    /// exactly that width lands over it. The fallback pill has no hole, so the
-    /// two ears simply take the ends of one row.
-    @ViewBuilder
+    /// A fixed width — the cutout's own, read from the screen or drawn on it —
+    /// and the shell is centred on the cutout, so a centred gap of exactly
+    /// that width lands over it.
+    ///
+    /// Never wider than the shell holding it. The idle shell is exactly the
+    /// cutout, and a closing shell passes through narrower widths on its way
+    /// there: a hole wider than its shell would squeeze both ears to nothing
+    /// and spill past the clip.
     private var gap: some View {
-        if let cutoutWidth = geometry.cutoutWidth {
-            // Never wider than the shell holding it. The idle shell is
-            // NARROWER than the cutout — it hides inside it rather than
-            // hanging off it — and a hole wider than its shell would squeeze
-            // both ears to nothing and spill past the clip.
-            Color.clear.frame(width: min(cutoutWidth, geometry.shellSize.width))
-        } else {
-            Spacer(minLength: EchoSpacing.s)
-        }
+        Color.clear.frame(width: min(geometry.cutoutWidth, geometry.shellSize.width))
     }
 
     /// One spring for the width, the height and the radius — or none at all.

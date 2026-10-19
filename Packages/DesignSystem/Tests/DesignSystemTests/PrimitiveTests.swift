@@ -255,6 +255,24 @@ struct PrimitiveTests {
         }
     }
 
+    @Test("a capsule held back keeps its shape and greys its label")
+    func aDisabledCapsule() throws {
+        // Record while the transcription model is missing: the face must not
+        // change size while it explains why, so only the label's ink moves.
+        let enabled = Button("Record") {}.buttonStyle(.islandPrimary)
+        let disabled = Button("Record") {}.buttonStyle(.islandPrimary).disabled(true)
+        let on = try image(of: enabled.padding().background(EchoColor.Island.shell))
+        let off = try image(of: disabled.padding().background(EchoColor.Island.shell))
+        #expect(on.width == off.width && on.height == off.height)
+        #expect(on.dataProvider?.data != off.dataProvider?.data)
+        // And it is still the island's: the same in both appearances.
+        let light = try image(
+            of: disabled.padding().background(EchoColor.Island.shell).environment(\.colorScheme, .light))
+        let dark = try image(
+            of: disabled.padding().background(EchoColor.Island.shell).environment(\.colorScheme, .dark))
+        #expect(light.dataProvider?.data == dark.dataProvider?.data)
+    }
+
     // MARK: For the eye
 
     @Test("the gallery renders in both appearances")

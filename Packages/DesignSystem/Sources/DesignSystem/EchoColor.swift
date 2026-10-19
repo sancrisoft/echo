@@ -171,17 +171,22 @@ public nonisolated enum EchoColor {
         /// A face's second line.
         public static let detail = Color(hex: 0x7E8288)
 
+        /// A word in an ear ("Saved", "Summarizing"), and the outlined glyph
+        /// of a noticed call.
+        public static let earStatus = Color(hex: 0xC9CBD0)
+
+        /// The unspent part of the end-of-call countdown ring.
+        public static let ringTrack = Color.white.opacity(0.16)
+
+        /// The track of the progress hairline along the bottom edge.
+        public static let progressTrack = Color.white.opacity(0.10)
+
         /// The unfilled part of a level gauge.
         public static let gaugeTrack = Color.white.opacity(0.13)
 
         /// The gauge that is not the accent one, fill and label.
         public static let gaugeNeutral = Color(hex: 0x8A8D93)
         public static let gaugeNeutralLabel = Color(hex: 0x6E7176)
-
-        /// Under the fallback pill, which floats clear of the bezel instead of
-        /// hanging off it. The notched shell casts nothing: it is continuous
-        /// with the black it hangs from.
-        public static let pillShadow = Color.black.opacity(0.5)
     }
 }
 

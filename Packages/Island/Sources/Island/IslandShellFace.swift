@@ -43,8 +43,8 @@ public nonisolated enum IslandShellFace: Equatable, Sendable, CaseIterable {
     /// `idle` does not. It is the app being present, not the app having news,
     /// and it is the only face that is on screen because nothing is happening
     /// rather than because something is. Two things turn on that difference:
-    /// what the collapsed shell is as wide as, and — on a screen with no
-    /// cutout to hide in — whether there is a shell at all.
+    /// what the collapsed shell is as wide as, and — on a drawn cutout under a
+    /// full-screen app — whether there is a shell at all.
     public var announces: Bool {
         self != .idle
     }
@@ -84,7 +84,7 @@ extension IslandShellFace {
     ///     silhouette. There is one face for post-stop work and this is it;
     ///     whether the words on it can cover both passes honestly is a
     ///     question for whoever writes them.
-    public static func resolve(detection: IslandFace?, phase: RecordingPhase) -> IslandShellFace {
+    public nonisolated static func resolve(detection: IslandFace?, phase: RecordingPhase) -> IslandShellFace {
         switch detection {
         case .startPrompt, .compactPill: return .callDetected
         case .endGrace: return .callEnded
@@ -112,7 +112,7 @@ extension IslandShellFace {
     /// pill is retracted by definition: an ignored offer shrinks to the ears
     /// rather than nagging, and the machine that decided so is the only thing
     /// that may decide it back.
-    public func expandsOnItsOwn(detection: IslandFace?) -> Bool {
+    public nonisolated func expandsOnItsOwn(detection: IslandFace?) -> Bool {
         if detection == .compactPill { return false }
         switch self {
         case .callDetected, .callEnded, .saved: return true
@@ -120,25 +120,23 @@ extension IslandShellFace {
         }
     }
 
-    /// Whether the island is on screen at all, wearing this face.
+    /// Whether the island is on screen at all, wearing this face, on the
+    /// screen `metrics` describe.
     ///
-    /// On a screen with a cutout it always is. The idle shell IS the cutout —
-    /// it hides inside the hole and costs the user nothing — and that
-    /// permanent presence is how a recording gets started from the island at
-    /// all: you hover the notch.
+    /// Nearly always. The idle shell IS the cutout — inside a real one it is
+    /// invisible and costs the user nothing, and a drawn one is the notch the
+    /// screen does not have — and that permanent presence is how a recording
+    /// gets started from the island at all: you hover the notch.
     ///
-    /// A screen without one has no hole to hide in, so the island is up there
-    /// only while the shell is OPEN — while it is a toast, saying something.
-    /// Everything else is a black bar over the top of somebody's desktop.
-    ///
-    /// Open is the test rather than "has something to announce", and the
-    /// difference is the whole of the second report. A face that announces
-    /// something spends most of its life collapsed: an ignored offer shrinks
-    /// to its pill and stays there for as long as the call lasts, and a call
-    /// can last all day — one catalogued app that never lets the mic go is
-    /// enough. Collapsed, that pill is the ears either side of a cutout, and a
-    /// screen with no cutout has no ears: it is the bar again, by a longer
-    /// route.
+    /// The exception is a drawn cutout under a full-screen app. The menu bar
+    /// is gone there, and a black tab hanging over the top of somebody's
+    /// full-screen video with nothing to say is in the way, so the idle face
+    /// is not drawn (DEC-1, product owner 2026-10-02). Every other face is:
+    /// each says something, and the recording face is the one place a
+    /// full-screen app leaves to see that capture is running — the menu bar
+    /// and its red clock are hidden along with everything else (product owner,
+    /// 2026-10-02). A real cutout is unaffected; the hardware's black stays
+    /// where it is in full screen too.
     ///
     /// The pointer needs no clause of its own. A hovered shell is an open one,
     /// so the island is never taken out from under a pointer that is on it —
@@ -146,11 +144,9 @@ extension IslandShellFace {
     /// keeps the hover grace honest: a window ordered out from under the
     /// pointer would leave the grace believing the island was still hovered,
     /// with no crossing coming to correct it.
-    ///
-    /// The product owner's decision (2026-09-12, narrowed 2026-09-14), against
-    /// a design whose fallback pill is as permanent as the notched shell.
-    public func isOnScreen(hasCutout: Bool, isOpen: Bool) -> Bool {
-        hasCutout || isOpen
+    public nonisolated func isOnScreen(on metrics: IslandMetrics, isOpen: Bool) -> Bool {
+        guard metrics.drawsCutout, metrics.isFullScreen else { return true }
+        return announces || isOpen
     }
 
     /// Whether the shell is open.
@@ -159,7 +155,7 @@ extension IslandShellFace {
     /// the idle face is reached at all. A face that opened on its own stays
     /// open without it: the pointer can bring the shell out, never put it
     /// back.
-    public func isOpen(detection: IslandFace?, hovered: Bool) -> Bool {
+    public nonisolated func isOpen(detection: IslandFace?, hovered: Bool) -> Bool {
         hovered || expandsOnItsOwn(detection: detection)
     }
 }

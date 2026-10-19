@@ -41,8 +41,7 @@ public nonisolated struct IslandShellShape: Shape {
     public var cornerRadius: CGFloat
 
     /// The concave corner at each end of the top edge. Zero draws the shell
-    /// with none — what a screen with no cutout asks for, and what the idle
-    /// shell hiding inside the cutout asks for too.
+    /// with none — what the idle shell, which is the cutout, asks for.
     public var flare: CGFloat
 
     public init(cornerRadius: CGFloat, flare: CGFloat = EchoLayout.islandFlare) {

@@ -73,6 +73,10 @@ final class AppComposition {
     /// dashboard and the menu behind the other button.
     let menuBarItem: MenuBarItem
 
+    /// Control + Option + E, from anywhere: Record at rest, Stop while
+    /// recording (#119).
+    let globalShortcut: GlobalShortcut
+
     /// Whether the main window is on screen as soon as the scene is built.
     /// True for `ECHO_OPEN_WINDOW`, and for the one launch that finds this Mac
     /// has never run Echo before. Read by the scene, which SwiftUI builds only
@@ -106,6 +110,7 @@ final class AppComposition {
         let session = session
         let workspace = workspace
         let windowOpener = windowOpener
+        let library = library
 
         // One definition of what opening Settings means, for the two surfaces
         // that ask for it: the app menu's ⌘, and the menu bar item's Settings….
@@ -114,7 +119,7 @@ final class AppComposition {
             windowOpener.openMainWindow()
         }
         self.showSettings = showSettings
-        detector = CallDetector(
+        let detector = CallDetector(
             settings: settings,
             requests: CallDetectionRequests(
                 startRecording: { scope in Task { await session.start(scope: scope) } },
@@ -132,24 +137,79 @@ final class AppComposition {
                 }
             )
         )
-        island = IslandController(detector: detector, session: session)
+        self.detector = detector
+
+        // What Record captures, one choice for the island's chip and the
+        // menu's submenu alike.
+        let capture = CaptureChoice(detector: detector)
+        // The two questions the island's faces ask, answered from the
+        // library. Read inside the island's body, so its faces follow the
+        // library through observation rather than through a copy.
+        let meetings = IslandMeetings(
+            latest: { library.metas.max { $0.startedAt < $1.startedAt }.map(Self.islandMeeting) },
+            meeting: { id in library.metas.first { $0.id == id }.map(Self.islandMeeting) }
+        )
+        let openMeeting: (UUID) -> Void = { id in
+            workspace.open(id)
+            windowOpener.openMainWindow()
+        }
+        island = IslandController(
+            detector: detector,
+            session: session,
+            settings: settings,
+            capture: capture,
+            meetings: meetings,
+            openMeeting: openMeeting
+        )
+        // The island in words, for the menu bar item and its menu: the same
+        // sources and the same calls the faces make.
+        let islandMenu = IslandMenu(
+            detector: detector, session: session, meetings: meetings, capture: capture, openMeeting: openMeeting)
 
         updates = UpdateChecker()
         updateInstaller = UpdateInstaller(dataRoot: dataRoot)
         updatePrompt = UpdatePrompt(checker: updates, installer: updateInstaller, session: session)
 
+        let settings = settings
         menuBarItem = MenuBarItem(
             contents: MenuBarMenu(
-                phase: { session.phase },
+                island: { now in islandMenu.entries(now: now) },
                 requests: MenuBarMenu.Requests(
-                    startRecording: { Task { await session.start() } },
-                    stopRecording: { Task { await session.stop() } },
                     openEcho: { windowOpener.openMainWindow() },
                     openSettings: showSettings
                 )
             ),
-            windowOpener: windowOpener
+            windowOpener: windowOpener,
+            phase: { session.phase },
+            ears: { islandMenu.ears },
+            showsIsland: { settings.showsIsland }
         )
+
+        // The same gated start every surface runs, with the capture the chip
+        // and the menu share, and the same stop. A refused start opens the
+        // menu, which says why: the shortcut has no face of its own to say it
+        // on.
+        let menuBarItem = menuBarItem
+        globalShortcut = GlobalShortcut(pressed: {
+            switch GlobalShortcut.Press.of(session.phase) {
+            case .start:
+                let scope = capture.current
+                Task {
+                    if await session.start(scope: scope) != nil {
+                        menuBarItem.showMenu()
+                    }
+                }
+            case .stop:
+                Task { await session.stop() }
+            case .nothing:
+                break
+            }
+        })
+    }
+
+    /// A meeting, as the island speaks of it.
+    private static func islandMeeting(_ meta: MeetingMeta) -> IslandMeeting {
+        IslandMeeting(title: meta.title, duration: meta.duration, words: meta.wordCount)
     }
 
     /// Starts every launch side effect. Idempotent; a no-op under a test host.
@@ -207,6 +267,13 @@ final class AppComposition {
             RetiredModelCleanup.run(modelsRoot: dataRoot.models)
         }
 
+        // The models, fetched at launch: the transcription model first, which
+        // a recording now waits for, then the summary model's eager download.
+        // Before, a fresh install fetched nothing until a recording's own
+        // prefetch ran, and a recording that waits for the model could then
+        // never start (product owner, 2026-10-02).
+        Task { [session] in await session.prepareModels() }
+
         // Pick up where a quit or a crash left off. The two staging sweeps
         // run inside this call, before the enqueue, because the order matters
         // and keeping it inside the session is what makes it impossible to
@@ -228,8 +295,13 @@ final class AppComposition {
 
         // The menu bar item is AppKit's, and AppKit is not up yet: SwiftUI runs
         // this before it creates `NSApplication`. The delegate installs it the
-        // moment there is an app to install it into.
-        EchoAppDelegate.whenLaunched { [menuBarItem] in menuBarItem.install() }
+        // moment there is an app to install it into — and claims the global
+        // shortcut then too, whose presses arrive through the event loop that
+        // app runs.
+        EchoAppDelegate.whenLaunched { [menuBarItem, globalShortcut] in
+            menuBarItem.install()
+            globalShortcut.register()
+        }
 
         // A failed Update Now reopened the Echo that was there and left a
         // report behind; Settings shows it once, and reading it consumes it.

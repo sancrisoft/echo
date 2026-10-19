@@ -93,6 +93,19 @@ public final class RecordingSession {
         )
     }
 
+    /// Whether a recording can start, and if not, why: every surface that can
+    /// start one reads this to disable its Record and say what it waits for.
+    ///
+    /// Published by the model's owner, not kept here: the state lives on the
+    /// `ParakeetModel` actor, which no view can observe, and this repeats what
+    /// that actor announces (`stateChanges()`) — the same arrangement as the
+    /// finalization snapshot the driver publishes, and the one exception
+    /// ADR-003 makes. Nothing else writes it. Until the launch has started
+    /// following the model it reads as waiting, and `start` asks the model
+    /// itself, so a reading that lags never lets a start through or holds one
+    /// back.
+    public private(set) var readiness: RecordingReadiness = .waitingToDownload
+
     /// Active notices, in a stable render order (see `RecordingNotice.Kind`).
     public var notices: [RecordingNotice] {
         noticeMessages
@@ -135,6 +148,7 @@ public final class RecordingSession {
     private let library: MeetingLibrary
     private let settings: AppSettings
     private let summaryModel: SummaryModel
+    private let transcriptionModel: ParakeetModel
     private let runTranscriptionPass: TranscriptionPassRunning
     private let generateSummary: SummaryGenerating
     private let generateCaption: CaptionGenerating
@@ -303,9 +317,10 @@ public final class RecordingSession {
         self.library = library
         self.settings = settings
         self.summaryModel = summaryModel
-        // The model is only ever reached through the pass, so it is bound
-        // into the default here rather than stored: nothing else in a session
-        // has any business asking a transcription model a question.
+        // Kept for the three questions a session asks it: whether a recording
+        // may start, how its fetch is going, and to fetch it at launch. The
+        // pass reaches it through the default bound below.
+        self.transcriptionModel = transcriptionModel
         self.runTranscriptionPass =
             runTranscriptionPass ?? { retainedFiles, shouldYield, onProgress in
                 try await TranscriptionPass.run(
@@ -369,32 +384,51 @@ public final class RecordingSession {
     /// `scope` is what the caller asked for; the phase ends up carrying what
     /// was actually established, which can be wider (a scoped tap that fails
     /// collapses to `.everything`, visibly).
-    public func start(scope requestedScope: CaptureScope = .everything) async {
+    ///
+    /// The one door for the readiness rule: with the transcription model not
+    /// on disk it starts nothing and says why, which a surface with nowhere to
+    /// show a disabled button — the global shortcut — needs to hear. Every
+    /// other outcome returns nil: started, already running, or a capture
+    /// failure, which is a notice like any other.
+    @discardableResult
+    public func start(scope requestedScope: CaptureScope = .everything) async -> RecordingRefusal? {
         await serialized { await self.performStart(scope: requestedScope) }
     }
 
     /// Links one lifecycle call onto the chain and waits for it. The body runs
     /// only after every earlier call has finished, so `capturePhase` is never
     /// read by one of them while another is midway through changing it.
-    private func serialized(_ body: @escaping @MainActor () async -> Void) async {
+    private func serialized<Result: Sendable>(
+        _ body: @escaping @MainActor () async -> Result
+    ) async -> Result {
         let previous = sessionTask
         let task = Task { @MainActor in
             await previous?.value
-            await body()
+            return await body()
         }
-        sessionTask = task
-        await task.value
+        sessionTask = Task { @MainActor in _ = await task.value }
+        return await task.value
     }
 
-    private func performStart(scope requestedScope: CaptureScope) async {
+    private func performStart(scope requestedScope: CaptureScope) async -> RecordingRefusal? {
         switch capturePhase {
         case .recording, .stopping:
             // Already live, or mid-teardown: a second gesture is a no-op, not
             // a second session. Post-stop work does not block a new one — a
             // recording that starts mid-pass preempts it.
-            return
+            return nil
         case .idle:
             break
+        }
+
+        // Asked of the model, from disk, rather than read off `readiness`: the
+        // same check the pass makes before it decodes, so the rule cannot
+        // disagree with what a pass would find. Before any permission prompt,
+        // because a recording that cannot start has no business asking for
+        // one. The product owner's decision of 2026-10-02, reversing v1's
+        // "recording never waits for a model" (see `RecordingReadiness`).
+        guard await transcriptionModel.readyModelDirectory() != nil else {
+            return .transcriptionModelNotReady(RecordingReadiness(await transcriptionModel.state))
         }
 
         // Both dialogs, sequentially, before anything else — and their
@@ -451,7 +485,7 @@ public final class RecordingSession {
             systemGapTracker?.beginEpisode()
 
             let effective = try await startSystemCapture(requested: requestedScope, aec: aec)
-            guard isCapturing(generation) else { return }
+            guard isCapturing(generation) else { return nil }
 
             // Fixed for the whole session: a running session never silently
             // widens, not even through a device rebuild.
@@ -468,6 +502,7 @@ public final class RecordingSession {
             // Raised after the teardown, which clears the session's notices.
             raise(.captureFailed, error.localizedDescription)
         }
+        return nil
     }
 
     /// Raises both OS dialogs, in order, once per app run.
@@ -1348,6 +1383,71 @@ public final class RecordingSession {
     /// composition root when a model download completes.
     public func kickSummaryBackfill() {
         summaryScheduler.kick()
+    }
+
+    // MARK: - The models, at launch
+
+    /// Fetches what the models need, once per launch, and starts following
+    /// the transcription model's state into `readiness`. Called by the
+    /// composition root at launch.
+    ///
+    /// Wired at launch because recording waits for the transcription model:
+    /// before, a fresh install fetched nothing until a recording's own
+    /// prefetch ran, and with recording gated on the model that recording
+    /// could never start. The transcription model goes first — it is the one
+    /// a recording waits for, and the small one — and the summary model's
+    /// eager fetch follows, download only and honouring a paused intent
+    /// (`ensureDownloaded`, never `ensureReady`, which would put the weights
+    /// in RAM and ignore the pause).
+    public func prepareModels() async {
+        guard !modelsPrepared else { return }
+        modelsPrepared = true
+        followTranscriptionModel()
+        await fetchTranscriptionModel()
+
+        let model = summaryModel
+        await model.refreshState()
+        do {
+            try await model.ensureDownloaded()
+            // One of the backfill's four triggers: a model download finishing.
+            // Harmless when there was nothing to fetch.
+            kickSummaryBackfill()
+        } catch {
+            // Subordinate: the model's own state carries the failure, and
+            // nothing waits on the summary model to record.
+            ErrorTrace.record("Summary model eager fetch failed", error: error, category: "RecordingSession")
+        }
+    }
+
+    /// The user's Retry after the transcription model's fetch failed. Runs it
+    /// again from what is already on disk; a no-op once the model is ready or
+    /// while a fetch is in flight.
+    public func retryTranscriptionModel() {
+        Task { await fetchTranscriptionModel() }
+    }
+
+    @ObservationIgnored private var modelsPrepared = false
+    @ObservationIgnored private var readinessFollower: Task<Void, Never>?
+
+    /// The fetch waits out a live capture, as it always has: it must not
+    /// compete with one. Recording waits for this model, so a capture is only
+    /// live here when the model was ready already and nothing is fetched.
+    private func fetchTranscriptionModel() async {
+        await transcriptionModel.initialize(deferWhile: { [weak self] in
+            await self?.capturePhase.isRecording ?? false
+        })
+    }
+
+    /// Repeats what the model announces, for as long as the session lives.
+    private func followTranscriptionModel() {
+        guard readinessFollower == nil else { return }
+        let model = transcriptionModel
+        readinessFollower = Task { [weak self] in
+            for await state in await model.stateChanges() {
+                guard let self else { return }
+                self.readiness = RecordingReadiness(state)
+            }
+        }
     }
 
     // MARK: - Summary model prefetch

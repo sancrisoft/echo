@@ -289,3 +289,52 @@ struct AppSettingsFirstLaunchTests {
         }
     }
 }
+
+@Suite("AppSettings — the island")
+@MainActor
+struct AppSettingsIslandTests {
+
+    @Test func theIslandIsShownByDefault() throws {
+        try withTempSettingsFile { url in
+            #expect(AppSettings(fileURL: url).showsIsland)
+        }
+    }
+
+    @Test func hidingItRoundTripsThroughDisk() throws {
+        try withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            settings.setShowsIsland(false)
+            #expect(!settings.showsIsland)
+            #expect(!AppSettings(fileURL: url).showsIsland)
+
+            settings.setShowsIsland(true)
+            #expect(AppSettings(fileURL: url).showsIsland)
+        }
+    }
+
+    /// Every settings file on disk today predates the key, and has to keep
+    /// both the island and everything else the user chose.
+    @Test func aSettingsFileWrittenBeforeTheSwitchShowsTheIsland() throws {
+        try withTempSettingsFile { url in
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data(#"{"callDetectionEnabled":false,"hasLaunchedBefore":true}"#.utf8).write(to: url)
+
+            let settings = AppSettings(fileURL: url)
+            #expect(settings.showsIsland)
+            #expect(!settings.callDetectionEnabled)
+            #expect(settings.hasLaunchedBefore)
+        }
+    }
+
+    /// The switch is the island's alone: turning it off leaves call
+    /// detection on, because detection keeps working without the panel.
+    @Test func hidingTheIslandLeavesDetectionAlone() throws {
+        try withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            settings.setShowsIsland(false)
+            #expect(settings.callDetectionEnabled)
+        }
+    }
+}

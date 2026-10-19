@@ -22,6 +22,18 @@ import SwiftUI
 
         public var body: some View {
             VStack(alignment: .leading, spacing: EchoSpacing.xl) {
+                Text("Mark").font(EchoFont.sectionTitle)
+                HStack(alignment: .bottom, spacing: EchoSpacing.l) {
+                    // The sizes the issue asks it to hold at, short of 1024,
+                    // plus the accent the brand sheet draws it in. Each one
+                    // carries its clear space, which is why they sit apart
+                    // without any spacing of their own to speak of.
+                    ForEach([16, 32, 64, 128] as [CGFloat], id: \.self) { size in
+                        EchoMark(size: size, ink: EchoColor.textPrimary)
+                    }
+                    EchoMark(size: 64, ink: EchoColor.accent)
+                }
+
                 Text("Type").font(EchoFont.sectionTitle)
                 VStack(alignment: .leading, spacing: EchoSpacing.s) {
                     Text("Document title")

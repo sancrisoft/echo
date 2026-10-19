@@ -5,8 +5,15 @@
 //  Owns the on-disk lifecycle of the ONE speech model Echo runs:
 //  `parakeet-tdt-0.6b-v3` (NVIDIA, CC-BY-4.0), served through FluidAudio's
 //  Core ML port. There is no live transcription — the single transcript is
-//  produced post-meeting by `TranscriptionPass` — so this model never gates
-//  recording: nothing in the record path consults it.
+//  produced post-meeting by `TranscriptionPass`.
+//
+//  It gates recording, which v1 deliberately never did ("recording never
+//  waits for a model", discovery §7). The product owner reversed that on
+//  2026-10-02: a recording that can never be transcribed is not one worth
+//  starting, so `RecordingSession.start` asks `readyModelDirectory()` first,
+//  and every surface that can start one says why it cannot. That is why the
+//  state is observable (`stateChanges()`) and why a failed fetch can be run
+//  again without a relaunch.
 //
 //  The discipline every model owner here follows:
 //  - Single data folder: every byte lands under the injected models root.
@@ -36,8 +43,10 @@
 //    fix was to stop reaching for the network when the cache is complete.
 //  - Verify-before-ready: the transfer's return value is never trusted; the
 //    files are re-checked on disk before the state flips to `ready`.
-//  - Background, deferrable, once per launch: the fetch waits out an active
-//    recording or a running pass instead of competing with them.
+//  - Background and deferrable: the fetch waits out an active recording or a
+//    running pass instead of competing with them. It runs once per launch
+//    unless it fails, and then again only when the user asks (`initialize`
+//    from a Retry) — never in a loop of its own.
 //
 
 import EchoCore
@@ -107,10 +116,16 @@ public actor ParakeetModel {
 
     // MARK: - State
 
-    public private(set) var state: ParakeetModelState = .absent
+    public private(set) var state: ParakeetModelState = .absent {
+        didSet {
+            guard state != oldValue else { return }
+            for continuation in observers.values { continuation.yield(state) }
+        }
+    }
 
     private let modelsRoot: URL
     private var initializeStarted = false
+    private var observers: [UUID: AsyncStream<ParakeetModelState>.Continuation] = [:]
 
     // Injectable seams (defaulted to the real disk / network), so the
     // lifecycle is testable without a 480 MB download.
@@ -145,13 +160,38 @@ public actor ParakeetModel {
         return Self.modelDirectory(in: modelsRoot)
     }
 
+    // MARK: - Observing
+
+    /// The state now, then every change, for as long as the caller listens.
+    ///
+    /// How the one observable façade above (`RecordingSession.readiness`)
+    /// follows a state that lives on this actor without keeping a second copy
+    /// of its own: the owner publishes, the façade only repeats.
+    public func stateChanges() -> AsyncStream<ParakeetModelState> {
+        let (stream, continuation) = AsyncStream<ParakeetModelState>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let id = UUID()
+        observers[id] = continuation
+        continuation.yield(state)
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.stopObserving(id) }
+        }
+        return stream
+    }
+
+    private func stopObserving(_ id: UUID) {
+        observers[id] = nil
+    }
+
     // MARK: - Background acquisition
 
-    /// The lazy first-idle download. Idempotent per launch. `deferWhile` is
-    /// polled until false before the transfer starts, so the fetch never
-    /// competes with an active recording or a running pass. Never gates
-    /// recording — a meeting recorded before this finishes simply stays
-    /// pending until the model is ready.
+    /// The download, run at launch. Idempotent while it runs and once it has
+    /// succeeded. A failed attempt leaves it callable again, which is the
+    /// user's Retry: recording waits on this model now (see the header), and
+    /// a fetch that died with the network must not lock recording until a
+    /// relaunch. Nothing here retries on its own.
+    ///
+    /// `deferWhile` is polled until false before the transfer starts, so the
+    /// fetch never competes with an active recording or a running pass.
     public func initialize(deferWhile: @escaping @Sendable () async -> Bool = { false }) async {
         guard !initializeStarted else { return }
         initializeStarted = true
@@ -185,10 +225,12 @@ public actor ParakeetModel {
                 state = .ready
                 Self.log.info("Transcription model ready (\(Self.modelID, privacy: .public))")
             } else {
-                state = .failed("The downloaded model files did not pass verification. Relaunch to resume.")
+                initializeStarted = false
+                state = .failed("The downloaded model files did not pass verification. Retry to resume.")
                 Self.log.error("Transcription model download finished but the files read incomplete")
             }
         } catch {
+            initializeStarted = false
             state = .failed(error.localizedDescription)
             ErrorTrace.record(
                 "Transcription model download failed",

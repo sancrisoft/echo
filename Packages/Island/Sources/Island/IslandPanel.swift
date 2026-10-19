@@ -42,7 +42,8 @@ final class IslandPanel: NSPanel {
         // behind them.
         backgroundColor = .clear
         isOpaque = false
-        // The pill draws its own; the notched shell casts nothing.
+        // The shell is continuous with the black it hangs from, real or drawn,
+        // and casts nothing.
         hasShadow = false
         becomesKeyOnlyIfNeeded = true
         // The controller holds the only reference; a stray close must not

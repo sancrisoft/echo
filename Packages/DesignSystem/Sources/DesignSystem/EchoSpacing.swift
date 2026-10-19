@@ -28,9 +28,6 @@ public nonisolated enum EchoRadius {
     public static let islandExpanded: CGFloat = 22
     /// The island's collapsed shell.
     public static let islandCollapsed: CGFloat = 12
-    /// The fallback shell on a screen with no cutout: fully rounded, so half
-    /// of `EchoLayout.islandPillSize.height` rather than a corner of its own.
-    public static let islandPill: CGFloat = 17
     /// A capsule control on the island. Half its height: the island takes
     /// iOS-style capsules where the window keeps rounded rects (DEC-4 may
     /// unify them; until it does, these are two families).
@@ -98,6 +95,8 @@ public nonisolated enum EchoControl {
     public static let capsuleInsetQuiet: CGFloat = 6
     /// Between a capsule's glyph and its label.
     public static let capsuleGap: CGFloat = 6
+    /// The box a capsule's glyph is drawn in: Record's dot, Stop's square.
+    public static let capsuleGlyphSize: CGFloat = 8
 
     /// A value chip: wider where the label starts than where the chevron ends.
     public static let chipHeight: CGFloat = 24
@@ -119,6 +118,32 @@ public nonisolated enum EchoControl {
     /// The red dot that says a session is live: on the expanded recording
     /// face, and in the ear it collapses into.
     public static let recordingDotSize: CGFloat = 7
+
+    /// The glyph at the head of an open face: the mark, the camera, the
+    /// countdown ring. The saved face's check is a size smaller.
+    public static let islandIconSize: CGFloat = 15
+    public static let islandCheckSize: CGFloat = 14
+    public static let islandSpinnerSize: CGFloat = 13
+
+    /// The glyph in an ear, either side of the cutout.
+    public static let earGlyphSize: CGFloat = 12
+
+    /// The recording ear's level pictogram, and the gap between it and the
+    /// dot beside it.
+    public static let earLevelBars = CGSize(width: 15, height: 11)
+    public static let earGroupGap: CGFloat = 7
+
+    // MARK: In the menu bar
+
+    /// The mark's grid in the menu bar: the brand sheet's 16 pt template.
+    public static let menuBarMarkSize: CGFloat = 16
+    /// Between the mark and the timer beside it while a session runs.
+    public static let menuBarTimerGap: CGFloat = 7
+    /// The timer's size, in the monospaced face. With the island switched off
+    /// it is the size of every word the item carries beside the mark too —
+    /// the countdown in the same face, a name or a status in the interface
+    /// one — so the item has one size, the one the design draws for it.
+    public static let menuBarTimerSize: CGFloat = 11
 }
 
 public nonisolated enum EchoLayout {
@@ -183,19 +208,29 @@ public nonisolated enum EchoLayout {
     /// Between the parts of the expanded row.
     public static let islandRowGap: CGFloat = 11
 
-    /// The fallback shell, on a screen with no cutout: fixed, where the notched
-    /// shell is only as wide as its words need.
-    public static let islandPillSize = CGSize(width: 320, height: 34)
+    /// Between a face's two lines, and between the words of its first.
+    public static let islandLineGap: CGFloat = 5
+    public static let islandTitleGap: CGFloat = 8
 
-    /// The air between the menu bar and the fallback pill. The notched shell
-    /// takes none — it hangs off the top edge of the screen.
-    public static let islandPillTopGap: CGFloat = 8
+    /// Between the idle face's two lines. Not the design's: its second line
+    /// is a 24 pt chip, and the artboards set the open row in the whole 74 pt
+    /// of the shell, where on a Mac the top of it is the camera's cutout. The
+    /// row hangs below the cutout instead (`IslandShell`), and below a 32 pt
+    /// cutout two lines at the design's gap overflow the band that is left.
+    public static let islandCompactLineGap: CGFloat = 2
 
-    /// The pill's shadow, which the notched shell does not have: it floats
-    /// clear of the bezel, so it casts. The design states it as a CSS shadow —
-    /// offset 10, blur 26 — and a CSS blur is twice a SwiftUI radius.
-    public static let islandPillShadowRadius: CGFloat = 13
-    public static let islandPillShadowOffset: CGFloat = 10
+    /// Between the recording face's two level gauges.
+    public static let islandGaugeGap: CGFloat = 12
+
+    /// The progress hairline along the open shell's bottom edge.
+    public static let islandProgressHeight: CGFloat = 2
+
+    /// The cutout Echo draws on a screen that has none, when no screen with
+    /// one is attached to read it from: the 14" M4 Pro's, as measured on
+    /// 2026-09-11 (spike #69). With a notched screen attached, the drawn one
+    /// takes that screen's real width instead. Its height is never a token —
+    /// it is the menu bar's, read per screen (DEC-1, product owner 2026-10-02).
+    public static let islandDrawnCutoutWidth: CGFloat = 185
 
     // MARK: The document
 
@@ -243,7 +278,12 @@ public nonisolated struct IslandWidth: Equatable, Sendable {
     /// Nothing is happening: the app's permanent presence, with empty ears.
     public static let idle = IslandWidth(collapsed: 200, expanded: 324)
     /// A call was noticed and a recording is offered.
-    public static let callDetected = IslandWidth(collapsed: 272, expanded: 344)
+    ///
+    /// Collapsed, retaken: the artboard's 272 leaves its ears off-centre
+    /// around the cutout, and the island hangs centred on it, so each ear gets
+    /// half of what is left. On the 14" cutout the design's own fixture —
+    /// "Zoom" in the trailing ear — needs 274.
+    public static let callDetected = IslandWidth(collapsed: 274, expanded: 344)
     /// A session is live: the timer and the two levels.
     public static let recording = IslandWidth(collapsed: 320, expanded: 360)
     /// The call ended under a live recording, and the stop is counting down.

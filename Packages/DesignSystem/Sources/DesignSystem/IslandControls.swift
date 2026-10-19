@@ -39,18 +39,37 @@ public struct IslandButtonStyle: ButtonStyle {
     }
 
     public func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(role == .primary ? EchoFont.capsulePrimary : EchoFont.capsuleSecondary)
-            .tracking(EchoFont.capsuleTracking)
-            .foregroundStyle(
-                role == .quiet ? EchoColor.Island.quietLabel : EchoColor.Island.controlLabel
-            )
-            .lineLimit(1)
-            .frame(height: EchoControl.capsuleHeight)
-            .padding(.horizontal, inset)
-            .background(fill, in: .rect(cornerRadius: EchoRadius.capsule))
-            .contentShape(.rect(cornerRadius: EchoRadius.capsule))
-            .opacity(configuration.isPressed ? 0.72 : 1)
+        Capsule(configuration: configuration, role: role, inset: inset, fill: fill)
+    }
+
+    /// The drawn capsule, a view of its own so it can read whether it is
+    /// enabled: a style cannot, and the island has one capsule that can be
+    /// held back — Record while recording would be refused (product owner,
+    /// 2026-10-02). Disabled keeps the shape and the fill and takes the quiet
+    /// control's grey for its label, so the face does not change size or
+    /// shape while it explains why.
+    private struct Capsule: View {
+        let configuration: Configuration
+        let role: Role
+        let inset: CGFloat
+        let fill: Color
+
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .font(role == .primary ? EchoFont.capsulePrimary : EchoFont.capsuleSecondary)
+                .tracking(EchoFont.capsuleTracking)
+                .foregroundStyle(
+                    role == .quiet || !isEnabled ? EchoColor.Island.quietLabel : EchoColor.Island.controlLabel
+                )
+                .lineLimit(1)
+                .frame(height: EchoControl.capsuleHeight)
+                .padding(.horizontal, inset)
+                .background(fill, in: .rect(cornerRadius: EchoRadius.capsule))
+                .contentShape(.rect(cornerRadius: EchoRadius.capsule))
+                .opacity(configuration.isPressed ? 0.72 : 1)
+        }
     }
 
     private var inset: CGFloat {
@@ -119,6 +138,7 @@ public struct ValueChip: View {
                 Image(systemName: "chevron.down")
                     .font(.system(size: EchoControl.islandGlyphSize, weight: .semibold))
                     .foregroundStyle(EchoColor.Island.quietLabel)
+                    .accessibilityHidden(true)
             }
             .frame(height: EchoControl.chipHeight)
             .padding(.leading, EchoControl.chipLeadingInset)
@@ -180,6 +200,11 @@ public struct LevelGauge: View {
             }
             .frame(height: EchoControl.gaugeHeight)
         }
+        // One element: the label, and the level it was handed as its value —
+        // the same number the bar is drawn from, never another.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(Text(level, format: .percent.precision(.fractionLength(0))))
     }
 
     private var labelColor: Color {

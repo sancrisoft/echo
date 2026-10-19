@@ -16,7 +16,7 @@ XCODEBUILD      := xcodebuild -project Echo.xcodeproj -scheme Echo -destination 
                    CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=-
 APP             := $(DERIVED)/Build/Products/Debug/Echo.app
 
-.PHONY: help build run test test-packages test-package test-app lint format check-boundaries clean
+.PHONY: help build run test test-packages test-package test-app lint format check-boundaries app-icon clean
 
 help: ## List the targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[1m%-16s\033[0m %s\n", $$1, $$2}'
@@ -50,6 +50,12 @@ format: ## swift-format in place
 
 check-boundaries: ## Dependency direction, engine/UI separation, forbidden patterns
 	scripts/check_boundaries.sh
+
+app-icon: ## Render App/Assets.xcassets/AppIcon.appiconset from the mark's geometry
+	@mkdir -p $(DERIVED)
+	swiftc -swift-version 6 -parse-as-library -O -o $(DERIVED)/generate_app_icon \
+		Packages/DesignSystem/Sources/DesignSystem/EchoMarkGeometry.swift scripts/generate_app_icon.swift
+	$(DERIVED)/generate_app_icon App/Assets.xcassets/AppIcon.appiconset
 
 clean: ## Remove build products
 	rm -rf $(DERIVED)

@@ -420,6 +420,7 @@ func withSession<T>(
     summarizer: ScriptedSummarizer? = nil,
     summaryModelOnDisk: Bool = true,
     summaryEngineFailures: Int = 0,
+    transcriptionModel suppliedTranscriptionModel: ParakeetModel? = nil,
     _ body: (SessionHarness) async throws -> T
 ) async throws -> T {
     let temp = try TemporaryDirectory(prefix: "RecordingSessionTests")
@@ -458,15 +459,19 @@ func withSession<T>(
         },
         snapshotExists: { summaryModelOnDisk }
     )
-    // Present on disk and never fetched: a session must never wait for a
-    // model, and a unit test must never download one.
-    let transcriptionModel = ParakeetModel(
-        modelsRoot: temp.path("Models"),
-        modelsPresent: { true },
-        downloader: { _ in
-            Issue.record("The session downloaded the transcription model")
-        }
-    )
+    // Present on disk and never fetched, unless a test brings its own: a
+    // recording waits for this model (product owner, 2026-10-02), so every
+    // test that is not about that wait starts with it ready — and a unit test
+    // must never download one.
+    let transcriptionModel =
+        suppliedTranscriptionModel
+        ?? ParakeetModel(
+            modelsRoot: temp.path("Models"),
+            modelsPresent: { true },
+            downloader: { _ in
+                Issue.record("The session downloaded the transcription model")
+            }
+        )
     let session = RecordingSession(
         library: library,
         settings: settings,

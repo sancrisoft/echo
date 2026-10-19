@@ -29,6 +29,7 @@ public final class AppSettings {
         var disabledCallApps: [String] = []
         var checkForUpdatesAutomatically = true
         var hasLaunchedBefore = false
+        var showsIsland = true
 
         init() {}
 
@@ -62,6 +63,9 @@ public final class AppSettings {
             hasLaunchedBefore =
                 try container.decodeIfPresent(Bool.self, forKey: .hasLaunchedBefore)
                 ?? defaults.hasLaunchedBefore
+            showsIsland =
+                try container.decodeIfPresent(Bool.self, forKey: .showsIsland)
+                ?? defaults.showsIsland
         }
     }
 
@@ -103,6 +107,12 @@ public final class AppSettings {
     /// the same promise, one launch late.
     public private(set) var hasLaunchedBefore: Bool
 
+    /// Whether the island is on screen. On by default, and for every screen at
+    /// once (DEC-1, product owner 2026-10-02). Off takes the panel away and
+    /// nothing else: call detection keeps running, and the menu bar item says
+    /// what the island would have said.
+    public private(set) var showsIsland: Bool
+
     @ObservationIgnored private let fileURL: URL
 
     /// Loads the preferences from `fileURL`, falling back to defaults when the
@@ -117,6 +127,7 @@ public final class AppSettings {
         self.disabledCallApps = stored.disabledCallApps
         self.checkForUpdatesAutomatically = stored.checkForUpdatesAutomatically
         self.hasLaunchedBefore = stored.hasLaunchedBefore
+        self.showsIsland = stored.showsIsland
     }
 
     /// The app's preferences, at the data root's `settings.json`.
@@ -182,6 +193,13 @@ public final class AppSettings {
         persist()
     }
 
+    /// Shows or hides the island and persists the change.
+    public func setShowsIsland(_ shown: Bool) {
+        guard showsIsland != shown else { return }
+        showsIsland = shown
+        persist()
+    }
+
     private static func load(from url: URL) -> Stored {
         guard let data = try? Data(contentsOf: url) else { return Stored() }
         do {
@@ -201,6 +219,7 @@ public final class AppSettings {
         stored.disabledCallApps = disabledCallApps
         stored.checkForUpdatesAutomatically = checkForUpdatesAutomatically
         stored.hasLaunchedBefore = hasLaunchedBefore
+        stored.showsIsland = showsIsland
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
