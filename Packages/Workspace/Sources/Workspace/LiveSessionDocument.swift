@@ -83,30 +83,6 @@ struct LiveSessionDocument: View {
     }
 }
 
-/// Where the document sits, above it: the library, then the document itself.
-struct Breadcrumb: View {
-    let trail: String
-    let current: String
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Text(trail)
-                .foregroundStyle(EchoColor.textQuaternary)
-            Text("/")
-                .foregroundStyle(EchoColor.breadcrumbSlash)
-                .padding(.horizontal, EchoLayout.breadcrumbSlashGap)
-                .accessibilityHidden(true)
-            Text(current)
-                .foregroundStyle(EchoColor.textSecondary)
-            Spacer(minLength: 0)
-        }
-        .font(EchoFont.control)
-        .lineLimit(1)
-        .padding(.horizontal, EchoLayout.breadcrumbInset)
-        .frame(height: EchoLayout.breadcrumbHeight)
-    }
-}
-
 /// What the document says while the call runs, in place of anything to read.
 private struct CapturingPlaceholder: View {
     var body: some View {

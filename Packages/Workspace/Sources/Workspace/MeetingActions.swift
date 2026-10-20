@@ -49,6 +49,17 @@ enum MeetingActions {
         return true
     }
 
+    /// Copies the transcript as a standalone Markdown document, one paragraph
+    /// per turn. Returns `false` when there is nothing to copy.
+    @discardableResult
+    static func copyTranscript(_ record: MeetingRecord) -> Bool {
+        guard let markdown = MeetingExport.transcriptMarkdown(record) else { return false }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(markdown, forType: .string)
+        return true
+    }
+
     static func revealInFinder(_ url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
