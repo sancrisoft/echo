@@ -56,7 +56,23 @@ public final class WorkspaceModel {
 
     public var sortOrder: MeetingSortOrder = .recent
 
+    /// Whether the window shows the welcome screen in place of the workspace.
+    /// Set at launch by the composition root when `WelcomeGate` says so, and
+    /// cleared when the user leaves it; persisting that the user left is the
+    /// settings' business, not navigation's.
+    public private(set) var showsWelcome = false
+
     public init() {}
+
+    // MARK: - The welcome screen
+
+    public func presentWelcome() {
+        showsWelcome = true
+    }
+
+    public func leaveWelcome() {
+        showsWelcome = false
+    }
 
     // MARK: - Derived lists
 
