@@ -106,6 +106,16 @@ public final class RecordingSession {
     /// back.
     public private(set) var readiness: RecordingReadiness = .waitingToDownload
 
+    /// Where the summary model is, for the models panel and the welcome
+    /// screen. It gates nothing: a recording waits for the transcription
+    /// model only.
+    ///
+    /// Published the way `readiness` is: the state lives on the
+    /// `SummaryModel` actor, which no view can observe, and this repeats what
+    /// that actor announces (`stateChanges()`). Nothing else writes it. It
+    /// reads as waiting until the launch starts following the model.
+    public private(set) var summaryReadiness: SummaryReadiness = .waitingToDownload
+
     /// Active notices, in a stable render order (see `RecordingNotice.Kind`).
     public var notices: [RecordingNotice] {
         noticeMessages
@@ -1403,19 +1413,56 @@ public final class RecordingSession {
         guard !modelsPrepared else { return }
         modelsPrepared = true
         followTranscriptionModel()
-        await fetchTranscriptionModel()
-
+        followSummaryModel()
+        // The summary model's state is read from disk before the transcription
+        // model's fetch, not after it: that fetch can take minutes, and until
+        // the read a model already on disk would be drawn as waiting to
+        // download. The read is cheap and fetches nothing; the download itself
+        // still waits its turn below.
         let model = summaryModel
         await model.refreshState()
+        await fetchTranscriptionModel()
+        await fetchSummaryModel()
+    }
+
+    /// The summary model's download, honouring a pause. Shared by the launch
+    /// fetch and the user's Resume, Resume download and Retry.
+    private func fetchSummaryModel() async {
+        let model = summaryModel
         do {
             try await model.ensureDownloaded()
             // One of the backfill's four triggers: a model download finishing.
             // Harmless when there was nothing to fetch.
             kickSummaryBackfill()
         } catch {
+            // A pause cancels the transfer, and arrives here exactly like a
+            // failure would; the model already knows which it was, and a
+            // pause is the user's choice, not an error to trace.
+            guard !(await model.isDownloadPaused) else { return }
             // Subordinate: the model's own state carries the failure, and
             // nothing waits on the summary model to record.
-            ErrorTrace.record("Summary model eager fetch failed", error: error, category: "RecordingSession")
+            ErrorTrace.record("Summary model fetch failed", error: error, category: "RecordingSession")
+        }
+    }
+
+    /// The models panel's Pause, while the summary model downloads. The model
+    /// records the intent before it cancels the transfer, so the launch fetch
+    /// never resumes it behind the user's back, this run or the next.
+    public func pauseSummaryModelDownload() {
+        let model = summaryModel
+        Task { await model.pauseDownload() }
+    }
+
+    /// The summary model's Resume (paused), Resume download (a download the
+    /// app quit in the middle of) and Retry (a failed fetch or load). All
+    /// three are the user acting on a stopped download, and the model treats
+    /// them as one: the intent and any failure are cleared, and the fetch
+    /// continues from the files already on disk.
+    public func resumeSummaryModelDownload() {
+        let model = summaryModel
+        Task {
+            await model.resumeDownload()
+            await fetchSummaryModel()
         }
     }
 
@@ -1428,6 +1475,7 @@ public final class RecordingSession {
 
     @ObservationIgnored private var modelsPrepared = false
     @ObservationIgnored private var readinessFollower: Task<Void, Never>?
+    @ObservationIgnored private var summaryFollower: Task<Void, Never>?
 
     /// The fetch waits out a live capture, as it always has: it must not
     /// compete with one. Recording waits for this model, so a capture is only
@@ -1446,6 +1494,19 @@ public final class RecordingSession {
             for await state in await model.stateChanges() {
                 guard let self else { return }
                 self.readiness = RecordingReadiness(state)
+            }
+        }
+    }
+
+    /// Repeats what the summary model announces, for as long as the session
+    /// lives.
+    private func followSummaryModel() {
+        guard summaryFollower == nil else { return }
+        let model = summaryModel
+        summaryFollower = Task { [weak self] in
+            for await state in await model.stateChanges() {
+                guard let self else { return }
+                self.summaryReadiness = SummaryReadiness(state)
             }
         }
     }

@@ -421,6 +421,7 @@ func withSession<T>(
     summaryModelOnDisk: Bool = true,
     summaryEngineFailures: Int = 0,
     transcriptionModel suppliedTranscriptionModel: ParakeetModel? = nil,
+    summaryModel suppliedSummaryModel: ((TemporaryDirectory) -> SummaryModel)? = nil,
     _ body: (SessionHarness) async throws -> T
 ) async throws -> T {
     let temp = try TemporaryDirectory(prefix: "RecordingSessionTests")
@@ -432,33 +433,35 @@ func withSession<T>(
 
     let library = MeetingLibrary(store: MeetingStore(rootDirectory: temp.path("Meetings")))
     let settings = AppSettings(fileURL: temp.path("settings.json"))
-    let summaryModel = SummaryModel(
-        modelsRoot: temp.path("Models"),
-        pauseStateFile: temp.path("summary-download.json"),
-        loader: { _ in
-            // Only a test that scripted the summarizer may hold an engine:
-            // the scheduler acquires one before it generates, so the acquire
-            // has to succeed there — and nowhere else, because putting real
-            // weights in RAM is exactly what a unit test must never do.
-            // The model itself is what went wrong, so no meeting may be
-            // blamed for it.
-            let shouldFail = remainingEngineFailures.withLock { remaining -> Bool in
-                guard remaining > 0 else { return false }
-                remaining -= 1
-                return true
-            }
-            if shouldFail { throw SummaryModelError.loadFailed("the weights would not map") }
-            guard summarizer != nil else {
-                Issue.record("The session loaded the summary engine during a recording")
-                throw ScriptedCaptureFailure(reason: "no engine is ever loaded in a unit test")
-            }
-            return InertTextEngine()
-        },
-        downloader: { _ in
-            Issue.record("The session started a summary-model download during a recording")
-        },
-        snapshotExists: { summaryModelOnDisk }
-    )
+    let summaryModel =
+        suppliedSummaryModel?(temp)
+        ?? SummaryModel(
+            modelsRoot: temp.path("Models"),
+            pauseStateFile: temp.path("summary-download.json"),
+            loader: { _ in
+                // Only a test that scripted the summarizer may hold an engine:
+                // the scheduler acquires one before it generates, so the acquire
+                // has to succeed there — and nowhere else, because putting real
+                // weights in RAM is exactly what a unit test must never do.
+                // The model itself is what went wrong, so no meeting may be
+                // blamed for it.
+                let shouldFail = remainingEngineFailures.withLock { remaining -> Bool in
+                    guard remaining > 0 else { return false }
+                    remaining -= 1
+                    return true
+                }
+                if shouldFail { throw SummaryModelError.loadFailed("the weights would not map") }
+                guard summarizer != nil else {
+                    Issue.record("The session loaded the summary engine during a recording")
+                    throw ScriptedCaptureFailure(reason: "no engine is ever loaded in a unit test")
+                }
+                return InertTextEngine()
+            },
+            downloader: { _ in
+                Issue.record("The session started a summary-model download during a recording")
+            },
+            snapshotExists: { summaryModelOnDisk }
+        )
     // Present on disk and never fetched, unless a test brings its own: a
     // recording waits for this model (product owner, 2026-10-02), so every
     // test that is not about that wait starts with it ready — and a unit test
