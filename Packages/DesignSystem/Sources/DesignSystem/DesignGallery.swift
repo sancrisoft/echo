@@ -134,14 +134,6 @@ import SwiftUI
                     StatusBadge("Processing", tone: .accent)
                 }
 
-                Text("Meta strip").font(EchoFont.sectionTitle)
-                MetaStrip([
-                    MetaItem("calendar", "Aug 27, 2026 · 10:04 – 11:02"),
-                    MetaItem("clock", "58 min"),
-                    MetaItem("text.word.spacing", "5,512 words"),
-                    MetaItem("checkmark.seal", "Summarized"),
-                ])
-
                 Text("Property rows").font(EchoFont.sectionTitle)
                 VStack(alignment: .leading, spacing: 0) {
                     PropertyRow(symbol: "calendar", label: "Date") {

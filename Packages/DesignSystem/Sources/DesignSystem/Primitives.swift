@@ -3,8 +3,9 @@
 //  DesignSystem
 //
 //  The pieces every surface repeats, implemented once: button styles, a status
-//  badge, a meta strip, an empty state, and the chrome behind a selectable
-//  row. Each takes tokens, never literals, and knows nothing about meetings.
+//  badge, a property row, a segmented tab strip, an empty state, and the
+//  chrome behind a selectable row. Each takes tokens, never literals, and
+//  knows nothing about meetings.
 //
 
 import SwiftUI
@@ -337,46 +338,6 @@ public struct TabStrip<Tab: Hashable>: View {
         .padding(EchoControl.tabStripInset)
         .background(EchoColor.surface, in: .rect(cornerRadius: EchoRadius.well))
         .fixedSize()
-    }
-}
-
-// MARK: - Meta strip
-
-/// One fact in a `MetaStrip`: an SF Symbol and its text.
-public struct MetaItem: Identifiable, Sendable {
-    public let id: String
-    public let symbol: String
-    public let text: String
-
-    public init(_ symbol: String, _ text: String) {
-        self.id = symbol + text
-        self.symbol = symbol
-        self.text = text
-    }
-}
-
-/// A row of small facts under a title: date, duration, word count, status.
-public struct MetaStrip: View {
-    private let items: [MetaItem]
-
-    public init(_ items: [MetaItem]) {
-        self.items = items
-    }
-
-    public var body: some View {
-        HStack(spacing: EchoSpacing.l) {
-            ForEach(items) { item in
-                HStack(spacing: EchoSpacing.xs) {
-                    Image(systemName: item.symbol)
-                        .font(.system(size: 11))
-                    Text(item.text)
-                        .font(EchoFont.control)
-                        .monospacedDigit()
-                }
-                .foregroundStyle(EchoColor.textSecondary)
-                .lineLimit(1)
-            }
-        }
     }
 }
 
