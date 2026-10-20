@@ -33,6 +33,7 @@ public final class AppSettings {
         var lastOpenMeeting: UUID?
         var hasRequestedSystemAudio = false
         var hasLeftWelcome = false
+        var recentSearches: [String] = []
 
         init() {}
 
@@ -78,6 +79,9 @@ public final class AppSettings {
             hasLeftWelcome =
                 try container.decodeIfPresent(Bool.self, forKey: .hasLeftWelcome)
                 ?? defaults.hasLeftWelcome
+            recentSearches =
+                try container.decodeIfPresent([String].self, forKey: .recentSearches)
+                ?? defaults.recentSearches
         }
     }
 
@@ -145,6 +149,16 @@ public final class AppSettings {
     /// on which the models are not both on disk (product owner, 2026-10-19).
     public private(set) var hasLeftWelcome: Bool
 
+    /// What the user last searched for and acted on, newest first, for the
+    /// ⌘K palette to offer while its field is empty. Like `lastOpenMeeting`,
+    /// navigation that has to outlive the process. It is the user's own
+    /// words, kept in this file on this Mac and nowhere else.
+    public private(set) var recentSearches: [String]
+
+    /// How many searches are kept: a handful to pick from, not a history.
+    /// A choice, not a measurement.
+    public static let recentSearchLimit = 5
+
     @ObservationIgnored private let fileURL: URL
 
     /// Loads the preferences from `fileURL`, falling back to defaults when the
@@ -163,6 +177,7 @@ public final class AppSettings {
         self.lastOpenMeeting = stored.lastOpenMeeting
         self.hasRequestedSystemAudio = stored.hasRequestedSystemAudio
         self.hasLeftWelcome = stored.hasLeftWelcome
+        self.recentSearches = stored.recentSearches
     }
 
     /// The app's preferences, at the data root's `settings.json`.
@@ -258,6 +273,33 @@ public final class AppSettings {
         persist()
     }
 
+    /// Records a search the user acted on: trimmed, first in the list, once —
+    /// the same words in any case are one search — and the oldest past the
+    /// limit dropped.
+    public func noteSearch(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var searches = recentSearches.filter { $0.caseInsensitiveCompare(trimmed) != .orderedSame }
+        searches.insert(trimmed, at: 0)
+        searches = Array(searches.prefix(Self.recentSearchLimit))
+        guard searches != recentSearches else { return }
+        recentSearches = searches
+        persist()
+    }
+
+    /// Takes one search off the list.
+    public func forgetSearch(_ text: String) {
+        guard recentSearches.contains(text) else { return }
+        recentSearches.removeAll { $0 == text }
+        persist()
+    }
+
+    public func clearRecentSearches() {
+        guard !recentSearches.isEmpty else { return }
+        recentSearches = []
+        persist()
+    }
+
     private static func load(from url: URL) -> Stored {
         guard let data = try? Data(contentsOf: url) else { return Stored() }
         do {
@@ -281,6 +323,7 @@ public final class AppSettings {
         stored.lastOpenMeeting = lastOpenMeeting
         stored.hasRequestedSystemAudio = hasRequestedSystemAudio
         stored.hasLeftWelcome = hasLeftWelcome
+        stored.recentSearches = recentSearches
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),
