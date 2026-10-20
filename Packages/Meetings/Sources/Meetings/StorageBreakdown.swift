@@ -19,6 +19,10 @@ public struct StorageBreakdown: Equatable, Sendable {
     public var recordingsBytes: Int64 = 0
     /// Non-trashed meetings holding a preserved recording.
     public var recordingsCount: Int = 0
+    /// Each of those meetings' preserved bytes: which meetings keep a
+    /// recording, for the menus that re-transcribe or delete one, and how
+    /// much each one is, for the question before a deletion.
+    public var recordingBytes: [UUID: Int64] = [:]
     /// Trashed meeting folders, whole.
     public var trashBytes: Int64 = 0
     /// Each trashed folder's own bytes, for the row Trash draws per meeting;
@@ -64,7 +68,10 @@ public struct StorageBreakdown: Equatable, Sendable {
                     path: MeetingStore.preservedAudioFileName(for: channel), directoryHint: .notDirectory)
                 audio += fileSize(at: url)
             }
-            if audio > 0 { breakdown.recordingsCount += 1 }
+            if audio > 0 {
+                breakdown.recordingsCount += 1
+                breakdown.recordingBytes[id] = audio
+            }
             breakdown.recordingsBytes += audio
             breakdown.meetingsBytes += max(0, whole - audio)
         }
