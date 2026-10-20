@@ -29,57 +29,87 @@ public struct EchoButtonStyle: ButtonStyle {
     }
 
     public func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(role == .primary ? EchoFont.primaryButton : EchoFont.control)
-            .lineLimit(1)
-            .frame(height: height)
-            .padding(.horizontal, inset)
-            .foregroundStyle(foreground)
-            .background(background(pressed: configuration.isPressed), in: .rect(cornerRadius: radius))
-            .overlay {
-                if role == .secondary {
-                    RoundedRectangle(cornerRadius: radius)
-                        .strokeBorder(EchoColor.border, lineWidth: 1)
+        Drawn(configuration: configuration, role: role)
+    }
+
+    /// The drawn button, a view of its own so it can read whether it is
+    /// enabled: a style cannot.
+    ///
+    /// The design draws one held-back button, and it is a primary — the
+    /// welcome screen's, greyed until the setup is done, with the reason
+    /// beside it. A held-back primary keeps its shape and size and trades the
+    /// inverted fill for a raised grey one with an inert edge, so a title bar
+    /// does not change its layout while it explains why. The other roles have
+    /// no drawn held-back look and keep the one they have.
+    private struct Drawn: View {
+        let configuration: Configuration
+        let role: Role
+
+        @Environment(\.isEnabled) private var isEnabled
+
+        private var isHeldBack: Bool { role == .primary && !isEnabled }
+
+        var body: some View {
+            configuration.label
+                .font(role == .primary ? EchoFont.primaryButton : EchoFont.control)
+                .lineLimit(1)
+                .frame(height: height)
+                .padding(.horizontal, inset)
+                .foregroundStyle(foreground)
+                .background(background(pressed: configuration.isPressed), in: .rect(cornerRadius: radius))
+                .overlay {
+                    if let edge {
+                        RoundedRectangle(cornerRadius: radius)
+                            .strokeBorder(edge, lineWidth: 1)
+                    }
                 }
-            }
-            .contentShape(.rect(cornerRadius: radius))
-            .opacity(configuration.isPressed ? 0.85 : 1)
-    }
-
-    /// A quiet button is a toolbar button and takes that shape; everything
-    /// with a fill takes the shape of the one filled button the design draws,
-    /// so buttons on a screen line up whatever their role.
-    private var height: CGFloat {
-        role == .quiet ? EchoLayout.toolbarButtonHeight : EchoControl.primaryButtonHeight
-    }
-
-    private var inset: CGFloat {
-        role == .quiet ? EchoControl.toolbarButtonInset : EchoControl.primaryButtonInset
-    }
-
-    private var radius: CGFloat {
-        role == .quiet ? EchoRadius.row : EchoRadius.control
-    }
-
-    private var foreground: Color {
-        switch role {
-        // The design's one filled button is the interface inverted: the text
-        // takes the window's own background, whichever appearance that is.
-        case .primary: return EchoColor.windowBackground
-        case .secondary: return EchoColor.textPrimary
-        case .quiet: return EchoColor.textSecondary
-        case .destructive: return EchoColor.danger
+                .contentShape(.rect(cornerRadius: radius))
+                .opacity(configuration.isPressed ? 0.85 : 1)
         }
-    }
 
-    private func background(pressed: Bool) -> Color {
-        switch role {
-        // Not the accent. The accent marks selection and links; a button that
-        // wore it would be the loudest thing on a grey screen.
-        case .primary: return EchoColor.textPrimary.opacity(pressed ? 0.85 : 1)
-        case .secondary: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
-        case .quiet: return pressed ? EchoColor.hover : .clear
-        case .destructive: return EchoColor.danger.opacity(pressed ? 0.16 : 0.1)
+        /// A quiet button is a toolbar button and takes that shape; everything
+        /// with a fill takes the shape of the one filled button the design
+        /// draws, so buttons on a screen line up whatever their role.
+        private var height: CGFloat {
+            role == .quiet ? EchoLayout.toolbarButtonHeight : EchoControl.primaryButtonHeight
+        }
+
+        private var inset: CGFloat {
+            role == .quiet ? EchoControl.toolbarButtonInset : EchoControl.primaryButtonInset
+        }
+
+        private var radius: CGFloat {
+            role == .quiet ? EchoRadius.row : EchoRadius.control
+        }
+
+        private var edge: Color? {
+            if isHeldBack { return EchoColor.inertBorder }
+            return role == .secondary ? EchoColor.border : nil
+        }
+
+        private var foreground: Color {
+            if isHeldBack { return EchoColor.textQuaternary }
+            switch role {
+            // The design's one filled button is the interface inverted: the
+            // text takes the window's own background, whichever appearance
+            // that is.
+            case .primary: return EchoColor.windowBackground
+            case .secondary: return EchoColor.textPrimary
+            case .quiet: return EchoColor.textSecondary
+            case .destructive: return EchoColor.danger
+            }
+        }
+
+        private func background(pressed: Bool) -> Color {
+            if isHeldBack { return EchoColor.surfaceRaised }
+            switch role {
+            // Not the accent. The accent marks selection and links; a button
+            // that wore it would be the loudest thing on a grey screen.
+            case .primary: return EchoColor.textPrimary.opacity(pressed ? 0.85 : 1)
+            case .secondary: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
+            case .quiet: return pressed ? EchoColor.hover : .clear
+            case .destructive: return EchoColor.danger.opacity(pressed ? 0.16 : 0.1)
+            }
         }
     }
 }

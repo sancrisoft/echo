@@ -109,6 +109,7 @@ nonisolated let palette: [Token] = [
     .init("surfaceSelected", EchoColor.surfaceSelected, light: 0xFFFFFF, dark: 0x292B2F),
     .init("divider", EchoColor.divider, light: 0xECEDF0, dark: 0x1D1E21),
     .init("border", EchoColor.border, light: 0xE1E3E6, dark: 0x292B2F),
+    .init("inertBorder", EchoColor.inertBorder, light: 0xE1E3E6, dark: 0x2F3237),
     .init("textPrimary", EchoColor.textPrimary, light: 0x18191C, dark: 0xF2F3F5),
     .init("textProse", EchoColor.textProse, light: 0x35383D, dark: 0xD2D4D8),
     .init("textValue", EchoColor.textValue, light: 0x2B2D31, dark: 0xE4E5E8),
@@ -122,6 +123,13 @@ nonisolated let palette: [Token] = [
         "accentWash", EchoColor.accentWash, light: 0x1673C0, dark: 0x3B9CF6,
         lightOpacity: 0.13, darkOpacity: 0.15),
     .init("recording", EchoColor.recording, light: 0xD02B31, dark: 0xED4A49),
+    .init(
+        "recordingWash", EchoColor.recordingWash, light: 0xD02B31, dark: 0xED4A49,
+        lightOpacity: 0.12, darkOpacity: 0.12),
+    .init(
+        "recordingWashEdge", EchoColor.recordingWashEdge, light: 0xD02B31, dark: 0xED4A49,
+        lightOpacity: 0.28, darkOpacity: 0.28),
+    .init("recordingTimer", EchoColor.recordingTimer, light: 0xD02B31, dark: 0xF0908F),
     .init("selection", EchoColor.selection, light: 0xE8EAED, dark: 0x1F2024),
 ]
 
@@ -184,7 +192,6 @@ struct MetricTests {
     @Test("the fixed dimensions are the artboard's")
     func dimensionsMatchTheArtboard() {
         #expect(EchoLayout.hairline == 1)
-        #expect(EchoLayout.titleBarHeight == 44)
         #expect(EchoLayout.sidebarWidth == 256)
         #expect(EchoLayout.appRowHeight == 34)
         #expect(EchoLayout.sidebarRowHeight == 29)

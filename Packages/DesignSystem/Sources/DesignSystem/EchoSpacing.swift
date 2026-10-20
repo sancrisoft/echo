@@ -58,6 +58,17 @@ public nonisolated enum EchoControl {
     public static let primaryButtonHeight: CGFloat = 29
     public static let primaryButtonInset: CGFloat = 14
 
+    /// The glyph a primary button carries before its label — New recording's
+    /// dot, Stop's square — and the gap between the two.
+    public static let primaryButtonGlyphSize: CGFloat = 9
+    public static let primaryButtonGap: CGFloat = 8
+
+    /// The pill the title bar's running clock sits in, beside Stop: as tall as
+    /// the button, a little tighter at the sides, and the gap between its red
+    /// dot (`recordingDotSize`) and the digits.
+    public static let timerPillInset: CGFloat = 11
+    public static let timerPillGap: CGFloat = 7
+
     /// A quiet button in the breadcrumb bar: Copy, Export, the "…".
     public static let toolbarButtonInset: CGFloat = 9
 
@@ -116,7 +127,8 @@ public nonisolated enum EchoControl {
     public static let gaugeLabelGap: CGFloat = 6
 
     /// The red dot that says a session is live: on the expanded recording
-    /// face, and in the ear it collapses into.
+    /// face, in the ear it collapses into, and in the window's title bar
+    /// beside the clock.
     public static let recordingDotSize: CGFloat = 7
 
     /// The glyph at the head of an open face: the mark, the camera, the
@@ -155,8 +167,13 @@ public nonisolated enum EchoLayout {
     /// pixel — a half-point line disappears on the artboards' scale.
     public static let hairline: CGFloat = 1
 
-    /// The title bar, with a hairline under it.
-    public static let titleBarHeight: CGFloat = 44
+    // The title bar has no token. The artboard draws it 44 pt, and AppKit
+    // fixes a title bar's height per style — measured on macOS 27.0.1: 32 bare,
+    // 40 with a compact toolbar, 52 with a unified one, whatever the items in
+    // it. The window takes the compact toolbar, the nearest, because that is
+    // the one height at which the system centres the traffic lights and the
+    // title bar's button together (`TitleBar` in Workspace).
+
     /// The window's smallest size at which nothing clips. Not drawn: the
     /// artboard shows one window size, and this is the floor the layout keeps.
     public static let minimumWindow = CGSize(width: 900, height: 560)
