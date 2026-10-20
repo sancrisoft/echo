@@ -151,19 +151,6 @@ struct IslandMenuTests {
         #expect(menu[3].isEnabled)
     }
 
-    @Test(
-        "why, in the models artboard's words",
-        arguments: [
-            (RecordingReadiness.ready, nil),
-            (.waitingToDownload, "Transcription · Waiting to download"),
-            (.downloading(0.414), "Transcription · 41%"),
-            (.downloading(1.2), "Transcription · 100%"),
-            (.downloadFailed("No network."), "Transcription · No network."),
-        ] as [(RecordingReadiness, String?)])
-    func whyInWords(readiness: RecordingReadiness, expected: String?) {
-        #expect(FaceText.waitingFor(readiness) == expected)
-    }
-
     @Test("a session being torn down offers no second Stop")
     func stoppingOffersNothing() {
         #expect(entries(IslandReading(phase: .stopping)).isEmpty)

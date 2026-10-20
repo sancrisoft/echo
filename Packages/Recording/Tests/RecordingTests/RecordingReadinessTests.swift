@@ -124,4 +124,17 @@ struct RecordingReadinessTests {
         #expect(RecordingReadiness(state) == expected)
         #expect(RecordingReadiness(state).isReady == (state == .ready))
     }
+
+    @Test(
+        "why, in the models artboard's words",
+        arguments: [
+            (RecordingReadiness.ready, nil),
+            (.waitingToDownload, "Transcription · Waiting to download"),
+            (.downloading(0.414), "Transcription · 41%"),
+            (.downloading(1.2), "Transcription · 100%"),
+            (.downloadFailed("No network."), "Transcription · No network."),
+        ] as [(RecordingReadiness, String?)])
+    func whyInWords(readiness: RecordingReadiness, expected: String?) {
+        #expect(readiness.waitingFor == expected)
+    }
 }
