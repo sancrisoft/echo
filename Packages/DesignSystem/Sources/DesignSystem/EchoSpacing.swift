@@ -381,6 +381,13 @@ public nonisolated enum EchoLayout {
     public static let summaryHeadingBottom: CGFloat = 9
     public static let summaryBlockGap: CGFloat = 9
     public static let listMarkerGap: CGFloat = 11
+    /// A transcript under the tabs: the air above its first turn, between
+    /// two turns, between a turn's speaker and its time, and between that
+    /// line and the words.
+    public static let transcriptTopGap: CGFloat = 26
+    public static let turnGap: CGFloat = 21
+    public static let turnLabelGap: CGFloat = 9
+    public static let turnTextGap: CGFloat = 5
     /// A card's inset in the models panel, and the gap between two cards.
     public static let modelCardInset = CGSize(width: 16, height: 14)
     public static let modelPanelGap: CGFloat = 12

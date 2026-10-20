@@ -237,6 +237,15 @@ struct MetricTests {
         #expect(EchoRadius.inlineCode == 4)
     }
 
+    /// A transcript under the tabs, as the transcript artboard sets its turns.
+    @Test("the transcript's measures are the artboard's")
+    func transcriptMatchesTheArtboard() {
+        #expect(EchoLayout.transcriptTopGap == 26)
+        #expect(EchoLayout.turnGap == 21)
+        #expect(EchoLayout.turnLabelGap == 9)
+        #expect(EchoLayout.turnTextGap == 5)
+    }
+
     @Test("the radii are the artboard's, largest to smallest")
     func radiiMatchTheArtboard() {
         #expect(EchoRadius.window == 11)
