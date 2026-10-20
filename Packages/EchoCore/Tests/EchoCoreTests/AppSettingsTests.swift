@@ -338,3 +338,54 @@ struct AppSettingsIslandTests {
         }
     }
 }
+
+@Suite("AppSettings — the meeting last open")
+@MainActor
+struct AppSettingsLastOpenMeetingTests {
+
+    @Test func noMeetingHasBeenOpenOnAFreshMac() throws {
+        try withTempSettingsFile { url in
+            #expect(AppSettings(fileURL: url).lastOpenMeeting == nil)
+        }
+    }
+
+    @Test func theMeetingRoundTripsThroughDisk() throws {
+        try withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            let meeting = UUID()
+            settings.noteOpenMeeting(meeting)
+            #expect(settings.lastOpenMeeting == meeting)
+            #expect(AppSettings(fileURL: url).lastOpenMeeting == meeting)
+        }
+    }
+
+    /// Every settings file on disk today predates the key, and has to keep
+    /// everything else the user chose.
+    @Test func aSettingsFileWrittenBeforeTheKeyKeepsItsValues() throws {
+        try withTempSettingsFile { url in
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data(#"{"showsIsland":false,"hasLaunchedBefore":true}"#.utf8).write(to: url)
+
+            let settings = AppSettings(fileURL: url)
+            #expect(settings.lastOpenMeeting == nil)
+            #expect(!settings.showsIsland)
+            #expect(settings.hasLaunchedBefore)
+        }
+    }
+
+    /// Selecting the meeting that is already open writes nothing: arrowing
+    /// back and forth is not a reason to touch the disk twice for one value.
+    @Test func notingTheSameMeetingLeavesTheFileAlone() throws {
+        try withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            let meeting = UUID()
+            settings.noteOpenMeeting(meeting)
+            // Take the file away: a second write would bring it back.
+            try FileManager.default.removeItem(at: url)
+            settings.noteOpenMeeting(meeting)
+            #expect(!FileManager.default.fileExists(atPath: url.path), "a repeat note wrote the file again")
+        }
+    }
+}

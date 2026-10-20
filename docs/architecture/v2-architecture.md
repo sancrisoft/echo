@@ -185,7 +185,7 @@ names inside a package are free to change.
 - `TranscriptSegment`, `AudioChannel`, `Speaker`, `TranscriptUtterance.derive(from:)`, `TranscriptSegment.wordCount(of:)`.
 - `DataRoot`: `appSupport`, `meetings`, `models`, `logs`, `settingsFile`, `summaryDownloadStateFile`. No accessor creates directories; owners do.
 - `ErrorTrace.record(_:error:category:metadata:)`, `ErrorTraceLog` (prune, reader for tests).
-- `AppSettings` (`@Observable @MainActor`): typed read-only properties plus one mutator per preference. `showsIsland` (on by default) is the island's switch: it takes the panel away and nothing else — detection keeps running and the menu bar item carries the island (DEC-1).
+- `AppSettings` (`@Observable @MainActor`): typed read-only properties plus one mutator per preference. `showsIsland` (on by default) is the island's switch: it takes the panel away and nothing else — detection keeps running and the menu bar item carries the island (DEC-1). `lastOpenMeeting`/`noteOpenMeeting(_:)` keep the meeting the window last showed across a relaunch: navigation rather than a preference, but `settings.json` is the one small file that outlives the process, and v1 ignores a key it does not know.
 - `LaunchEnvironment.current`: typed debug flags (`dataRootOverride`, `opensWindowAtLaunch`, `appearanceOverride`, `snapshotPath`, `snapshotScene`, `keepsRetainedAudio`, `installedVersionOverride`), populated only in DEBUG.
 - `TestHost.isActive`.
 - `AppIdentity`: `bundleIdentifier`, `logSubsystem`, `version` (`short`, `build`, `display`).
