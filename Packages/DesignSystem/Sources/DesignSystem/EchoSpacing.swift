@@ -465,6 +465,16 @@ public nonisolated enum EchoLayout {
     public static let paletteFooterGap: CGFloat = 16
     public static let paletteShadowRadius: CGFloat = 40
     public static let paletteShadowOffset: CGFloat = 32
+    /// A row's actions panel inside the palette (⌘K, as Raycast has it).
+    /// Not drawn: the product owner asked for it on 2026-10-20. Wide enough
+    /// for its longest action with its key, rows tighter than the palette's
+    /// own so a meeting's eight fit above the hints, and a shadow of the
+    /// palette's at half its reach, since it floats over the palette and not
+    /// over the window.
+    public static let palettePanelWidth: CGFloat = 300
+    public static let palettePanelRowHeight: CGFloat = 30
+    public static let palettePanelShadowRadius: CGFloat = 20
+    public static let palettePanelShadowOffset: CGFloat = 16
     /// The footer under a live session's document — the meter, what is
     /// happening, where it happens — its height, its side insets and the gap
     /// between its parts.

@@ -336,6 +336,9 @@ struct MetricTests {
         // The artboard's 80-point blur, as SwiftUI's radius of half that.
         #expect(EchoLayout.paletteShadowRadius == 40)
         #expect(EchoLayout.paletteShadowOffset == 32)
+        // The actions panel is not drawn; half the palette's shadow.
+        #expect(EchoLayout.palettePanelShadowRadius == EchoLayout.paletteShadowRadius / 2)
+        #expect(EchoLayout.palettePanelShadowOffset == EchoLayout.paletteShadowOffset / 2)
         #expect(EchoControl.paletteSearchGlyphSize == 17)
         #expect(EchoControl.paletteRowGlyphSize == 15)
         #expect(EchoControl.paletteGlyphStroke == 1.4)
