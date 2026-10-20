@@ -141,6 +141,7 @@ nonisolated let palette: [Token] = [
     .init("speakerSplitOthers", EchoColor.speakerSplitOthers, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("failureGlyph", EchoColor.failureGlyph, light: 0xD02B31, dark: 0xED4A49),
     .init("destructiveText", EchoColor.destructiveText, light: 0xD02B31, dark: 0xED4A49),
+    .init("controlEdgeInRow", EchoColor.controlEdgeInRow, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("levelOthers", EchoColor.levelOthers, light: 0x8A8D92, dark: 0x616469),
     .init("selection", EchoColor.selection, light: 0xE8EAED, dark: 0x1F2024),
     // The models panel (`Models.dc.html`). Light values borrowed until #120.

@@ -193,10 +193,12 @@ struct TrashView: View {
             // whether or not a row shows its buttons.
             HStack(spacing: EchoControl.listRowActionGap) {
                 if isActive {
-                    // On the selected row the control's raised fill is the
-                    // row's own; it takes the window's background instead.
+                    // The selected row wears the control's own fill, so the
+                    // button draws a darker edge to read as one; hovered rows
+                    // get the same, so Restore does not change as the
+                    // selection moves.
                     Button("Restore") { Task { await library.restore(meta.id) } }
-                        .buttonStyle(isSelected ? .echoControlOnSelection : .echoControl)
+                        .buttonStyle(.echoControlInRow)
                     Button("Delete") { confirmDelete = meta }
                         .buttonStyle(.echoControlDestructive)
                 }

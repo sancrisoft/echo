@@ -221,7 +221,7 @@ struct PrimitiveTests {
             size(of: Button("Delete") {}.buttonStyle(.echoControlDestructive)).height
                 == EchoControl.controlButtonHeight)
         #expect(
-            size(of: Button("Restore") {}.buttonStyle(.echoControlOnSelection)).height
+            size(of: Button("Restore") {}.buttonStyle(.echoControlInRow)).height
                 == EchoControl.controlButtonHeight)
         #expect(
             size(of: Button("Delete") {}.buttonStyle(.echoQuietDestructive)).height
@@ -256,25 +256,32 @@ struct PrimitiveTests {
         }
     }
 
-    @Test("on a selected row a control button keeps its shape and stands out from the row's fill")
-    func controlOnSelection() throws {
+    @Test("in a list row a control button keeps its shape and fill, and draws a darker edge")
+    func controlInRow() throws {
         let plain = try image(of: Button("Restore") {}.buttonStyle(.echoControl).background(EchoColor.surfaceRaised))
         let lifted = try image(
-            of: Button("Restore") {}.buttonStyle(.echoControlOnSelection).background(EchoColor.surfaceRaised))
+            of: Button("Restore") {}.buttonStyle(.echoControlInRow).background(EchoColor.surfaceRaised))
         #expect(plain.width == lifted.width && plain.height == lifted.height)
         #expect(plain.dataProvider?.data != lifted.dataProvider?.data)
     }
 
-    @Test("a selected Trash row's buttons, for the eye, in both appearances")
+    @Test("a Trash row's buttons, selected and hovered, for the eye, in both appearances")
     func selectedRowButtonsForTheEye() throws {
         EchoFont.registerBundledTypefaces()
         for (appearance, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
-            let row = HStack(spacing: EchoControl.listRowActionGap) {
-                Button("Restore") {}.buttonStyle(.echoControlOnSelection)
-                Button("Delete") {}.buttonStyle(.echoControlDestructive)
+            func row(_ fill: Color) -> some View {
+                HStack(spacing: EchoControl.listRowActionGap) {
+                    Button("Restore") {}.buttonStyle(.echoControlInRow)
+                    Button("Delete") {}.buttonStyle(.echoControlDestructive)
+                }
+                .padding(EchoSpacing.l)
+                .background(fill)
             }
-            .padding(EchoSpacing.l)
-            .background(EchoColor.surfaceRaised)
+            // Selected, then hovered: the two rows that show their buttons.
+            let row = VStack(spacing: 0) {
+                row(EchoColor.surfaceRaised)
+                row(EchoColor.surface)
+            }
             .environment(\.colorScheme, scheme)
             Attachment.record(try image(of: row), named: "selected-row-buttons-\(appearance).png")
         }
