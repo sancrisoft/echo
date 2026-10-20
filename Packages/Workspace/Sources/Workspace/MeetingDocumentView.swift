@@ -167,7 +167,7 @@ struct MeetingDocumentView: View {
             // (product owner, 2026-10-20): the artboard draws the button and
             // not what it opens.
             Menu {
-                Button("Rename…") { renameTarget = meta }
+                Button("Rename") { renameTarget = meta }
                 Button("Reveal in Finder") { MeetingActions.revealInFinder(library.directory(for: meta.id)) }
                 Divider()
                 SavedRecordingMenuItems(

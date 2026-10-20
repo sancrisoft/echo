@@ -224,7 +224,7 @@ struct TrashView: View {
             Button("Open") { workspace.openTrashed(meta.id) }
             Button("Restore") { Task { await library.restore(meta.id) } }
             Divider()
-            Button("Delete Permanently…", role: .destructive) { confirmDelete = meta }
+            Button("Delete Permanently", role: .destructive) { confirmDelete = meta }
         }
     }
 

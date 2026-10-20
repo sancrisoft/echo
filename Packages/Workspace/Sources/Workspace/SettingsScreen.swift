@@ -146,7 +146,7 @@ struct SettingsScreen: View {
                 Text(recordingsSummary)
                     .foregroundStyle(EchoColor.textSecondary)
                 Spacer()
-                Button("Delete All Saved Recordings…") { confirmDeleteRecordings = true }
+                Button("Delete All Saved Recordings") { confirmDeleteRecordings = true }
                     .buttonStyle(.echoDestructive)
                     .disabled((library.storage?.recordingsCount ?? 0) == 0)
             }
@@ -250,7 +250,7 @@ struct SettingsScreen: View {
             storageRow("Trash", library.storage?.trashBytes)
             storageRow("AI models", library.storage?.modelsBytes)
             HStack {
-                Button("Empty Trash…") { confirmEmptyTrash = true }
+                Button("Empty Trash") { confirmEmptyTrash = true }
                     .buttonStyle(.echoDestructive)
                     .disabled(library.trashedMetas.isEmpty)
                 Button("Reveal Data Folder in Finder") { MeetingActions.revealInFinder(dataRoot.url) }

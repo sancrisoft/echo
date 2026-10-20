@@ -300,8 +300,8 @@ struct MeetingSidebar: View {
         Button("Open Summary") { workspace.open(meta.id, tab: .summary) }
         Button("Open Transcript") { workspace.open(meta.id, tab: .transcript) }
         Divider()
-        Button("Rename…") { renameTarget = meta }
-        Menu("Export…") {
+        Button("Rename") { renameTarget = meta }
+        Menu("Export") {
             ForEach(MeetingExportFormat.allCases) { format in
                 Button(format.menuTitle) {
                     Task {

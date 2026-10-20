@@ -2,8 +2,8 @@
 //  SavedRecordingActions.swift
 //  Workspace
 //
-//  What a meeting that keeps its recording offers: Re-transcribe… and Delete
-//  Recording…, in the document's "…" and the sidebar row's menu (product
+//  What a meeting that keeps its recording offers: Re-transcribe and Delete
+//  Recording, in the document's "…" and the sidebar row's menu (product
 //  owner, 2026-10-20). Each asks first, in v1's words: re-transcribing
 //  replaces the transcript and the summary, and deleting the audio cannot be
 //  undone. Which meetings keep a recording, and how much it is, comes from
@@ -33,7 +33,7 @@ extension MeetingLibrary {
 }
 
 /// The two menu items, for a menu being built for `meta`. Nothing when the
-/// meeting keeps no recording; Re-transcribe… held back while a pass for it
+/// meeting keeps no recording; Re-transcribe held back while a pass for it
 /// is queued or running.
 struct SavedRecordingMenuItems: View {
     @Environment(MeetingLibrary.self) private var library
@@ -45,9 +45,9 @@ struct SavedRecordingMenuItems: View {
 
     var body: some View {
         if library.keepsRecording(meta.id) {
-            Button("Re-transcribe…") { retranscribe = meta }
+            Button("Re-transcribe") { retranscribe = meta }
                 .disabled(session.queuedMeetingIDs.contains(meta.id) || session.phase.meetingID == meta.id)
-            Button("Delete Recording…") { deleteRecording = meta }
+            Button("Delete Recording") { deleteRecording = meta }
         }
     }
 }

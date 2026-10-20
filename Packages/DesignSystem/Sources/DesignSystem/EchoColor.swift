@@ -145,8 +145,8 @@ public nonisolated enum EchoColor {
     /// slash's ink, not a new value.
     public static let controlEdgeInRow = breadcrumbSlash
 
-    /// The words of an action that removes something for good — Delete…,
-    /// Empty Trash… — and of a trashed meeting's last days: the red the Trash
+    /// The words of an action that removes something for good — Delete,
+    /// Empty Trash — and of a trashed meeting's last days: the red the Trash
     /// artboard writes them in.
     public static let destructiveText = recording
 
