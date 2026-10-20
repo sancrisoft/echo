@@ -132,6 +132,11 @@ public nonisolated enum EchoColor {
     /// draws, the breadcrumb slash's.
     public static let placeholderGlyph = breadcrumbSlash
 
+    /// The Others channel in the window's level meter, beside You in the
+    /// accent. Light mode does not draw it; it takes the tertiary text's light
+    /// value until the light audit (#120).
+    public static let levelOthers = Color(light: 0x8A8D92, dark: 0x616469)
+
     public static let success = Color(nsColor: .systemGreen)
     public static let warning = Color(nsColor: .systemOrange)
     public static let danger = Color(nsColor: .systemRed)

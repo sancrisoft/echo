@@ -110,6 +110,24 @@ public nonisolated enum EchoControl {
     /// to read.
     public static let placeholderGlyphSize: CGFloat = 34
 
+    /// The window's level meter: a row of bars per channel, the newest at the
+    /// right. A bar's width, the gap between two, how many a row holds, the
+    /// height of a bar at rest, and the pitch between the two rows — which is
+    /// also the tallest a bar gets, so You and Others never touch. The
+    /// artboard draws a sample whose loudest bars run past the meter's edge;
+    /// a measured level never does.
+    public static let meterBarWidth: CGFloat = 2
+    public static let meterBarGap: CGFloat = 1.4
+    public static let meterBarCount = 40
+    public static let meterBarRest: CGFloat = 3
+    public static let meterRowPitch: CGFloat = 16
+    /// Between the two channel names beside the meter.
+    public static let meterLabelGap: CGFloat = 3
+
+    /// The glyph before the live footer's note, and the gap after it.
+    public static let footerGlyphSize: CGFloat = 14
+    public static let footerGlyphGap: CGFloat = 6
+
     // MARK: On the island
 
     /// A capsule control. Primary and secondary differ only in weight and in
@@ -291,6 +309,12 @@ public nonisolated enum EchoLayout {
     public static let placeholderGap: CGFloat = 14
     public static let placeholderWidth: CGFloat = 380
     public static let placeholderBottomInset: CGFloat = 40
+    /// The footer under a live session's document — the meter, what is
+    /// happening, where it happens — its height, its side insets and the gap
+    /// between its parts.
+    public static let liveFooterHeight: CGFloat = 56
+    public static let liveFooterInset: CGFloat = 20
+    public static let liveFooterGap: CGFloat = 16
     /// A property row under the title.
     public static let propertyRowHeight: CGFloat = 30
     /// The label column of a property row: icon plus its word.
