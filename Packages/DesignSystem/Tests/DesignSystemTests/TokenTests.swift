@@ -222,6 +222,21 @@ struct MetricTests {
         #expect(EchoLayout.documentFadeHeight == 76)
     }
 
+    /// A summary under the tabs, as the workspace artboard sets its sections,
+    /// lists and inline code.
+    @Test("the summary's measures are the artboard's")
+    func summaryMatchesTheArtboard() {
+        #expect(EchoLayout.summaryTopGap == 24)
+        #expect(EchoLayout.summaryHeadingTop == 26)
+        #expect(EchoLayout.summaryHeadingBottom == 9)
+        #expect(EchoLayout.summaryBlockGap == 9)
+        #expect(EchoLayout.listMarkerGap == 11)
+        #expect(EchoControl.bulletSize == 4.5)
+        #expect(EchoControl.checkboxSize == 15)
+        #expect(EchoControl.inlineCodeInset == CGSize(width: 5, height: 1.5))
+        #expect(EchoRadius.inlineCode == 4)
+    }
+
     @Test("the radii are the artboard's, largest to smallest")
     func radiiMatchTheArtboard() {
         #expect(EchoRadius.window == 11)

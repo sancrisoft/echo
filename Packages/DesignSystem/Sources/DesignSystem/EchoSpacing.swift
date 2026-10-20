@@ -46,6 +46,8 @@ public nonisolated enum EchoRadius {
     public static let row: CGFloat = 6
     /// A status pill.
     public static let pill: CGFloat = 5
+    /// Code inside a summary's prose.
+    public static let inlineCode: CGFloat = 4
     /// A level gauge, half its height.
     public static let gauge: CGFloat = 2
 }
@@ -103,6 +105,13 @@ public nonisolated enum EchoControl {
     public static let propertyGap: CGFloat = 10
     /// Between a property's value and the quieter qualifier after it.
     public static let propertyQualifierGap: CGFloat = 7
+
+    /// A summary's list markers: the bullet's dot and a task's checkbox.
+    public static let bulletSize: CGFloat = 4.5
+    public static let checkboxSize: CGFloat = 15
+    /// The room code inside prose takes beyond its letters, on its fill: at
+    /// each side, and above and below.
+    public static let inlineCodeInset = CGSize(width: 5, height: 1.5)
 
     /// The dot inside the live status pill, and the gap between it and the
     /// word.
@@ -364,6 +373,14 @@ public nonisolated enum EchoLayout {
     public static let propertyLabelWidth: CGFloat = 104
     /// The fade to the background at the foot of a scrolling document.
     public static let documentFadeHeight: CGFloat = 76
+    /// A summary under the tabs: the air above its first block, above and
+    /// below a section heading, between two blocks or two list items, and
+    /// between a list item's marker and its words.
+    public static let summaryTopGap: CGFloat = 24
+    public static let summaryHeadingTop: CGFloat = 26
+    public static let summaryHeadingBottom: CGFloat = 9
+    public static let summaryBlockGap: CGFloat = 9
+    public static let listMarkerGap: CGFloat = 11
     /// A card's inset in the models panel, and the gap between two cards.
     public static let modelCardInset = CGSize(width: 16, height: 14)
     public static let modelPanelGap: CGFloat = 12

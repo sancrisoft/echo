@@ -95,6 +95,9 @@ public nonisolated enum EchoFont {
     /// 13.5 — the sentence under it.
     public static var placeholderMessage: Font { onest(13.5, weight: 400) }
 
+    /// Mono 12.5 — code inside a summary's prose, on its raised fill.
+    public static var inlineCode: Font { mono(12.5) }
+
     /// 10 — the channel names beside the window's level meter: You, Others.
     public static var meterLabel: Font { onest(10, weight: 400) }
 
