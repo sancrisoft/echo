@@ -42,6 +42,25 @@ struct SummaryReadinessTests {
         #expect(SummaryReadiness(state).isReady == (state == .ready))
     }
 
+    @Test(
+        "a download's percent is whole and rounded down, and there is none at rest",
+        arguments: [
+            (0.414, 41), (0.999, 99), (1.0, 100), (1.2, 100), (-0.1, 0),
+        ] as [(Double, Int)])
+    func downloadPercent(fraction: Double, percent: Int) {
+        #expect(SummaryReadiness.downloading(fraction).downloadPercent == percent)
+        #expect(RecordingReadiness.downloading(fraction).downloadPercent == percent)
+    }
+
+    @Test func atRestThereIsNoPercent() {
+        for readiness in [SummaryReadiness.waitingToDownload, .paused, .incomplete, .loading, .ready, .failed("x")] {
+            #expect(readiness.downloadPercent == nil)
+        }
+        for readiness in [RecordingReadiness.waitingToDownload, .ready, .downloadFailed("x")] {
+            #expect(readiness.downloadPercent == nil)
+        }
+    }
+
     @Test func itFollowsTheModelOnceTheLaunchPreparesTheModels() async throws {
         try await withSession { harness in
             #expect(harness.session.summaryReadiness == .waitingToDownload)

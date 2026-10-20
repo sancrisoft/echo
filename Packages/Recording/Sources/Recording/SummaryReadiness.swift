@@ -16,6 +16,7 @@
 //  state in the models artboard's terms.
 //
 
+import ModelDelivery
 import Summarization
 
 public enum SummaryReadiness: Equatable, Sendable {
@@ -49,6 +50,14 @@ public enum SummaryReadiness: Equatable, Sendable {
     case failed(String)
 
     public var isReady: Bool { self == .ready }
+
+    /// The download's whole percent while it runs, `nil` otherwise: from the
+    /// one clamp, rounded down so it never claims 100 before the files are
+    /// verified.
+    public var downloadPercent: Int? {
+        guard case .downloading(let fraction) = self else { return nil }
+        return DownloadProgress(fraction: fraction).percent
+    }
 
     /// The readiness the model's own state amounts to.
     init(_ state: SummaryModelState) {
