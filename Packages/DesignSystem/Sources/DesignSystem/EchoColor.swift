@@ -104,6 +104,13 @@ public nonisolated enum EchoColor {
     public static let accentWash = Color(
         light: 0x1673C0, dark: 0x3B9CF6, lightOpacity: 0.13, darkOpacity: 0.15)
 
+    /// The find match the user is on, among the others on the accent wash.
+    /// Not drawn: the artboard shows a single match. The product owner asked
+    /// for the current one on a stronger accent (2026-10-20), as Safari and
+    /// Xcode tell it from the rest; the text over it stays the primary ink.
+    public static let findCurrentMatch = Color(
+        light: 0x1673C0, dark: 0x3B9CF6, lightOpacity: 0.32, darkOpacity: 0.40)
+
     /// The recording red — the only saturated color while a session runs. It
     /// lifts in dark mode: the brand sheet's red is too heavy on near-black.
     public static let recording = Color(light: 0xD02B31, dark: 0xED4A49)

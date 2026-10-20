@@ -122,6 +122,10 @@ nonisolated let palette: [Token] = [
     .init(
         "accentWash", EchoColor.accentWash, light: 0x1673C0, dark: 0x3B9CF6,
         lightOpacity: 0.13, darkOpacity: 0.15),
+    // Not drawn: the current find match, chosen by the product owner.
+    .init(
+        "findCurrentMatch", EchoColor.findCurrentMatch, light: 0x1673C0, dark: 0x3B9CF6,
+        lightOpacity: 0.32, darkOpacity: 0.40),
     .init("recording", EchoColor.recording, light: 0xD02B31, dark: 0xED4A49),
     .init(
         "recordingWash", EchoColor.recordingWash, light: 0xD02B31, dark: 0xED4A49,
@@ -244,6 +248,13 @@ struct MetricTests {
         #expect(EchoLayout.turnGap == 21)
         #expect(EchoLayout.turnLabelGap == 9)
         #expect(EchoLayout.turnTextGap == 5)
+        #expect(EchoLayout.findFieldWidth == 208)
+        #expect(EchoControl.findFieldHeight == 28)
+        #expect(EchoControl.findFieldInset == 11)
+        #expect(EchoControl.findFieldGap == 8)
+        #expect(EchoControl.findGlyphSize == 13)
+        #expect(EchoControl.findMatchInset == CGSize(width: 3, height: 1))
+        #expect(EchoRadius.findMatch == 3)
     }
 
     @Test("the radii are the artboard's, largest to smallest")
