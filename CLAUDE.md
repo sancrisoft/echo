@@ -262,7 +262,7 @@ make test-packages-shared     # every package, one shared build (what a PR runs 
 make lint                     # swift-format --strict + scripts/check_boundaries.sh
 make format
 make app-icon                 # render the app icon set from the mark's geometry
-scripts/snapshot.sh [scene…]  # render library|summary|transcript|trash|settings to build/snapshots/
+scripts/snapshot.sh [scene…]  # render library|summary|transcript|trash|settings|search to build/snapshots/
 ECHO_DATA_ROOT=/tmp/x ECHO_OPEN_WINDOW=1 build/Build/Products/Debug/Echo.app/Contents/MacOS/Echo
 ```
 

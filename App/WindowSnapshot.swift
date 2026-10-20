@@ -57,6 +57,10 @@ import Workspace
                 // Nothing to put on screen: the island is already up, and
                 // which face it wears is not the window's to decide.
                 break
+            case .search:
+                workspace.section = .meetings
+                workspace.searchText = composition.environment.snapshotQuery ?? ""
+                workspace.presentSearch()
             }
         }
 

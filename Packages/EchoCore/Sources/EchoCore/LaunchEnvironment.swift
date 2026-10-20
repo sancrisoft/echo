@@ -31,6 +31,8 @@ public struct LaunchEnvironment: Sendable, Equatable {
         /// The island, which is a panel and not the window: it renders
         /// itself, because nothing outside it can.
         case island
+        /// The ⌘K palette over the library, with `snapshotQuery` typed in it.
+        case search
     }
 
     /// `ECHO_DATA_ROOT`: run the app against another data folder. The way to
@@ -50,9 +52,13 @@ public struct LaunchEnvironment: Sendable, Equatable {
     /// hook; pixels cannot be captured from outside a window on this macOS.
     public let snapshotPath: URL?
 
-    /// `ECHO_SNAPSHOT_SCENE=library|summary|transcript|trash|settings|island`:
+    /// `ECHO_SNAPSHOT_SCENE=library|summary|transcript|trash|settings|island|search`:
     /// which surface the snapshot shows. Defaults to the library.
     public let snapshotScene: SnapshotScene
+
+    /// `ECHO_SNAPSHOT_QUERY`: what the `search` scene types into the palette.
+    /// Nothing typed shows the palette as it opens.
+    public let snapshotQuery: String?
 
     /// `ECHO_KEEP_RETAINED_AUDIO=1`: a successful transcription pass keeps the
     /// meeting's audio under debug names instead of deleting it, so a real
@@ -75,6 +81,7 @@ public struct LaunchEnvironment: Sendable, Equatable {
             appearanceOverride = environment["ECHO_APPEARANCE"].flatMap(Appearance.init(rawValue:))
             snapshotPath = environment["ECHO_SNAPSHOT_PATH"].map { URL(filePath: $0, directoryHint: .notDirectory) }
             snapshotScene = environment["ECHO_SNAPSHOT_SCENE"].flatMap(SnapshotScene.init(rawValue:)) ?? .library
+            snapshotQuery = environment["ECHO_SNAPSHOT_QUERY"]
             keepsRetainedAudio = environment["ECHO_KEEP_RETAINED_AUDIO"] == "1"
             installedVersionOverride = environment["ECHO_INSTALLED_VERSION"]
         #else
@@ -83,6 +90,7 @@ public struct LaunchEnvironment: Sendable, Equatable {
             appearanceOverride = nil
             snapshotPath = nil
             snapshotScene = .library
+            snapshotQuery = nil
             keepsRetainedAudio = false
             installedVersionOverride = nil
         #endif
