@@ -54,6 +54,9 @@ public nonisolated enum EchoRadius {
     public static let listRow: CGFloat = 8
     /// A key drawn in a footer's hints: ↑↓, ↵, ⌫.
     public static let keycap: CGFloat = 4
+    /// The ⌘K palette, and the row the keyboard is on inside it.
+    public static let palette: CGFloat = 12
+    public static let paletteRow: CGFloat = 7
     /// The transcript's speaker split, half its height.
     public static let speakerSplit: CGFloat = 2
     /// A level gauge, half its height.
@@ -156,6 +159,9 @@ public nonisolated enum EchoControl {
     /// a key drawn in a footer's hints.
     public static let listCountInset = CGSize(width: 8, height: 2)
     public static let keycapInset = CGSize(width: 5, height: 1)
+    /// The room inside a key drawn on its own rather than in a row of hints:
+    /// the palette's `esc`, `⌘R` and `↵`.
+    public static let keycapInsetStandalone = CGSize(width: 6, height: 2)
     /// The glyph at the head of a Trash row, and the gap between a row's two
     /// buttons.
     public static let listRowGlyphSize: CGFloat = 16
@@ -163,6 +169,15 @@ public nonisolated enum EchoControl {
 
     /// The glyph above an empty or broken screen.
     public static let emptyGlyphSize: CGFloat = 30
+
+    /// The ⌘K palette's glyphs: the magnifier in the query's row, and the
+    /// one at the head of each result and action; the stroke they are drawn
+    /// with, on their 16-point grid; and the room around the words a match
+    /// fills.
+    public static let paletteSearchGlyphSize: CGFloat = 17
+    public static let paletteRowGlyphSize: CGFloat = 15
+    public static let paletteGlyphStroke: CGFloat = 1.4
+    public static let paletteMatchInset = CGSize(width: 2, height: 0)
 
     /// The window's level meter: a row of bars per channel, the newest at the
     /// right. A bar's width, the gap between two, how many a row holds, the
@@ -427,6 +442,29 @@ public nonisolated enum EchoLayout {
     public static let listFooterHeight: CGFloat = 44
     public static let listFooterGap: CGFloat = 16
     public static let keyHintGap: CGFloat = 6
+    /// The ⌘K palette (`Search.dc.html`): its width, and how far below the
+    /// title bar it floats — the artboard's 122 from the window's top, less
+    /// its 44-point title bar; the query's row, its inset and gap; the room
+    /// around the lists; a group's label; a result's and an action's height,
+    /// their inset and gap; the rule between the groups; the strip of hints
+    /// and its gap; and the shadow — the artboard's 80-point blur, which
+    /// SwiftUI takes as a radius of half that.
+    public static let paletteWidth: CGFloat = 620
+    public static let paletteTopInset: CGFloat = 78
+    public static let paletteFieldHeight: CGFloat = 52
+    public static let paletteFieldInset: CGFloat = 16
+    public static let paletteFieldGap: CGFloat = 11
+    public static let paletteListInset: CGFloat = 8
+    public static let paletteGroupLabelHeight: CGFloat = 26
+    public static let paletteResultHeight: CGFloat = 44
+    public static let paletteActionHeight: CGFloat = 38
+    public static let paletteRowInset: CGFloat = 10
+    public static let paletteRowGap: CGFloat = 11
+    public static let paletteRuleInset = CGSize(width: 10, height: 8)
+    public static let paletteFooterHeight: CGFloat = 38
+    public static let paletteFooterGap: CGFloat = 16
+    public static let paletteShadowRadius: CGFloat = 40
+    public static let paletteShadowOffset: CGFloat = 32
     /// The footer under a live session's document — the meter, what is
     /// happening, where it happens — its height, its side insets and the gap
     /// between its parts.

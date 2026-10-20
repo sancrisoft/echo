@@ -279,6 +279,67 @@ public struct StatusBadge: View {
     }
 }
 
+// MARK: - Keys
+
+/// A key as the artboards draw one: its name in mono on a hairline outline.
+/// In a row of hints it sits tight; on its own — the palette's `esc`, a
+/// shortcut beside an action — it gets a little more room, and on the row
+/// the keyboard is on it is drawn a step stronger.
+public struct Keycap: View {
+
+    public enum Size: Sendable {
+        case hint
+        case standalone
+    }
+
+    private let key: String
+    private let size: Size
+    private let isEmphasized: Bool
+
+    public init(_ key: String, size: Size = .standalone, isEmphasized: Bool = false) {
+        self.key = key
+        self.size = size
+        self.isEmphasized = isEmphasized
+    }
+
+    public var body: some View {
+        let inset = size == .hint ? EchoControl.keycapInset : EchoControl.keycapInsetStandalone
+        Text(key)
+            .font(EchoFont.mono(10.5))
+            .foregroundStyle(isEmphasized ? EchoColor.textTertiary : EchoColor.textQuaternary)
+            .padding(.horizontal, inset.width)
+            .padding(.vertical, inset.height)
+            .overlay {
+                RoundedRectangle(cornerRadius: EchoRadius.keycap)
+                    .strokeBorder(
+                        isEmphasized ? EchoColor.paletteBorder : EchoColor.inertBorder, lineWidth: EchoLayout.hairline)
+            }
+            .fixedSize()
+    }
+}
+
+/// A key and what it does, as a footer of hints draws them: Trash's, and the
+/// palette's.
+public struct KeyHint: View {
+    private let key: String
+    private let label: String
+
+    public init(key: String, label: String) {
+        self.key = key
+        self.label = label
+    }
+
+    public var body: some View {
+        HStack(spacing: EchoLayout.keyHintGap) {
+            Keycap(key, size: .hint)
+            Text(label)
+                .font(EchoFont.micro)
+                .foregroundStyle(EchoColor.textQuaternary)
+        }
+        .fixedSize()
+    }
+}
+
 // MARK: - Property row
 
 /// One fact under a document's title: an icon and its word in a fixed column,

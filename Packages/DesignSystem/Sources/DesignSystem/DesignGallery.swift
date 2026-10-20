@@ -134,6 +134,15 @@ import SwiftUI
                     StatusBadge("Processing", tone: .accent)
                 }
 
+                Text("Keys").font(EchoFont.sectionTitle)
+                HStack(spacing: EchoSpacing.l) {
+                    Keycap("esc")
+                    Keycap("⌘R")
+                    Keycap("↵", isEmphasized: true)
+                    KeyHint(key: "↑↓", label: "Move")
+                    KeyHint(key: "↵", label: "Open")
+                }
+
                 Text("Property rows").font(EchoFont.sectionTitle)
                 VStack(alignment: .leading, spacing: 0) {
                     PropertyRow(symbol: "calendar", label: "Date") {

@@ -208,6 +208,25 @@ public nonisolated enum EchoColor {
     /// this is the platform's own whisper until it does.
     public static let hover = Color.primary.opacity(0.05)
 
+    // MARK: The ⌘K palette
+
+    /// The palette floats over a dimmed window (`Search.dc.html`): its own
+    /// surface and edge, the hairlines inside it, the fill under the result
+    /// the keyboard is on, the strip of key hints at its foot, the label over
+    /// each group, the dim over the window behind it, and its shadow. Light
+    /// mode does not draw the palette; each takes the light value of the
+    /// nearest role the light artboard draws — the document's white, the
+    /// window border, the hairline, the selected row, the sidebar — until the
+    /// light audit (#120).
+    public static let paletteBackground = Color(light: 0xFFFFFF, dark: 0x17181C)
+    public static let paletteBorder = Color(light: 0xE1E3E6, dark: 0x34373C)
+    public static let paletteDivider = Color(light: 0xECEDF0, dark: 0x232529)
+    public static let paletteHighlight = Color(light: 0xE8EAED, dark: 0x23252A)
+    public static let paletteFooter = Color(light: 0xF7F8FA, dark: 0x131418)
+    public static let paletteGroupLabel = Color(light: 0x8A8D92, dark: 0x626569)
+    public static let paletteScrim = Color(light: 0x17191E, dark: 0x060709, lightOpacity: 0.18, darkOpacity: 0.58)
+    public static let paletteShadow = Color(light: 0x17191E, dark: 0x000000, lightOpacity: 0.18, darkOpacity: 0.72)
+
     /// The island's own palette.
     ///
     /// The island is black on every appearance — the design has it poured from
