@@ -18,15 +18,24 @@ final class WindowOpener {
 
     private var open: ((String) -> Void)?
 
+    /// A request that came before the bridge registered — the launch's own,
+    /// when the welcome screen decides to show once the models have answered —
+    /// carried out the moment it does.
+    private var openWhenRegistered = false
+
     /// Called by the bridge view once SwiftUI hands it `openWindow`.
     func register(_ open: @escaping (String) -> Void) {
         self.open = open
+        if openWhenRegistered {
+            openWhenRegistered = false
+            openMainWindow()
+        }
     }
 
     /// Opens (or fronts) the main window.
     func openMainWindow() {
         guard let open else {
-            ErrorTrace.record("Main window requested before the opener was registered", category: "WindowOpener")
+            openWhenRegistered = true
             return
         }
         // Promote to a Dock/Cmd-Tab app before fronting: the activation

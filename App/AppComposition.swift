@@ -241,9 +241,30 @@ final class AppComposition {
         // menu bar icon and an island hiding in the cutout: nothing that says
         // where the app went. Marked as taken here, before the scene reads the
         // answer, so every launch after this one is silent again.
-        if !settings.hasLaunchedBefore {
+        let firstLaunch = !settings.hasLaunchedBefore
+        if firstLaunch {
             settings.noteLaunched()
             opensWindowAtLaunch = true
+        }
+
+        // The welcome screen: on the first launch, in the window that launch
+        // opens anyway; and on a later one while the user has not left it and
+        // the models are not both on disk, which only the models can say, so
+        // that window is opened once they have answered (product owner,
+        // 2026-10-19).
+        if firstLaunch && !settings.hasLeftWelcome {
+            // Whatever the models say: the first launch shows it.
+            workspace.presentWelcome()
+        } else if !settings.hasLeftWelcome {
+            Task { [session, settings, workspace, windowOpener] in
+                let onDisk = await session.modelsOnDisk()
+                guard
+                    WelcomeGate.showsAtLaunch(
+                        firstLaunch: false, hasLeftWelcome: settings.hasLeftWelcome, modelsOnDisk: onDisk)
+                else { return }
+                workspace.presentWelcome()
+                windowOpener.openMainWindow()
+            }
         }
 
         // The design's typefaces, registered with the process before anything
