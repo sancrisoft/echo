@@ -1483,6 +1483,16 @@ public final class RecordingSession {
         await fetchSummaryModel()
     }
 
+    /// Whether both models' files are on disk right now, asked of the models
+    /// themselves rather than read off `readiness`, which lags the launch:
+    /// the composition root's question for the welcome screen, which comes
+    /// back at launch while they are not (product owner, 2026-10-19).
+    public func modelsOnDisk() async -> Bool {
+        let transcription = await transcriptionModel.readyModelDirectory() != nil
+        let summary = await summaryModel.snapshotExists()
+        return transcription && summary
+    }
+
     /// The summary model's download, honouring a pause. Shared by the launch
     /// fetch and the user's Resume, Resume download and Retry.
     private func fetchSummaryModel() async {

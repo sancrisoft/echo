@@ -138,6 +138,25 @@ struct SummaryReadinessTests {
         }
     }
 
+    @Test func bothModelsOnDiskIsAskedOfTheModels() async throws {
+        try await withSession { harness in
+            // Nothing followed yet, and still the answer: the disk, not the
+            // readings.
+            #expect(harness.session.summaryReadiness == .waitingToDownload)
+            #expect(await harness.session.modelsOnDisk())
+        }
+        try await withSession(summaryModelOnDisk: false) { harness in
+            #expect(await !harness.session.modelsOnDisk())
+        }
+        let missing = ParakeetModel(
+            modelsRoot: FileManager.default.temporaryDirectory.appending(path: "never-written-\(UUID().uuidString)"),
+            modelsPresent: { false },
+            downloader: { _ in throw Unreachable() })
+        try await withSession(transcriptionModel: missing) { harness in
+            #expect(await !harness.session.modelsOnDisk())
+        }
+    }
+
     @Test func theModelsAreNamedByTheirOwners() {
         #expect(OnDeviceModel.transcription.name == ParakeetModel.modelDisplayName)
         #expect(OnDeviceModel.transcription.size == ParakeetModel.modelDisplaySize)
