@@ -34,10 +34,19 @@ public struct EchoButtonStyle: ButtonStyle {
         case controlProminent
         /// The welcome screen's Start using Echo: the primary, larger.
         case prominent
-        /// A row's action that removes something for good — Trash's Delete…
-        /// and Empty Trash…: the control button in the destructive red, on
-        /// the failure's edge.
+        /// A row's action that removes something for good — Trash's Delete
+        /// and Empty Trash: the control button outlined in the failure's edge,
+        /// its words in the destructive red, and no fill (product owner,
+        /// 2026-10-20).
         case controlDestructive
+        /// A row's action on a selected row, whose raised fill would vanish
+        /// into the row's own: the control button on the window's background
+        /// instead.
+        case controlOnSelection
+        /// A quiet button that removes something for good — a trashed
+        /// meeting's Delete in the breadcrumb bar: the quiet button in the
+        /// destructive red.
+        case quietDestructive
     }
 
     private let role: Role
@@ -72,7 +81,9 @@ public struct EchoButtonStyle: ButtonStyle {
         private var isHeldBack: Bool {
             switch role {
             case .primary, .prominent, .controlProminent, .control: return !isEnabled
-            case .secondary, .quiet, .quietIcon, .destructive, .controlDestructive: return false
+            case .secondary, .quiet, .quietIcon, .quietDestructive, .destructive, .controlDestructive,
+                .controlOnSelection:
+                return false
             }
         }
 
@@ -101,14 +112,17 @@ public struct EchoButtonStyle: ButtonStyle {
             switch role {
             case .primary, .controlProminent: return EchoFont.primaryButton
             case .prominent: return EchoFont.prominentButton
-            case .secondary, .quiet, .quietIcon, .destructive, .control, .controlDestructive: return EchoFont.control
+            case .secondary, .quiet, .quietIcon, .quietDestructive, .destructive, .control, .controlDestructive,
+                .controlOnSelection:
+                return EchoFont.control
             }
         }
 
         private var height: CGFloat {
             switch role {
-            case .quiet, .quietIcon: return EchoLayout.toolbarButtonHeight
-            case .control, .controlProminent, .controlDestructive: return EchoControl.controlButtonHeight
+            case .quiet, .quietIcon, .quietDestructive: return EchoLayout.toolbarButtonHeight
+            case .control, .controlProminent, .controlDestructive, .controlOnSelection:
+                return EchoControl.controlButtonHeight
             case .prominent: return EchoControl.prominentButtonHeight
             case .primary, .secondary, .destructive: return EchoControl.primaryButtonHeight
             }
@@ -116,9 +130,10 @@ public struct EchoButtonStyle: ButtonStyle {
 
         private var inset: CGFloat {
             switch role {
-            case .quiet: return EchoControl.toolbarButtonInset
+            case .quiet, .quietDestructive: return EchoControl.toolbarButtonInset
             case .quietIcon: return 0
-            case .control, .controlProminent, .controlDestructive: return EchoControl.controlButtonInset
+            case .control, .controlProminent, .controlDestructive, .controlOnSelection:
+                return EchoControl.controlButtonInset
             case .prominent: return EchoControl.prominentButtonInset
             case .primary, .secondary, .destructive: return EchoControl.primaryButtonInset
             }
@@ -126,7 +141,9 @@ public struct EchoButtonStyle: ButtonStyle {
 
         private var radius: CGFloat {
             switch role {
-            case .quiet, .quietIcon, .control, .controlProminent, .controlDestructive: return EchoRadius.row
+            case .quiet, .quietIcon, .quietDestructive, .control, .controlProminent, .controlDestructive,
+                .controlOnSelection:
+                return EchoRadius.row
             case .primary, .secondary, .destructive, .prominent: return EchoRadius.control
             }
         }
@@ -135,9 +152,10 @@ public struct EchoButtonStyle: ButtonStyle {
             if isHeldBack { return EchoColor.inertBorder }
             switch role {
             case .secondary: return EchoColor.border
-            case .control: return EchoColor.inertBorder
+            case .control, .controlOnSelection: return EchoColor.inertBorder
             case .controlDestructive: return EchoColor.failureEdge
-            case .primary, .quiet, .quietIcon, .destructive, .controlProminent, .prominent: return nil
+            case .primary, .quiet, .quietIcon, .quietDestructive, .destructive, .controlProminent, .prominent:
+                return nil
             }
         }
 
@@ -151,8 +169,8 @@ public struct EchoButtonStyle: ButtonStyle {
             case .secondary: return EchoColor.textPrimary
             case .quiet, .quietIcon: return EchoColor.textSecondary
             case .destructive: return EchoColor.danger
-            case .control: return EchoColor.textValue
-            case .controlDestructive: return EchoColor.destructiveText
+            case .control, .controlOnSelection: return EchoColor.textValue
+            case .controlDestructive, .quietDestructive: return EchoColor.destructiveText
             }
         }
 
@@ -162,8 +180,9 @@ public struct EchoButtonStyle: ButtonStyle {
             // Not the accent. The accent marks selection and links; a button
             // that wore it would be the loudest thing on a grey screen.
             case .primary, .controlProminent, .prominent: return EchoColor.textPrimary.opacity(pressed ? 0.85 : 1)
-            case .secondary, .control, .controlDestructive: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
-            case .quiet, .quietIcon: return pressed ? EchoColor.hover : .clear
+            case .secondary, .control: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
+            case .controlOnSelection: return EchoColor.windowBackground.opacity(pressed ? 0.7 : 1)
+            case .quiet, .quietIcon, .quietDestructive, .controlDestructive: return pressed ? EchoColor.hover : .clear
             case .destructive: return EchoColor.danger.opacity(pressed ? 0.16 : 0.1)
             }
         }
@@ -179,6 +198,8 @@ extension ButtonStyle where Self == EchoButtonStyle {
     public static var echoControl: EchoButtonStyle { EchoButtonStyle(.control) }
     public static var echoControlProminent: EchoButtonStyle { EchoButtonStyle(.controlProminent) }
     public static var echoControlDestructive: EchoButtonStyle { EchoButtonStyle(.controlDestructive) }
+    public static var echoControlOnSelection: EchoButtonStyle { EchoButtonStyle(.controlOnSelection) }
+    public static var echoQuietDestructive: EchoButtonStyle { EchoButtonStyle(.quietDestructive) }
     public static var echoProminent: EchoButtonStyle { EchoButtonStyle(.prominent) }
 }
 

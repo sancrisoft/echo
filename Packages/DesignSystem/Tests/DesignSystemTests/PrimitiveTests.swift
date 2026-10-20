@@ -218,8 +218,14 @@ struct PrimitiveTests {
             size(of: Button("Allow") {}.buttonStyle(.echoControlProminent)).height
                 == EchoControl.controlButtonHeight)
         #expect(
-            size(of: Button("Delete…") {}.buttonStyle(.echoControlDestructive)).height
+            size(of: Button("Delete") {}.buttonStyle(.echoControlDestructive)).height
                 == EchoControl.controlButtonHeight)
+        #expect(
+            size(of: Button("Restore") {}.buttonStyle(.echoControlOnSelection)).height
+                == EchoControl.controlButtonHeight)
+        #expect(
+            size(of: Button("Delete") {}.buttonStyle(.echoQuietDestructive)).height
+                == EchoLayout.toolbarButtonHeight)
         #expect(
             size(of: Button("Start using Echo") {}.buttonStyle(.echoProminent)).height
                 == EchoControl.prominentButtonHeight)
@@ -247,6 +253,30 @@ struct PrimitiveTests {
             let data = try #require(image(of: drawn).dataProvider?.data as Data?)
             #expect(!seen.contains(data), "\(glyph) draws the same as another glyph")
             seen.append(data)
+        }
+    }
+
+    @Test("on a selected row a control button keeps its shape and stands out from the row's fill")
+    func controlOnSelection() throws {
+        let plain = try image(of: Button("Restore") {}.buttonStyle(.echoControl).background(EchoColor.surfaceRaised))
+        let lifted = try image(
+            of: Button("Restore") {}.buttonStyle(.echoControlOnSelection).background(EchoColor.surfaceRaised))
+        #expect(plain.width == lifted.width && plain.height == lifted.height)
+        #expect(plain.dataProvider?.data != lifted.dataProvider?.data)
+    }
+
+    @Test("a selected Trash row's buttons, for the eye, in both appearances")
+    func selectedRowButtonsForTheEye() throws {
+        EchoFont.registerBundledTypefaces()
+        for (appearance, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
+            let row = HStack(spacing: EchoControl.listRowActionGap) {
+                Button("Restore") {}.buttonStyle(.echoControlOnSelection)
+                Button("Delete") {}.buttonStyle(.echoControlDestructive)
+            }
+            .padding(EchoSpacing.l)
+            .background(EchoColor.surfaceRaised)
+            .environment(\.colorScheme, scheme)
+            Attachment.record(try image(of: row), named: "selected-row-buttons-\(appearance).png")
         }
     }
 
