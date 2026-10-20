@@ -567,6 +567,11 @@ Adopted in ADR-004.
 - `make build` — `xcodebuild` the `Echo` scheme (Debug, arm64, ad-hoc).
 - `make test` — `swift test` for every package, then the hosted `AppTests`.
 - `make test-package P=Meetings` — one package.
+- `make test-packages-shared` — `swift test` for every package through one
+  scratch path (`build/spm`), so a dependency several packages share compiles
+  once, and without debug info. It needs the packages' pins to agree. Faster,
+  but a shared build can lend a module to a package that never declared it, so
+  it does not replace the isolated runs.
 - `make lint` — `swift format lint --strict --recursive` (the toolchain's
   formatter, configured in `.swift-format`) plus `scripts/check_boundaries.sh`.
 - `make format` — `swift format --in-place --recursive`.
@@ -580,9 +585,15 @@ Adopted in ADR-004.
   `ECHO_SNAPSHOT_SCENE`), the design-review tool; pixels cannot be captured from
   outside a window on this macOS.
 - CI (`.github/workflows/ci.yml`): lint, package tests, app build and hosted
-  tests, on pull requests and pushes to `main` and `v2`, once on Xcode 26.6
-  (`macos-26`, the "Build and test" check) and once on Xcode 27.0 (the `xcode-27`
-  runner): code that compiles on one need not compile on the other. Release
+  tests, on Xcode 26.6 (`macos-26`, the "Build and test" check) and on Xcode
+  27.0 (the `xcode-27` runner): code that compiles on one need not compile on
+  the other. A Linux Scope job decides what a run builds. A pull request builds
+  on 26.6 only, since development happens on 27, and only when no open pull
+  request is stacked on its branch: the top of a stack covers every layer
+  below it. It builds the packages once, shared (`make test-packages-shared`).
+  Pushes to `main` and `v2`, and a manual run, build on both toolchains with
+  each package on its own (`make test-packages`), which is what proves each
+  package's declared dependencies. Release
   and installer workflows are unchanged: the app target is still named `Echo`,
   and releases build on 26.6.
 
