@@ -4,8 +4,9 @@
 //
 //  Find in the open transcript: where a query occurs in the turns, which of
 //  those places the user is on, and how that is written in the field. Local
-//  to the document that is open — the sidebar's search is a different
-//  feature, over titles across the library, and nothing here reaches it.
+//  to the document that is open — the palette's search across the library is
+//  a different feature, which only hands find its words when it opens a
+//  result here.
 //
 //  As values, so the rules — what counts as a match, how ⌘G wraps — are
 //  tested without a window.

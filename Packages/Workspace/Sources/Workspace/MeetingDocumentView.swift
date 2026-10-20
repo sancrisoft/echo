@@ -47,6 +47,9 @@ struct MeetingDocumentView: View {
     @State private var turns: [TranscriptUtterance] = []
     @State private var findQuery = ""
     @State private var currentMatch: Int?
+    /// The match a search result asked find to land on, held until the
+    /// query it belongs to is in the field.
+    @State private var landing: Int?
     @FocusState private var findFocused: Bool
     /// The audio the meeting still holds, read with the record: whether its
     /// recording was kept, and whether a failed pass can run again.
@@ -91,7 +94,8 @@ struct MeetingDocumentView: View {
                     // on from there. Either way the turn holding the match comes
                     // into view.
                     .onChange(of: findQuery) { _, _ in
-                        currentMatch = matches.isEmpty ? nil : 0
+                        currentMatch = landing ?? (matches.isEmpty ? nil : 0)
+                        landing = nil
                         reveal(currentMatch, in: matches, proxy)
                     }
                     .onChange(of: currentMatch) { _, index in reveal(index, in: matches, proxy) }
@@ -113,6 +117,11 @@ struct MeetingDocumentView: View {
             Text("Its transcript, notes and any saved recording are removed from this Mac. This cannot be undone.")
         }
         .onChange(of: workspace.documentTab) { _, _ in copied = false }
+        // A search result for this meeting, opened while it was already the
+        // one on screen: nothing reloads, so the request is taken here.
+        .onChange(of: workspace.findRequest) { _, request in
+            if request != nil, record != nil { applyFindRequest() }
+        }
         .task(
             id: ReloadKey(
                 id: meta.id, hasSummary: meta.hasSummary, segmentCount: meta.segmentCount, title: meta.title,
@@ -129,6 +138,7 @@ struct MeetingDocumentView: View {
             loadFailed = loaded == nil
             keepsRecording = keeps
             canRetry = retry
+            applyFindRequest()
         }
     }
 
@@ -320,10 +330,11 @@ struct MeetingDocumentView: View {
 
     // MARK: Find
 
-    /// Find in transcript: local to this document, and nothing to do with
-    /// the sidebar's search across the library. The placeholder is drawn in
-    /// the design's own ink rather than the field's; the field carries the
-    /// name for VoiceOver.
+    /// Find in transcript: local to this document, and a different thing
+    /// from the palette's search across the library — though a result the
+    /// palette opens here opens find on its words. The placeholder is drawn
+    /// in the design's own ink rather than the field's; the field carries
+    /// the name for VoiceOver.
     private func findField(_ matches: [TranscriptMatch]) -> some View {
         HStack(spacing: EchoControl.findFieldGap) {
             Image(systemName: "magnifyingglass")
@@ -367,7 +378,8 @@ struct MeetingDocumentView: View {
     }
 
     /// ⌘F opens find from either tab, ⌘G and ⇧⌘G step through the matches.
-    /// Disabled when there is nothing to do, so the keys fall through.
+    /// Disabled when there is nothing to do — or while the palette is up,
+    /// since the document is behind it — so the keys fall through.
     private func findShortcuts(_ matches: [TranscriptMatch]) -> some View {
         ZStack {
             Button("") {
@@ -376,17 +388,31 @@ struct MeetingDocumentView: View {
                 Task { findFocused = true }
             }
             .keyboardShortcut("f", modifiers: .command)
-            .disabled(turns.isEmpty)
+            .disabled(turns.isEmpty || workspace.isSearchPresented)
             Button("") { step(by: 1, count: matches.count) }
                 .keyboardShortcut("g", modifiers: .command)
-                .disabled(matches.isEmpty)
+                .disabled(matches.isEmpty || workspace.isSearchPresented)
             Button("") { step(by: -1, count: matches.count) }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-                .disabled(matches.isEmpty)
+                .disabled(matches.isEmpty || workspace.isSearchPresented)
         }
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
+    }
+
+    /// A search result brought the user here: find opens on its words, on
+    /// the turn the result showed, or on the first match when it showed none.
+    private func applyFindRequest() {
+        guard let request = workspace.takeFindRequest(for: meta.id), !turns.isEmpty else { return }
+        let found = TranscriptFind.matches(of: request.text, in: turns)
+        let target = found.firstIndex { $0.turn == request.turn } ?? (found.isEmpty ? nil : 0)
+        if findQuery == request.text {
+            currentMatch = target
+        } else {
+            landing = target
+            findQuery = request.text
+        }
     }
 
     private func step(by offset: Int, count: Int) {

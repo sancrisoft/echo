@@ -2,7 +2,7 @@
 //  MeetingGrouping.swift
 //  Workspace
 //
-//  How the sidebar orders, filters and groups the library. Pure functions over
+//  How the sidebar orders and groups the library. Pure functions over
 //  `MeetingMeta`, kept out of the views so they are testable and so the two
 //  lists that show meetings (library, trash) cannot drift.
 //
@@ -37,27 +37,16 @@ public enum MeetingSortOrder: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-public enum MeetingFilter {
+public enum MeetingSort {
 
-    /// Filters by title, caption and formatted date (case-insensitive), then
-    /// sorts. Transcript and summary text are not searched here; that is a
-    /// content index's job.
-    public static func apply(to metas: [MeetingMeta], search: String, sort: MeetingSortOrder) -> [MeetingMeta] {
-        let needle = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered =
-            needle.isEmpty
-            ? metas
-            : metas.filter { meta in
-                meta.title.localizedCaseInsensitiveContains(needle)
-                    || (meta.oneLineDescription?.localizedCaseInsensitiveContains(needle) ?? false)
-                    || meta.startedAt.formatted(date: .abbreviated, time: .omitted)
-                        .localizedCaseInsensitiveContains(needle)
-            }
+    /// The meetings in `sort`'s order. Search does not filter this list: it
+    /// is the palette's, over every meeting's words (`MeetingLibrary.search`).
+    public static func apply(to metas: [MeetingMeta], sort: MeetingSortOrder) -> [MeetingMeta] {
         switch sort {
-        case .recent: return filtered.sorted { $0.startedAt > $1.startedAt }
-        case .oldest: return filtered.sorted { $0.startedAt < $1.startedAt }
-        case .name: return filtered.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-        case .longest: return filtered.sorted { $0.duration > $1.duration }
+        case .recent: return metas.sorted { $0.startedAt > $1.startedAt }
+        case .oldest: return metas.sorted { $0.startedAt < $1.startedAt }
+        case .name: return metas.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .longest: return metas.sorted { $0.duration > $1.duration }
         }
     }
 }
