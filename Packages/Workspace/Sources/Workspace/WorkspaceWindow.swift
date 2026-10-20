@@ -57,9 +57,18 @@ public struct WorkspaceWindow: View {
                     .background(EchoColor.sidebarBackground)
                 EchoColor.divider
                     .frame(width: EchoLayout.hairline)
-                detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(EchoColor.windowBackground)
+                VStack(spacing: 0) {
+                    // Above the meetings, never above Trash or Settings,
+                    // which take the document's place and are not about the
+                    // meetings at all.
+                    if workspace.section == .meetings || workspace.section == .recording {
+                        ModelsPanel()
+                    }
+                    detail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(EchoColor.windowBackground)
             }
         }
         .frame(minWidth: EchoLayout.minimumWindow.width, minHeight: EchoLayout.minimumWindow.height)
