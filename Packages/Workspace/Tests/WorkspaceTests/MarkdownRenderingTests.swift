@@ -4,6 +4,10 @@ import Testing
 
 @testable import Workspace
 
+/// Equal within a rounding error: a sum folded at compile time on one side
+/// and added at run time on the other can differ in its last bit.
+private func same(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < 1e-9 }
+
 @Suite("The summary on the type scale")
 struct MarkdownRenderingTests {
 
@@ -14,21 +18,21 @@ struct MarkdownRenderingTests {
     @Test("a heading sits a section away from what precedes it and a short step above what follows")
     func headingGaps() {
         let half = MarkdownRendering.halfLeading
-        #expect(MarkdownRendering.gap(above: heading, after: list) == EchoLayout.summaryHeadingTop + half)
-        #expect(MarkdownRendering.gap(above: heading, after: heading) == EchoLayout.summaryHeadingTop)
-        #expect(MarkdownRendering.gap(above: list, after: heading) == EchoLayout.summaryHeadingBottom + half)
+        #expect(same(MarkdownRendering.gap(above: heading, after: list), EchoLayout.summaryHeadingTop + half))
+        #expect(same(MarkdownRendering.gap(above: heading, after: heading), EchoLayout.summaryHeadingTop))
+        #expect(same(MarkdownRendering.gap(above: list, after: heading), EchoLayout.summaryHeadingBottom + half))
     }
 
     @Test("two blocks of prose are a short step apart, with both lines' leading")
     func bodyGaps() {
-        #expect(MarkdownRendering.gap(above: paragraph, after: list) == MarkdownRendering.itemGap)
-        #expect(MarkdownRendering.itemGap == EchoLayout.summaryBlockGap + EchoFont.bodyLineSpacing)
+        #expect(same(MarkdownRendering.gap(above: paragraph, after: list), MarkdownRendering.itemGap))
+        #expect(same(MarkdownRendering.itemGap, EchoLayout.summaryBlockGap + EchoFont.bodyLineSpacing))
     }
 
     @Test("the first block takes no section gap: the summary's own top gap is above it")
     func firstBlock() {
-        #expect(MarkdownRendering.gap(above: heading, after: nil) == 0)
-        #expect(MarkdownRendering.gap(above: paragraph, after: nil) == MarkdownRendering.halfLeading)
+        #expect(same(MarkdownRendering.gap(above: heading, after: nil), 0))
+        #expect(same(MarkdownRendering.gap(above: paragraph, after: nil), MarkdownRendering.halfLeading))
     }
 
     @Test("every heading a summary can hold is a section title or, deeper, a strong label")
