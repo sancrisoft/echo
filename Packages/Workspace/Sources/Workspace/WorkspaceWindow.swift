@@ -31,6 +31,7 @@ public struct WorkspaceWindow: View {
     @Environment(MeetingLibrary.self) private var library
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(RecordingSession.self) private var session
+    @Environment(AppSettings.self) private var settings
 
     private let dataRoot: DataRoot
     private let startRecording: () async -> Void
@@ -75,13 +76,29 @@ public struct WorkspaceWindow: View {
             }
         }
         // A selection the library no longer holds (trashed, deleted, purged)
-        // is dropped so the document never shows a meeting that is gone.
+        // is dropped so the document never shows a meeting that is gone, and
+        // the library opens on another rather than on nothing.
         .onChange(of: library.metas.map(\.id)) { _, _ in
             workspace.reconcileSelection(with: library.metas)
+            settleSelection()
+        }
+        // The window opens on the meeting last open, and remembers each one
+        // it opens for the next launch.
+        .onAppear { settleSelection() }
+        .onChange(of: workspace.selectedMeetingID) { _, id in
+            if let id {
+                settings.noteOpenMeeting(id)
+            } else {
+                settleSelection()
+            }
         }
         .onChange(of: library.trashedMetas.map(\.id)) { _, _ in
             workspace.reconcileTrashSelection(with: library.trashedMetas)
         }
+    }
+
+    private func settleSelection() {
+        workspace.settleSelection(in: library.metas, lastOpen: settings.lastOpenMeeting)
     }
 
     /// New recording, from the title bar. The window shows the session only

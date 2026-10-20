@@ -42,8 +42,9 @@ import Workspace
             let workspace = composition.workspace
             switch scene {
             case .library:
+                // As it opens: on the meeting last open, since the window
+                // never shows nothing selected.
                 workspace.section = .meetings
-                workspace.selectedMeetingID = nil
             case .summary, .transcript:
                 if let first = composition.library.metas.first {
                     workspace.open(first.id, tab: scene == .summary ? .summary : .transcript)

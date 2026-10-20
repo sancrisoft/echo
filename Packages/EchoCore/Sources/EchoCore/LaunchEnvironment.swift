@@ -19,7 +19,8 @@ public struct LaunchEnvironment: Sendable, Equatable {
 
     /// What `ECHO_SNAPSHOT_PATH` renders.
     public enum SnapshotScene: String, Sendable {
-        /// The library with nothing selected.
+        /// The library as the window opens it: on the meeting last open, or
+        /// on the empty library's screen.
         case library
         /// The first meeting, on its Summary tab.
         case summary

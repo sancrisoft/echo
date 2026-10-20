@@ -35,11 +35,13 @@ struct WorkspaceShellTests {
         return image.size
     }
 
-    private func window(_ library: MeetingLibrary, _ dataRoot: DataRoot) -> some View {
+    private func window(
+        _ library: MeetingLibrary, _ dataRoot: DataRoot, workspace: WorkspaceModel = WorkspaceModel()
+    ) -> some View {
         let settings = AppSettings(dataRoot: dataRoot)
         return WorkspaceWindow(dataRoot: dataRoot, startRecording: {})
             .environment(library)
-            .environment(WorkspaceModel())
+            .environment(workspace)
             .environment(settings)
             .environment(RecordingSession(library: library, settings: settings, dataRoot: dataRoot))
     }
@@ -76,7 +78,13 @@ struct WorkspaceShellTests {
         let library = MeetingLibrary(dataRoot: dataRoot)
         await library.refresh()
         #expect(library.metas.count == 12)
-        let size = try idealSize(of: window(library, dataRoot))
+        // In Trash, so the right-hand pane brings no title of its own. The
+        // window opens on a meeting now, and a document's title asks for as
+        // much width as it is long until a real window bounds it and it
+        // wraps; what this measures is the sidebar, holding its width.
+        let workspace = WorkspaceModel()
+        workspace.section = .trash
+        let size = try idealSize(of: window(library, dataRoot, workspace: workspace))
         #expect(size.width <= EchoLayout.minimumWindow.width, "a long title pushed the panes apart")
     }
 }
