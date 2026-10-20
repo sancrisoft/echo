@@ -47,6 +47,7 @@ struct LiveSessionDocument: View {
             .frame(maxWidth: EchoLayout.readingWidth, maxHeight: .infinity, alignment: .top)
             .padding(.top, EchoLayout.readingTopInset)
             .frame(maxWidth: .infinity)
+            LiveSessionFooter()
         }
     }
 

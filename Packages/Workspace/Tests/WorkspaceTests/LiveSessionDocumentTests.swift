@@ -9,7 +9,11 @@
 
 import AppKit
 import DesignSystem
+import EchoCore
+import EchoCoreTestSupport
 import Foundation
+import Meetings
+import Recording
 import SwiftUI
 import Testing
 
@@ -32,6 +36,12 @@ struct LiveSessionDocumentTests {
     @Test("the live row and its document render in both appearances")
     func forTheEye() throws {
         EchoFont.registerBundledTypefaces()
+        let temporary = try TemporaryDirectory()
+        defer { temporary.remove() }
+        let dataRoot = DataRoot(url: temporary.url)
+        let library = MeetingLibrary(dataRoot: dataRoot)
+        let settings = AppSettings(dataRoot: dataRoot)
+        let session = RecordingSession(library: library, settings: settings, dataRoot: dataRoot)
         let live = LiveSession(startedAt: startedAt, capture: "Zoom only")
         for (appearance, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
             let row = ImageRenderer(
@@ -49,6 +59,7 @@ struct LiveSessionDocumentTests {
             let document = ImageRenderer(
                 content: LiveSessionDocument(session: live)
                     .environment(WorkspaceModel())
+                    .environment(session)
                     .frame(width: 900, height: 640)
                     .background(EchoColor.windowBackground)
                     .environment(\.colorScheme, scheme))
