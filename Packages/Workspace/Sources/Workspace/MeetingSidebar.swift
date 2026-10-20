@@ -357,7 +357,7 @@ struct MeetingSidebar: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                workspace.section = .trash
+                workspace.showTrash()
             } label: {
                 HStack(spacing: EchoSpacing.s) {
                     Image(systemName: "trash")

@@ -154,7 +154,9 @@ public struct WorkspaceWindow: View {
             selection: workspace.selectedMeetingID,
             hasMeetings: !library.metas.isEmpty,
             meta: { id in library.metas.first { $0.id == id } },
-            phase: session.phase)
+            phase: session.phase,
+            openedTrashedID: workspace.openedTrashedID,
+            trashedMeta: { id in library.trashedMetas.first { $0.id == id } })
         {
         case .meeting(let meta):
             MeetingDocumentView(meta: meta, dataRoot: dataRoot)
@@ -186,6 +188,9 @@ public struct WorkspaceWindow: View {
             Color.clear
         case .trash:
             TrashView()
+        case .trashedMeeting(let meta):
+            MeetingDocumentView(meta: meta, dataRoot: dataRoot)
+                .id(meta.id)
         case .settings:
             SettingsScreen(dataRoot: dataRoot)
         }

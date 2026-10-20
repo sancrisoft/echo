@@ -34,6 +34,8 @@ enum WorkspaceDetail: Equatable, Sendable {
     /// There are meetings and none is selected.
     case noSelection
     case trash
+    /// A trashed meeting's document, looked at from Trash.
+    case trashedMeeting(MeetingMeta)
     case settings
 
     /// The pane for the window's current navigation.
@@ -49,10 +51,17 @@ enum WorkspaceDetail: Equatable, Sendable {
         selection: UUID?,
         hasMeetings: Bool,
         meta: (UUID) -> MeetingMeta?,
-        phase: RecordingPhase
+        phase: RecordingPhase,
+        openedTrashedID: UUID? = nil,
+        trashedMeta: (UUID) -> MeetingMeta? = { _ in nil }
     ) -> WorkspaceDetail {
         switch section {
         case .trash:
+            // A trashed meeting opened from the list shows while Trash still
+            // holds it; restored or deleted, the list takes its place.
+            if let openedTrashedID, let opened = trashedMeta(openedTrashedID) {
+                return .trashedMeeting(opened)
+            }
             return .trash
         case .settings:
             return .settings

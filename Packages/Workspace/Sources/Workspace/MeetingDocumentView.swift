@@ -14,6 +14,10 @@
 //  why in place of the tabs, centred in what is left of the pane
 //  (`MeetingCondition`).
 //
+//  A trashed meeting, opened from Trash to look at, is the same document
+//  under "Trash": its bar offers Restore and Delete… instead, and Escape
+//  goes back to the list. Looking never takes it out of Trash.
+//
 
 import DesignSystem
 import EchoCore
@@ -34,6 +38,7 @@ struct MeetingDocumentView: View {
     @State private var loadFailed = false
     @State private var copied = false
     @State private var renameTarget: MeetingMeta?
+    @State private var confirmDeleteForGood = false
     /// The transcript as turns, derived once per load: find searches them
     /// and the Transcript tab draws them.
     @State private var turns: [TranscriptUtterance] = []
@@ -59,7 +64,9 @@ struct MeetingDocumentView: View {
         // Find is the Transcript tab's: on Summary there is nothing to match.
         let matches = workspace.documentTab == .transcript ? TranscriptFind.matches(of: findQuery, in: turns) : []
         VStack(spacing: 0) {
-            Breadcrumb(trail: "Meetings", current: meta.title) { actions }
+            Breadcrumb(trail: meta.isTrashed ? "Trash" : "Meetings", current: meta.title) {
+                if meta.isTrashed { trashedActions } else { actions }
+            }
             GeometryReader { viewport in
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -87,6 +94,17 @@ struct MeetingDocumentView: View {
         }
         .background { findShortcuts(matches) }
         .renameMeetingAlert($renameTarget)
+        .confirmationDialog(
+            "Delete “\(meta.title)” permanently?", isPresented: $confirmDeleteForGood, titleVisibility: .visible
+        ) {
+            Button("Delete Permanently", role: .destructive) {
+                let id = meta.id
+                workspace.closeTrashed()
+                Task { await library.deletePermanently(id) }
+            }
+        } message: {
+            Text("Its transcript, notes and any saved recording are removed from this Mac. This cannot be undone.")
+        }
         .onChange(of: workspace.documentTab) { _, _ in copied = false }
         .task(
             id: ReloadKey(
@@ -154,6 +172,36 @@ struct MeetingDocumentView: View {
             .buttonStyle(.echoQuietIcon)
             .menuIndicator(.hidden)
             .accessibilityLabel("More")
+        }
+    }
+
+    /// What a trashed meeting's bar offers in place of Copy, Export and the
+    /// "…" (product owner, 2026-10-20). Escape goes back to Trash's list,
+    /// unless it is clearing a find first.
+    private var trashedActions: some View {
+        HStack(spacing: EchoControl.toolbarButtonGap) {
+            Button("Restore") {
+                let id = meta.id
+                workspace.closeTrashed()
+                Task { await library.restore(id) }
+            }
+            .buttonStyle(.echoQuiet)
+            Button("Delete…") { confirmDeleteForGood = true }
+                .buttonStyle(.echoQuiet)
+        }
+        .background {
+            Button("") {
+                if findFocused || !findQuery.isEmpty {
+                    findQuery = ""
+                    findFocused = false
+                } else {
+                    workspace.closeTrashed()
+                }
+            }
+            .keyboardShortcut(.cancelAction)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
         }
     }
 
