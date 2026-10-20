@@ -389,3 +389,58 @@ struct AppSettingsLastOpenMeetingTests {
         }
     }
 }
+
+@Suite("AppSettings — first run")
+@MainActor
+struct AppSettingsFirstRunTests {
+
+    @Test func aFreshInstallHasAskedNothingAndLeftNothing() throws {
+        try withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            #expect(!settings.hasRequestedSystemAudio)
+            #expect(!settings.hasLeftWelcome)
+        }
+    }
+
+    @Test func bothSurviveARelaunch() throws {
+        try withTempSettingsFile { url in
+            let first = AppSettings(fileURL: url)
+            first.noteRequestedSystemAudio()
+            first.noteLeftWelcome()
+
+            let reloaded = AppSettings(fileURL: url)
+            #expect(reloaded.hasRequestedSystemAudio)
+            #expect(reloaded.hasLeftWelcome)
+        }
+    }
+
+    /// A file v1, or an earlier v2, wrote has neither key: it reads as never
+    /// asked and never left, and nothing the user chose is lost on the way.
+    @Test func anOlderFileReadsAsNeitherAndKeepsWhatItHad() throws {
+        try withTempSettingsFile { url in
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data(#"{"hasLaunchedBefore":true,"showsIsland":false}"#.utf8).write(to: url)
+
+            let settings = AppSettings(fileURL: url)
+            #expect(!settings.hasRequestedSystemAudio)
+            #expect(!settings.hasLeftWelcome)
+            #expect(settings.hasLaunchedBefore)
+            #expect(!settings.showsIsland)
+        }
+    }
+
+    @Test func notingEitherTwiceLeavesTheFileAlone() throws {
+        try withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            settings.noteRequestedSystemAudio()
+            settings.noteLeftWelcome()
+            let written = try? Data(contentsOf: url)
+
+            settings.noteRequestedSystemAudio()
+            settings.noteLeftWelcome()
+            #expect((try? Data(contentsOf: url)) == written)
+        }
+    }
+}

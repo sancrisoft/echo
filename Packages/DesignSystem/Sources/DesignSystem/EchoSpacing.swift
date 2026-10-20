@@ -36,6 +36,8 @@ public nonisolated enum EchoRadius {
     public static let chip: CGFloat = 12
     /// The window's own corner.
     public static let window: CGFloat = 11
+    /// A card in the models panel.
+    public static let card: CGFloat = 10
     /// A well a segmented control sits in.
     public static let well: CGFloat = 8
     /// Controls inside the window: buttons, input fields.
@@ -127,6 +129,43 @@ public nonisolated enum EchoControl {
     /// The glyph before the live footer's note, and the gap after it.
     public static let footerGlyphSize: CGFloat = 14
     public static let footerGlyphGap: CGFloat = 6
+
+    /// The control button the models panel and the welcome screen draw for a
+    /// row's action — Pause, Resume, Retry: a step smaller than the title
+    /// bar's button, with a tighter inset.
+    public static let controlButtonHeight: CGFloat = 28
+    public static let controlButtonInset: CGFloat = 12
+
+    /// A model's row in the models panel: its glyph and the gap after it.
+    public static let modelGlyphSize: CGFloat = 19
+    public static let modelGlyphGap: CGFloat = 13
+    /// A download's bar, its percentage's column, and the gap between the
+    /// parts on the row's right.
+    public static let modelBarWidth: CGFloat = 150
+    public static let modelBarHeight: CGFloat = 4
+    public static let modelPercentWidth: CGFloat = 34
+    public static let modelTrailingGap: CGFloat = 11
+    /// The loading spinner and the gap before its word.
+    public static let modelSpinnerSize: CGFloat = 14
+    public static let modelLoadingGap: CGFloat = 9
+    /// The check inside the Ready pill.
+    public static let readyCheckSize: CGFloat = 11
+
+    /// The welcome screen's one large button, Start using Echo: taller and
+    /// wider-set than the title bar's.
+    public static let prominentButtonHeight: CGFloat = 34
+    public static let prominentButtonInset: CGFloat = 18
+
+    /// The mark above the welcome screen's title.
+    public static let welcomeMarkSize: CGFloat = 38
+    /// A welcome-screen step's glyph: a ring, a check, or a turning arc.
+    public static let stepGlyphSize: CGFloat = 19
+    /// A model's line in the welcome screen's third step: its name's column
+    /// and the column of its figure after the bar.
+    public static let welcomeModelNameWidth: CGFloat = 132
+    public static let welcomeModelValueWidth: CGFloat = 62
+    /// The shield before the welcome screen's footer line.
+    public static let welcomeShieldSize: CGFloat = 13
 
     // MARK: On the island
 
@@ -321,6 +360,38 @@ public nonisolated enum EchoLayout {
     public static let propertyLabelWidth: CGFloat = 104
     /// The fade to the background at the foot of a scrolling document.
     public static let documentFadeHeight: CGFloat = 76
+    /// A card's inset in the models panel, and the gap between two cards.
+    public static let modelCardInset = CGSize(width: 16, height: 14)
+    public static let modelPanelGap: CGFloat = 12
+
+    // The welcome screen (`FirstRun.dc.html`): one column, centred.
+
+    public static let welcomeColumnWidth: CGFloat = 560
+    /// Under the mark, under the title, and under the paragraph.
+    public static let welcomeMarkGap: CGFloat = 26
+    public static let welcomeTitleGap: CGFloat = 12
+    public static let welcomeIntroGap: CGFloat = 34
+    /// Between "Three things to set up, once" and the first step.
+    public static let welcomeSectionGap: CGFloat = 10
+    /// A step's least height, and the gap between its glyph and its words.
+    public static let welcomeStepHeight: CGFloat = 52
+    public static let welcomeStepGap: CGFloat = 14
+    /// The models step: its vertical inset, how far its glyph drops to meet
+    /// the first line, the gap under its words, between its model lines, and
+    /// inside one.
+    public static let welcomeModelsInset: CGFloat = 14
+    public static let welcomeModelsGlyphDrop: CGFloat = 2
+    public static let welcomeModelsGap: CGFloat = 10
+    public static let welcomeModelLineGap: CGFloat = 9
+    public static let welcomeModelItemGap: CGFloat = 10
+    /// Above the hairline that closes the steps.
+    public static let welcomeStepsBottomGap: CGFloat = 4
+    /// Above the buttons, and between them.
+    public static let welcomeActionsTopGap: CGFloat = 26
+    public static let welcomeActionsGap: CGFloat = 12
+    /// Above the footer line, and between its shield and its words.
+    public static let welcomeFooterTopGap: CGFloat = 30
+    public static let welcomeFooterGap: CGFloat = 7
 }
 
 /// How wide one island face is, collapsed and expanded.

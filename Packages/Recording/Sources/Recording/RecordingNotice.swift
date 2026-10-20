@@ -31,6 +31,10 @@ public struct RecordingNotice: Identifiable, Equatable, Sendable {
         case retentionLost
         /// No usable input device: the session runs with meeting audio only.
         case microphoneUnavailable
+        /// macOS refuses Echo the Mac's audio: the session runs with the
+        /// microphone only. Ranked with the lost microphone, as the other
+        /// channel gone whole, above anything about how a channel sounds.
+        case systemAudioOff
         /// Echo cancellation is degraded on a loudspeaker route.
         case echoCancellation
         /// The mic is delivering signal the speech gates discard wholesale.
@@ -49,4 +53,7 @@ public struct RecordingNotice: Identifiable, Equatable, Sendable {
         self.kind = kind
         self.message = message
     }
+
+    /// What `systemAudioOff` says (product owner, 2026-10-19).
+    public static let systemAudioOffMessage = "System audio is off · only you are recorded"
 }

@@ -31,6 +31,8 @@ public final class AppSettings {
         var hasLaunchedBefore = false
         var showsIsland = true
         var lastOpenMeeting: UUID?
+        var hasRequestedSystemAudio = false
+        var hasLeftWelcome = false
 
         init() {}
 
@@ -70,6 +72,12 @@ public final class AppSettings {
             lastOpenMeeting =
                 try container.decodeIfPresent(UUID.self, forKey: .lastOpenMeeting)
                 ?? defaults.lastOpenMeeting
+            hasRequestedSystemAudio =
+                try container.decodeIfPresent(Bool.self, forKey: .hasRequestedSystemAudio)
+                ?? defaults.hasRequestedSystemAudio
+            hasLeftWelcome =
+                try container.decodeIfPresent(Bool.self, forKey: .hasLeftWelcome)
+                ?? defaults.hasLeftWelcome
         }
     }
 
@@ -124,6 +132,19 @@ public final class AppSettings {
     /// has since gone is the window's to step past.
     public private(set) var lastOpenMeeting: UUID?
 
+    /// Whether Echo has ever asked macOS to let it hear the Mac's audio. The
+    /// permission cannot be read without asking — the check that reads it is
+    /// the request that raises the dialog — so this is what tells a check
+    /// that it may run without putting a dialog in front of someone who never
+    /// pressed anything. Echo's own record, not macOS's: a rebuilt Echo is
+    /// asked again by macOS, and its check then raises the dialog once more.
+    public private(set) var hasRequestedSystemAudio: Bool
+
+    /// Whether the user has left the welcome screen, by Start using Echo or
+    /// Record without notes. Until then the welcome comes back at each launch
+    /// on which the models are not both on disk (product owner, 2026-10-19).
+    public private(set) var hasLeftWelcome: Bool
+
     @ObservationIgnored private let fileURL: URL
 
     /// Loads the preferences from `fileURL`, falling back to defaults when the
@@ -140,6 +161,8 @@ public final class AppSettings {
         self.hasLaunchedBefore = stored.hasLaunchedBefore
         self.showsIsland = stored.showsIsland
         self.lastOpenMeeting = stored.lastOpenMeeting
+        self.hasRequestedSystemAudio = stored.hasRequestedSystemAudio
+        self.hasLeftWelcome = stored.hasLeftWelcome
     }
 
     /// The app's preferences, at the data root's `settings.json`.
@@ -219,6 +242,22 @@ public final class AppSettings {
         persist()
     }
 
+    /// Records that Echo has asked for System Audio Recording, and persists
+    /// it. One-way: an asked question stays asked.
+    public func noteRequestedSystemAudio() {
+        guard !hasRequestedSystemAudio else { return }
+        hasRequestedSystemAudio = true
+        persist()
+    }
+
+    /// Records that the user left the welcome screen, and persists it.
+    /// One-way: the welcome never comes back once left.
+    public func noteLeftWelcome() {
+        guard !hasLeftWelcome else { return }
+        hasLeftWelcome = true
+        persist()
+    }
+
     private static func load(from url: URL) -> Stored {
         guard let data = try? Data(contentsOf: url) else { return Stored() }
         do {
@@ -240,6 +279,8 @@ public final class AppSettings {
         stored.hasLaunchedBefore = hasLaunchedBefore
         stored.showsIsland = showsIsland
         stored.lastOpenMeeting = lastOpenMeeting
+        stored.hasRequestedSystemAudio = hasRequestedSystemAudio
+        stored.hasLeftWelcome = hasLeftWelcome
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),

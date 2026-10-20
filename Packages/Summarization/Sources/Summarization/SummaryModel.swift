@@ -138,7 +138,14 @@ public actor SummaryModel {
 
     // MARK: - State
 
-    public private(set) var state: SummaryModelState = .notDownloaded
+    public private(set) var state: SummaryModelState = .notDownloaded {
+        didSet {
+            guard state != oldValue else { return }
+            for continuation in observers.values { continuation.yield(state) }
+        }
+    }
+
+    private var observers: [UUID: AsyncStream<SummaryModelState>.Continuation] = [:]
 
     private var engine: (any TextGenerating)?
     private var loadTask: Task<any TextGenerating, Error>?
@@ -195,6 +202,31 @@ public actor SummaryModel {
         self.scheduler = scheduler ?? TaskIdleReleaseScheduler()
         self.idleTimeout = idleTimeout
         self.pauseStore = pauseStore ?? FileDownloadPauseStore(fileURL: pauseStateFile)
+    }
+
+    // MARK: - Observing
+
+    /// The state now, then every change, for as long as the caller listens.
+    ///
+    /// How the observable façade above (`RecordingSession.summaryReadiness`)
+    /// follows a state that lives on this actor without keeping a second copy
+    /// of its own: the owner publishes, the façade only repeats — the
+    /// arrangement `ParakeetModel.stateChanges()` set for the other model.
+    /// Newest wins, because a reader wants where the download is, not every
+    /// fraction it passed through.
+    public func stateChanges() -> AsyncStream<SummaryModelState> {
+        let (stream, continuation) = AsyncStream<SummaryModelState>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let id = UUID()
+        observers[id] = continuation
+        continuation.yield(state)
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.stopObserving(id) }
+        }
+        return stream
+    }
+
+    private func stopObserving(_ id: UUID) {
+        observers[id] = nil
     }
 
     // MARK: - At-rest state

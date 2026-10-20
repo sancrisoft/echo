@@ -46,25 +46,26 @@ public struct WorkspaceWindow: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            // The hairline under the title bar, drawn at the content's top
-            // edge because that is where the title bar ends.
-            EchoColor.divider
-                .frame(height: EchoLayout.hairline)
-            HStack(spacing: 0) {
-                MeetingSidebar()
-                    .frame(width: EchoLayout.sidebarWidth)
-                    .background(EchoColor.sidebarBackground)
-                EchoColor.divider
-                    .frame(width: EchoLayout.hairline)
-                detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(EchoColor.windowBackground)
+        Group {
+            if workspace.showsWelcome {
+                // The welcome screen takes the whole window, title bar
+                // included, as `FirstRun.dc.html` draws it: no sidebar, no
+                // hairline, nothing in the toolbar.
+                WelcomeScreen(dataRoot: dataRoot) {
+                    settings.noteLeftWelcome()
+                    workspace.leaveWelcome()
+                }
+            } else {
+                workspaceLayout
             }
         }
         .frame(minWidth: EchoLayout.minimumWindow.width, minHeight: EchoLayout.minimumWindow.height)
         .background(WindowChromeReader(background: EchoColor.windowBackground))
-        .toolbar { TitleBarToolbar(startRecording: { recordFromTheWindow() }) }
+        .toolbar {
+            if !workspace.showsWelcome {
+                TitleBarToolbar(startRecording: { recordFromTheWindow() })
+            }
+        }
         // Capture ended: if the window was showing the session, it follows
         // the meeting the stop saved into the library.
         .onChange(of: session.phase) { _, phase in
@@ -94,6 +95,35 @@ public struct WorkspaceWindow: View {
         }
         .onChange(of: library.trashedMetas.map(\.id)) { _, _ in
             workspace.reconcileTrashSelection(with: library.trashedMetas)
+        }
+    }
+
+    /// The sidebar and, always to its right, the document.
+    private var workspaceLayout: some View {
+        VStack(spacing: 0) {
+            // The hairline under the title bar, drawn at the content's top
+            // edge because that is where the title bar ends.
+            EchoColor.divider
+                .frame(height: EchoLayout.hairline)
+            HStack(spacing: 0) {
+                MeetingSidebar()
+                    .frame(width: EchoLayout.sidebarWidth)
+                    .background(EchoColor.sidebarBackground)
+                EchoColor.divider
+                    .frame(width: EchoLayout.hairline)
+                VStack(spacing: 0) {
+                    // Above the meetings, never above Trash or Settings,
+                    // which take the document's place and are not about the
+                    // meetings at all.
+                    if workspace.section == .meetings || workspace.section == .recording {
+                        ModelsPanel()
+                    }
+                    detail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(EchoColor.windowBackground)
+            }
         }
     }
 

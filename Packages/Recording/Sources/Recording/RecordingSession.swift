@@ -106,6 +106,24 @@ public final class RecordingSession {
     /// back.
     public private(set) var readiness: RecordingReadiness = .waitingToDownload
 
+    /// Where the summary model is, for the models panel and the welcome
+    /// screen. It gates nothing: a recording waits for the transcription
+    /// model only.
+    ///
+    /// Published the way `readiness` is: the state lives on the
+    /// `SummaryModel` actor, which no view can observe, and this repeats what
+    /// that actor announces (`stateChanges()`). Nothing else writes it. It
+    /// reads as waiting until the launch starts following the model.
+    public private(set) var summaryReadiness: SummaryReadiness = .waitingToDownload
+
+    /// Whether Echo may record the microphone, as the welcome screen's row
+    /// says it. Read from macOS by `refreshCaptureAccess()`.
+    public private(set) var microphoneAccess: CaptureAccess = .undecided
+
+    /// Whether Echo may record the Mac's audio. Undecided until a check has
+    /// run, and a check runs only once Echo has asked (see `CaptureAccess`).
+    public private(set) var systemAudioAccess: CaptureAccess = .undecided
+
     /// Active notices, in a stable render order (see `RecordingNotice.Kind`).
     public var notices: [RecordingNotice] {
         noticeMessages
@@ -496,6 +514,7 @@ public final class RecordingSession {
             // so fetch the model's FILES during the session. Download only —
             // nothing is ever loaded into RAM while capture runs.
             prefetchSummaryModel()
+            checkSystemAudioForSession(generation: generation)
         } catch {
             ErrorTrace.record("Recording could not start", error: error, category: "RecordingSession")
             await teardown(persisting: false)
@@ -513,7 +532,75 @@ public final class RecordingSession {
     private func primeCapturePermissions() async {
         guard !capturePermissionsPrimed else { return }
         capturePermissionsPrimed = true
+        // The primer's throwaway tap is a request for System Audio
+        // Recording: from here on a check can no longer be the first ask.
+        settings.noteRequestedSystemAudio()
         await factories.primePermissions()
+    }
+
+    // MARK: - Capture permissions
+
+    /// Reads both permissions again: the microphone's from macOS, the Mac's
+    /// audio by the probe — and that only once Echo has asked for it, so a
+    /// look at the welcome screen never puts a dialog in front of anyone.
+    /// The welcome screen calls this when it appears and whenever Echo comes
+    /// back to the front, which is how a change made in System Settings shows.
+    public func refreshCaptureAccess() async {
+        microphoneAccess = CaptureAccess(factories.microphoneAuthorization())
+        guard settings.hasRequestedSystemAudio else { return }
+        await checkSystemAudio()
+    }
+
+    /// Allow, on the microphone's row: raises macOS's dialog when it has
+    /// never been asked, and reads the answer.
+    public func requestMicrophoneAccess() async {
+        _ = await factories.requestMicrophone()
+        microphoneAccess = CaptureAccess(factories.microphoneAuthorization())
+    }
+
+    /// Allow, on the Mac's audio's row: the probe, which raises macOS's
+    /// dialog when Echo has never asked and returns once it is answered.
+    public func requestSystemAudioAccess() async {
+        settings.noteRequestedSystemAudio()
+        await checkSystemAudio()
+    }
+
+    @ObservationIgnored private var systemAudioCheck: Task<SystemAudioAccess, Never>?
+
+    /// Whether this session can hear the Mac's audio at all, checked once its
+    /// own tap is up. A tap macOS refuses comes up as cleanly as a granted
+    /// one and delivers silence, and silence cannot tell "refused" from
+    /// "nothing is playing", so without this a meeting simply has no Others.
+    /// Off the start's path, so it delays nothing; all it adds to the Others
+    /// channel is its tone, at −80 dBFS, for about a tenth of a second.
+    /// Refused, it says so for the rest of the session: a tap that is running
+    /// never picks up a grant made meanwhile (measured, the #92 spike).
+    private func checkSystemAudioForSession(generation: Int) {
+        Task { [weak self] in
+            guard let self else { return }
+            let verdict = await self.checkSystemAudio()
+            guard self.isCapturing(generation), verdict == .denied else { return }
+            self.raise(.systemAudioOff, RecordingNotice.systemAudioOffMessage)
+        }
+    }
+
+    /// One check at a time: a return to the front while Allow is still
+    /// waiting on the dialog joins that check rather than raising a second
+    /// tap. A check that could not tell leaves the last answer standing.
+    @discardableResult
+    private func checkSystemAudio() async -> SystemAudioAccess {
+        let check: Task<SystemAudioAccess, Never>
+        if let inFlight = systemAudioCheck {
+            check = inFlight
+        } else {
+            let probe = factories.probeSystemAudio
+            check = Task { await probe() }
+            systemAudioCheck = check
+        }
+        let verdict = await check.value
+        if systemAudioCheck == check { systemAudioCheck = nil }
+        if verdict != .unknown { systemAudioAccess = CaptureAccess(verdict) }
+        return verdict
     }
 
     // MARK: - Echo handling
@@ -1403,19 +1490,66 @@ public final class RecordingSession {
         guard !modelsPrepared else { return }
         modelsPrepared = true
         followTranscriptionModel()
-        await fetchTranscriptionModel()
-
+        followSummaryModel()
+        // The summary model's state is read from disk before the transcription
+        // model's fetch, not after it: that fetch can take minutes, and until
+        // the read a model already on disk would be drawn as waiting to
+        // download. The read is cheap and fetches nothing; the download itself
+        // still waits its turn below.
         let model = summaryModel
         await model.refreshState()
+        await fetchTranscriptionModel()
+        await fetchSummaryModel()
+    }
+
+    /// Whether both models' files are on disk right now, asked of the models
+    /// themselves rather than read off `readiness`, which lags the launch:
+    /// the composition root's question for the welcome screen, which comes
+    /// back at launch while they are not (product owner, 2026-10-19).
+    public func modelsOnDisk() async -> Bool {
+        let transcription = await transcriptionModel.readyModelDirectory() != nil
+        let summary = await summaryModel.snapshotExists()
+        return transcription && summary
+    }
+
+    /// The summary model's download, honouring a pause. Shared by the launch
+    /// fetch and the user's Resume, Resume download and Retry.
+    private func fetchSummaryModel() async {
+        let model = summaryModel
         do {
             try await model.ensureDownloaded()
             // One of the backfill's four triggers: a model download finishing.
             // Harmless when there was nothing to fetch.
             kickSummaryBackfill()
         } catch {
+            // A pause cancels the transfer, and arrives here exactly like a
+            // failure would; the model already knows which it was, and a
+            // pause is the user's choice, not an error to trace.
+            guard !(await model.isDownloadPaused) else { return }
             // Subordinate: the model's own state carries the failure, and
             // nothing waits on the summary model to record.
-            ErrorTrace.record("Summary model eager fetch failed", error: error, category: "RecordingSession")
+            ErrorTrace.record("Summary model fetch failed", error: error, category: "RecordingSession")
+        }
+    }
+
+    /// The models panel's Pause, while the summary model downloads. The model
+    /// records the intent before it cancels the transfer, so the launch fetch
+    /// never resumes it behind the user's back, this run or the next.
+    public func pauseSummaryModelDownload() {
+        let model = summaryModel
+        Task { await model.pauseDownload() }
+    }
+
+    /// The summary model's Resume (paused), Resume download (a download the
+    /// app quit in the middle of) and Retry (a failed fetch or load). All
+    /// three are the user acting on a stopped download, and the model treats
+    /// them as one: the intent and any failure are cleared, and the fetch
+    /// continues from the files already on disk.
+    public func resumeSummaryModelDownload() {
+        let model = summaryModel
+        Task {
+            await model.resumeDownload()
+            await fetchSummaryModel()
         }
     }
 
@@ -1428,6 +1562,7 @@ public final class RecordingSession {
 
     @ObservationIgnored private var modelsPrepared = false
     @ObservationIgnored private var readinessFollower: Task<Void, Never>?
+    @ObservationIgnored private var summaryFollower: Task<Void, Never>?
 
     /// The fetch waits out a live capture, as it always has: it must not
     /// compete with one. Recording waits for this model, so a capture is only
@@ -1446,6 +1581,19 @@ public final class RecordingSession {
             for await state in await model.stateChanges() {
                 guard let self else { return }
                 self.readiness = RecordingReadiness(state)
+            }
+        }
+    }
+
+    /// Repeats what the summary model announces, for as long as the session
+    /// lives.
+    private func followSummaryModel() {
+        guard summaryFollower == nil else { return }
+        let model = summaryModel
+        summaryFollower = Task { [weak self] in
+            for await state in await model.stateChanges() {
+                guard let self else { return }
+                self.summaryReadiness = SummaryReadiness(state)
             }
         }
     }

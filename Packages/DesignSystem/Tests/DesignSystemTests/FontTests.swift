@@ -83,6 +83,12 @@ nonisolated let scale: [ScaleEntry] = [
     .init(name: "capsuleSecondary", font: { EchoFont.capsuleSecondary }, size: 12, weight: 500),
     .init(name: "chip", font: { EchoFont.chip }, size: 11.5, weight: 500),
     .init(name: "gaugeLabel", font: { EchoFont.gaugeLabel }, size: 10, weight: 600),
+    .init(name: "modelName", font: { EchoFont.modelName }, size: 13.5, weight: 600),
+    .init(name: "rowDescription", font: { EchoFont.rowDescription }, size: 12.5, weight: 400),
+    .init(name: "welcomeTitle", font: { EchoFont.welcomeTitle }, size: 32, weight: 650),
+    .init(name: "welcomeIntro", font: { EchoFont.welcomeIntro }, size: 15, weight: 400),
+    .init(name: "rowTitle", font: { EchoFont.rowTitle }, size: 13.5, weight: 400),
+    .init(name: "prominentButton", font: { EchoFont.prominentButton }, size: 13, weight: 600),
 ]
 
 @Suite("Typography")
@@ -153,6 +159,20 @@ struct FontTests {
         }
     }
 
+    @Test("a model's size and a download's percentage are DM Mono at the design's sizes")
+    func modelFiguresAreMono() throws {
+        EchoFont.registerBundledTypefaces()
+        let size = Font(try #require(NSFont(name: "DMMono-Regular", size: 12.5)))
+        let percent = Font(try #require(NSFont(name: "DMMono-Regular", size: 12)))
+        #expect(renderedSize(EchoFont.modelSize, text: "3.3 GB") == renderedSize(size, text: "3.3 GB"))
+        #expect(renderedSize(EchoFont.modelPercent, text: "41%") == renderedSize(percent, text: "41%"))
+        let welcomeValue = Font(try #require(NSFont(name: "DMMono-Regular", size: 11.5)))
+        let footer = Font(try #require(NSFont(name: "DMMono-Regular", size: 11)))
+        #expect(renderedSize(EchoFont.welcomeModelValue, text: "41%") == renderedSize(welcomeValue, text: "41%"))
+        let path = "~/Library/Application Support/Echo"
+        #expect(renderedSize(EchoFont.welcomeFooter, text: path) == renderedSize(footer, text: path))
+    }
+
     @Test("every digit takes the same width, so a timer does not dance")
     func digitsAreTabular() {
         EchoFont.registerBundledTypefaces()
@@ -175,6 +195,9 @@ struct FontTests {
     func leadingAndTracking() {
         #expect(abs(EchoFont.bodyLineSpacing - (14.5 * 1.62 - 14.5 - 3)) < 0.001)
         #expect(abs(EchoFont.transcriptLineSpacing - (14.5 * 1.70 - 14.5 - 3)) < 0.001)
+        #expect(abs(EchoFont.rowDescriptionLineSpacing - (12.5 * 1.45 - 12.5 - 3)) < 0.001)
+        #expect(abs(EchoFont.welcomeIntroLineSpacing - (15 * 1.6 - 15 - 3)) < 0.001)
+        #expect(abs(EchoFont.welcomeTitleTracking - (32 * -0.03)) < 0.001)
         #expect(EchoFont.transcriptLineSpacing > EchoFont.bodyLineSpacing)
         #expect(abs(EchoFont.documentTitleTracking - (30 * -0.028)) < 0.001)
         #expect(abs(EchoFont.sectionTitleTracking - (17 * -0.014)) < 0.001)

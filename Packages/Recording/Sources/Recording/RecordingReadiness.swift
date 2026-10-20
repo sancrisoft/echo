@@ -18,6 +18,7 @@
 //  they need is the reason in the artboard's terms, not the model's internals.
 //
 
+import ModelDelivery
 import Transcription
 
 public enum RecordingReadiness: Equatable, Sendable {
@@ -39,6 +40,14 @@ public enum RecordingReadiness: Equatable, Sendable {
 
     public var isReady: Bool { self == .ready }
 
+    /// The fetch's whole percent while it runs, `nil` otherwise: from the one
+    /// clamp, rounded down so it never claims 100 before the files are
+    /// verified.
+    public var downloadPercent: Int? {
+        guard case .downloading(let fraction) = self else { return nil }
+        return DownloadProgress(fraction: fraction).percent
+    }
+
     /// Why a recording cannot start, as every surface that offers one says it
     /// beside its held-back Record: the models artboard's row label and state
     /// ("Transcription · Waiting to download", "Transcription · 41%"), or the
@@ -53,11 +62,10 @@ public enum RecordingReadiness: Equatable, Sendable {
         switch self {
         case .ready: return nil
         case .waitingToDownload: state = "Waiting to download"
-        case .downloading(let fraction):
-            // Whole percent, rounded down so it never claims 100 before the
-            // files are verified, and written the way the English interface
-            // writes it whatever the Mac's region.
-            state = "\(Int(min(max(fraction, 0), 1) * 100))%"
+        case .downloading:
+            // Written the way the English interface writes it whatever the
+            // Mac's region.
+            state = "\(downloadPercent ?? 0)%"
         case .downloadFailed(let reason): state = reason
         }
         return "Transcription · \(state)"

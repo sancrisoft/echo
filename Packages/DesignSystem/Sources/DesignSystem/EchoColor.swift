@@ -137,6 +137,31 @@ public nonisolated enum EchoColor {
     /// value until the light audit (#120).
     public static let levelOthers = Color(light: 0x8A8D92, dark: 0x616469)
 
+    /// The card a model's row sits on in the models panel: a step above the
+    /// window's background, edged by the divider. Light mode does not draw
+    /// it; it takes the sidebar's light value until the light audit (#120).
+    public static let card = Color(light: 0xF7F8FA, dark: 0x101114)
+
+    /// The edge of a card whose model failed: the hairline warmed to red.
+    /// Light mode does not draw it; it takes the recording wash's edge until
+    /// the light audit (#120).
+    public static let failureEdge = Color(
+        light: 0xD02B31, dark: 0x3A2426, lightOpacity: 0.28, darkOpacity: 1)
+
+    /// Why a model failed, in its row's description line: the red, softened
+    /// for a sentence. Light mode does not draw it; it takes the light red
+    /// until the light audit (#120).
+    public static let failureText = Color(light: 0xD02B31, dark: 0xC77E7D)
+
+    /// A welcome-screen step not done yet: an empty ring, in the breadcrumb
+    /// slash's ink.
+    public static let stepPending = breadcrumbSlash
+
+    /// The track under a step's turning arc while it works. Light mode does
+    /// not draw it; it takes the raised surface's light value until the light
+    /// audit (#120).
+    public static let stepRingTrack = Color(light: 0xE8EAED, dark: 0x26282C)
+
     public static let success = Color(nsColor: .systemGreen)
     public static let warning = Color(nsColor: .systemOrange)
     public static let danger = Color(nsColor: .systemRed)
