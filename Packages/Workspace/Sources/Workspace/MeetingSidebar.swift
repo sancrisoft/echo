@@ -32,6 +32,8 @@ struct MeetingSidebar: View {
     @State private var hovered: SidebarHover?
     @State private var contextClicks = RowContextClickWatcher()
     @State private var renameTarget: MeetingMeta?
+    @State private var retranscribeTarget: MeetingMeta?
+    @State private var deleteRecordingTarget: MeetingMeta?
 
     /// Which row the pointer is over. One value for the whole column, because
     /// the pointer is only ever over one row.
@@ -65,6 +67,7 @@ struct MeetingSidebar: View {
         }
         .onDisappear { contextClicks.stop() }
         .renameMeetingAlert($renameTarget)
+        .savedRecordingDialogs(retranscribe: $retranscribeTarget, deleteRecording: $deleteRecordingTarget)
     }
 
     // MARK: The app
@@ -319,6 +322,8 @@ struct MeetingSidebar: View {
         .disabled(!meta.hasSummary)
         Button("Reveal in Finder") { MeetingActions.revealInFinder(library.directory(for: meta.id)) }
         Divider()
+        SavedRecordingMenuItems(meta: meta, retranscribe: $retranscribeTarget, deleteRecording: $deleteRecordingTarget)
+        if library.keepsRecording(meta.id) { Divider() }
         Button("Move to Trash", role: .destructive) { trash(meta.id) }
     }
 

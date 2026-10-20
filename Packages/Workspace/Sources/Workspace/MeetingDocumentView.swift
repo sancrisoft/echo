@@ -39,6 +39,8 @@ struct MeetingDocumentView: View {
     @State private var copied = false
     @State private var renameTarget: MeetingMeta?
     @State private var confirmDeleteForGood = false
+    @State private var retranscribeTarget: MeetingMeta?
+    @State private var deleteRecordingTarget: MeetingMeta?
     /// The transcript as turns, derived once per load: find searches them
     /// and the Transcript tab draws them.
     @State private var turns: [TranscriptUtterance] = []
@@ -94,6 +96,7 @@ struct MeetingDocumentView: View {
         }
         .background { findShortcuts(matches) }
         .renameMeetingAlert($renameTarget)
+        .savedRecordingDialogs(retranscribe: $retranscribeTarget, deleteRecording: $deleteRecordingTarget)
         .confirmationDialog(
             "Delete “\(meta.title)” permanently?", isPresented: $confirmDeleteForGood, titleVisibility: .visible
         ) {
@@ -163,6 +166,9 @@ struct MeetingDocumentView: View {
                 Button("Rename…") { renameTarget = meta }
                 Button("Reveal in Finder") { MeetingActions.revealInFinder(library.directory(for: meta.id)) }
                 Divider()
+                SavedRecordingMenuItems(
+                    meta: meta, retranscribe: $retranscribeTarget, deleteRecording: $deleteRecordingTarget)
+                if library.keepsRecording(meta.id) { Divider() }
                 Button("Move to Trash", role: .destructive) { trash() }
             } label: {
                 Image(systemName: "ellipsis")
