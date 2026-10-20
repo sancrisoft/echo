@@ -60,6 +60,8 @@ struct SearchPaletteTests {
         #expect(key(25, "9", .command) == .openResult(number: 9))
         #expect(key(29, "0", .command) == nil)
         #expect(key(8, "c", .command) == .copySummary)
+        #expect(key(40, "k", .command) == .actions)
+        #expect(key(40, "k") == nil)
         #expect(key(8, "C", [.command, .shift]) == nil)
         // Typing, and the field's own shortcuts, go through.
         #expect(key(0, "a") == nil)
@@ -87,11 +89,11 @@ struct SearchPaletteTests {
         let list = SearchPaletteList(hits: (0..<12).map { hit("Meeting \($0)") })
         #expect(list.indexOfResult(number: 1) == 0)
         #expect(list.indexOfResult(number: 9) == 8)
-        #expect(list.shortcutNumber(forResultAt: 8) == 9)
-        #expect(list.shortcutNumber(forResultAt: 9) == nil)
+        #expect(list.shortcutNumber(forRowAt: 8) == 9)
+        #expect(list.shortcutNumber(forRowAt: 9) == nil)
         let short = SearchPaletteList(hits: [hit()])
         #expect(short.indexOfResult(number: 2) == nil)
-        #expect(short.shortcutNumber(forResultAt: 1) == nil, "an action has no number")
+        #expect(short.shortcutNumber(forRowAt: 1) == nil, "an action has no number")
     }
 
     @Test("fifty results are drawn, and the count stays the true one")
@@ -192,5 +194,55 @@ struct SearchPaletteTests {
         #expect(!model.isSearchPresented)
         #expect(model.searchText == "budget")
         #expect(model.searchScope == .transcripts)
+    }
+
+    // MARK: - Recent searches
+
+    @Test("recent searches come first while nothing is typed, and the numbers still count results only")
+    func recentsComeFirst() {
+        let list = SearchPaletteList(recents: ["budget", "you: roadmap"], hits: [hit("A")])
+        #expect(list.item(at: 0) == .recent("budget"))
+        #expect(list.item(at: 1) == .recent("you: roadmap"))
+        #expect(list.indexOfResult(at: 0) == 2)
+        #expect(list.indexOfAction(at: 0) == 3)
+        #expect(list.indexOfResult(number: 1) == 2)
+        #expect(list.shortcutNumber(forRowAt: 0) == nil, "a recent search has no number")
+        #expect(list.shortcutNumber(forRowAt: 2) == 1)
+    }
+
+    // MARK: - A row's actions
+
+    @Test("a meeting's actions are its row menu's, the tab its line is on first")
+    func meetingActions() {
+        let found = hit(transcriptTurn: UUID())
+        let actions = PaletteItemAction.actions(for: .meeting(found))
+        #expect(
+            actions == [
+                .open(.transcript), .open(.summary), .copySummary, .rename, .export(.markdown), .export(.plainText),
+                .revealInFinder,
+            ])
+        #expect(actions.map { $0.shortcut(for: .meeting(found)) } == ["↵", "⌘↵", "⌘C", nil, nil, nil, nil])
+        #expect(actions.map(\.title).first == "Open Transcript")
+        #expect(PaletteItemAction.export(.markdown).title == "Export as Markdown (.md)")
+    }
+
+    @Test("without notes there is nothing to copy; in Trash a meeting is opened, restored or revealed")
+    func actionsFollowTheMeeting() {
+        let bare = hit(hasSummary: false)
+        #expect(!PaletteItemAction.actions(for: .meeting(bare)).contains(.copySummary))
+        #expect(PaletteItemAction.actions(for: .meeting(bare)).first == .open(.summary))
+        let trashed = hit(trashed: true)
+        #expect(
+            PaletteItemAction.actions(for: .meeting(trashed)) == [
+                .open(.summary), .open(.transcript), .restore, .revealInFinder,
+            ])
+    }
+
+    @Test("a recent search is searched again or taken off the list; the palette's own actions have no panel")
+    func otherRowsActions() {
+        #expect(
+            PaletteItemAction.actions(for: .recent("budget")) == [.searchAgain, .forgetSearch, .clearRecentSearches])
+        #expect(PaletteItemAction.searchAgain.shortcut(for: .recent("budget")) == "↵")
+        #expect(PaletteItemAction.actions(for: .action(.openTrash)).isEmpty)
     }
 }

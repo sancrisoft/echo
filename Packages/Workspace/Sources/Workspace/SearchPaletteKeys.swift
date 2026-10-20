@@ -3,7 +3,7 @@
 //  Workspace
 //
 //  The palette's keyboard. Its query field keeps the focus the whole time,
-//  and the keys that walk the list — ↑ ↓, Tab, Return, ⌘1–⌘9, ⌘C, Esc — are
+//  and the keys that walk the list — ↑ ↓, Tab, Return, ⌘1–⌘9, ⌘C, ⌘K, Esc — are
 //  keys a text field takes for itself: moving the caret, moving the focus,
 //  ending the edit. So a local monitor reads them first, in the palette's
 //  window only, and lets every other key through to the field — typing,
@@ -26,6 +26,9 @@ enum PaletteKey: Equatable, Sendable {
     case openResult(number: Int)
     /// ⌘C: the highlighted meeting's summary.
     case copySummary
+    /// ⌘K: the highlighted row's actions panel. On a row with none it is the
+    /// window's ⌘K again, and puts the palette away.
+    case actions
     case escape
 
     /// The Carbon key codes, which name a key wherever it sits on the
@@ -60,7 +63,11 @@ enum PaletteKey: Equatable, Sendable {
             character.isASCII
         else { return nil }
         if let digit = character.wholeNumberValue, (1...9).contains(digit) { return .openResult(number: digit) }
-        return character == "c" ? .copySummary : nil
+        switch character {
+        case "c": return .copySummary
+        case "k": return .actions
+        default: return nil
+        }
     }
 }
 

@@ -15,7 +15,9 @@
 //  transcript, with where it came from before it; the filters a query's words
 //  became sit in the field as pills, beside the scope Tab steps through; ⌘↵
 //  opens a result on its other tab, ⌘1–⌘9 open the first nine, and ⌘C copies
-//  the highlighted meeting's summary.
+//  the highlighted meeting's summary. While nothing is typed, the searches
+//  the user last acted on come first; and ⌘K on a row opens its actions —
+//  Raycast's panel — at the palette's foot.
 //
 
 import DesignSystem
@@ -28,6 +30,7 @@ struct SearchPalette: View {
     @Environment(MeetingLibrary.self) private var library
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(RecordingSession.self) private var session
+    @Environment(AppSettings.self) private var settings
 
     /// New recording: the window's own gated start.
     let startRecording: () -> Void
@@ -41,6 +44,10 @@ struct SearchPalette: View {
     @State private var highlighted = 0
     @State private var commandHeld = false
     @State private var copied = false
+    /// The row the keyboard is on in the highlighted row's actions panel;
+    /// `nil` while the panel is shut.
+    @State private var panel: Int?
+    @State private var renameTarget: MeetingMeta?
     @State private var contentHeight: CGFloat = 0
     @State private var keys = PaletteKeyWatcher()
     @FocusState private var fieldFocused: Bool
@@ -56,7 +63,8 @@ struct SearchPalette: View {
     }
 
     private var list: SearchPaletteList {
-        SearchPaletteList(hits: query.isEmpty ? [] : hits)
+        let typed = !workspace.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return SearchPaletteList(recents: typed ? [] : settings.recentSearches, hits: query.isEmpty ? [] : hits)
     }
 
     private var titleBar: TitleBarState {
@@ -89,9 +97,14 @@ struct SearchPalette: View {
         .onChange(of: workspace.searchText) { _, _ in
             highlighted = 0
             copied = false
+            panel = nil
         }
         .onChange(of: workspace.searchScope) { _, _ in highlighted = 0 }
-        .onChange(of: highlighted) { _, _ in copied = false }
+        .onChange(of: highlighted) { _, _ in
+            copied = false
+            panel = nil
+        }
+        .renameMeetingAlert($renameTarget)
         .onModifierKeysChanged(mask: .command) { _, now in commandHeld = now.contains(.command) }
     }
 
@@ -108,7 +121,7 @@ struct SearchPalette: View {
         guard !Task.isCancelled else { return }
         hits = found
         answered = query
-        highlighted = SearchPaletteList(hits: found).clamped(highlighted)
+        highlighted = list.clamped(highlighted)
     }
 
     // MARK: The panel
@@ -131,7 +144,18 @@ struct SearchPalette: View {
                 .strokeBorder(EchoColor.paletteBorder, lineWidth: EchoLayout.hairline)
         }
         .shadow(
-            color: EchoColor.paletteShadow, radius: EchoLayout.paletteShadowRadius, y: EchoLayout.paletteShadowOffset)
+            color: EchoColor.paletteShadow, radius: EchoLayout.paletteShadowRadius, y: EchoLayout.paletteShadowOffset
+        )
+        // Over the lists, at their foot above the hints, and not clipped by
+        // the palette's corners: a long panel may rise over the field.
+        .overlay(alignment: .bottomTrailing) {
+            if let panel, let item = list.item(at: highlighted) {
+                actionsPanel(for: item, on: panel)
+                    .padding(.trailing, EchoLayout.paletteListInset)
+                    .padding(
+                        .bottom, EchoLayout.paletteFooterHeight + EchoLayout.hairline + EchoLayout.paletteListInset)
+            }
+        }
     }
 
     // MARK: The query
@@ -188,11 +212,18 @@ struct SearchPalette: View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    if !list.recents.isEmpty {
+                        groupLabel("Recent", count: nil)
+                        ForEach(Array(list.recents.enumerated()), id: \.element) { index, text in
+                            recentRow(text, index: index)
+                        }
+                        rule
+                    }
                     if !query.isEmpty {
                         if list.total > 0 {
                             groupLabel("Meetings", count: list.total)
-                            ForEach(Array(list.hits.enumerated()), id: \.element.id) { index, hit in
-                                resultRow(hit, index: index, list: list)
+                            ForEach(Array(list.hits.enumerated()), id: \.element.id) { position, hit in
+                                resultRow(hit, index: list.indexOfResult(at: position), list: list)
                             }
                             rule
                         } else if answered == query && !library.isReadingForSearch {
@@ -201,8 +232,8 @@ struct SearchPalette: View {
                         }
                     }
                     groupLabel("Actions", count: nil)
-                    ForEach(Array(PaletteAction.allCases.enumerated()), id: \.element) { offset, action in
-                        actionRow(action, index: list.hits.count + offset)
+                    ForEach(Array(PaletteAction.allCases.enumerated()), id: \.element) { position, action in
+                        actionRow(action, index: list.indexOfAction(at: position))
                     }
                 }
                 .padding(EchoLayout.paletteListInset)
@@ -288,7 +319,7 @@ struct SearchPalette: View {
                 .font(EchoFont.mono(11))
                 .foregroundStyle(EchoColor.textQuaternary)
                 .fixedSize()
-            if commandHeld, let number = list.shortcutNumber(forResultAt: index) {
+            if commandHeld, let number = list.shortcutNumber(forRowAt: index) {
                 Keycap("⌘\(number)", isEmphasized: isOn)
             } else if isOn {
                 Keycap("↵", isEmphasized: true)
@@ -300,7 +331,40 @@ struct SearchPalette: View {
         .contentShape(.rect)
         .onTapGesture {
             highlighted = index
-            workspace.open(hit, findText: query.findText)
+            activate(.meeting(hit), otherTab: false)
+        }
+        .id(index)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+    }
+
+    // MARK: A recent search
+
+    /// A search the user acted on before: Return puts it back in the field.
+    private func recentRow(_ text: String, index: Int) -> some View {
+        let isOn = index == highlighted
+        return HStack(spacing: EchoLayout.paletteRowGap) {
+            PaletteGlyph(.magnifier)
+                .stroke(
+                    isOn ? EchoColor.accent : EchoColor.textQuaternary,
+                    style: PaletteGlyph.stroke(at: EchoControl.paletteRowGlyphSize)
+                )
+                .frame(width: EchoControl.paletteRowGlyphSize, height: EchoControl.paletteRowGlyphSize)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(EchoFont.rowTitle)
+                .foregroundStyle(isOn ? EchoColor.textPrimary : EchoColor.textProse)
+                .lineLimit(1)
+            Spacer(minLength: EchoSpacing.s)
+            if isOn { Keycap("↵", isEmphasized: true) }
+        }
+        .padding(.horizontal, EchoLayout.paletteRowInset)
+        .frame(height: EchoLayout.paletteActionHeight)
+        .background { highlight(isOn) }
+        .contentShape(.rect)
+        .onTapGesture {
+            highlighted = index
+            activate(.recent(text), otherTab: false)
         }
         .id(index)
         .accessibilityElement(children: .combine)
@@ -411,6 +475,55 @@ struct SearchPalette: View {
         }
     }
 
+    // MARK: A row's actions
+
+    /// What can be done to the highlighted row, Raycast's way: its name, then
+    /// its actions, each with the key that does the same from the list.
+    private func actionsPanel(for item: SearchPaletteList.Item, on row: Int) -> some View {
+        let actions = PaletteItemAction.actions(for: item)
+        return VStack(alignment: .leading, spacing: 0) {
+            groupLabel(panelTitle(of: item), count: nil)
+            ForEach(Array(actions.enumerated()), id: \.element) { position, action in
+                let isOn = position == row
+                HStack(spacing: EchoSpacing.s) {
+                    Text(action.title)
+                        .font(EchoFont.rowTitle)
+                        .foregroundStyle(isOn ? EchoColor.textPrimary : EchoColor.textProse)
+                        .lineLimit(1)
+                    Spacer(minLength: EchoSpacing.s)
+                    if let shortcut = action.shortcut(for: item) {
+                        Keycap(shortcut, isEmphasized: isOn)
+                    }
+                }
+                .padding(.horizontal, EchoLayout.paletteRowInset)
+                .frame(height: EchoLayout.palettePanelRowHeight)
+                .background { highlight(isOn) }
+                .contentShape(.rect)
+                .onTapGesture { perform(action, on: item) }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+            }
+        }
+        .padding(EchoLayout.paletteListInset)
+        .frame(width: EchoLayout.palettePanelWidth)
+        .background(EchoColor.paletteBackground, in: .rect(cornerRadius: EchoRadius.card))
+        .overlay {
+            RoundedRectangle(cornerRadius: EchoRadius.card)
+                .strokeBorder(EchoColor.paletteBorder, lineWidth: EchoLayout.hairline)
+        }
+        .shadow(
+            color: EchoColor.paletteShadow, radius: EchoLayout.palettePanelShadowRadius,
+            y: EchoLayout.palettePanelShadowOffset)
+    }
+
+    private func panelTitle(of item: SearchPaletteList.Item) -> String {
+        switch item {
+        case .meeting(let hit): return hit.meta.title
+        case .recent(let text): return text
+        case .action(let action): return action.title
+        }
+    }
+
     // MARK: The foot
 
     private func footer(_ list: SearchPaletteList) -> some View {
@@ -419,6 +532,9 @@ struct SearchPalette: View {
             KeyHint(key: "↵", label: "Open")
             if case .meeting(let hit)? = list.item(at: highlighted) {
                 KeyHint(key: "⌘↵", label: hit.foundInTranscript ? "Open Summary" : "Open Transcript")
+            }
+            if let item = list.item(at: highlighted), !PaletteItemAction.actions(for: item).isEmpty {
+                KeyHint(key: "⌘K", label: "Actions")
             }
             Spacer(minLength: 0)
             Text(SearchPaletteText.scopeLine(isReading: library.isReadingForSearch, copied: copied))
@@ -433,10 +549,31 @@ struct SearchPalette: View {
 
     // MARK: Keys and actions
 
-    /// What a key does; `false` hands it back to the field.
+    /// What a key does; `false` hands it back to the field. While a row's
+    /// actions panel is open, the keys walk the panel, and Esc or ⌘K shut it.
     private func handle(_ key: PaletteKey) -> Bool {
         let list = list
+        if let row = panel, let item = list.item(at: highlighted) {
+            let actions = PaletteItemAction.actions(for: item)
+            switch key {
+            case .move(let offset):
+                panel = min(max(row + offset, 0), max(actions.count - 1, 0))
+            case .open:
+                if actions.indices.contains(row) { perform(actions[row], on: item) }
+            case .escape, .actions:
+                panel = nil
+            case .stepScope, .openResult, .copySummary:
+                break
+            }
+            return true
+        }
         switch key {
+        case .actions:
+            // A row with no panel: the window's ⌘K, which puts the palette away.
+            guard let item = list.item(at: highlighted), !PaletteItemAction.actions(for: item).isEmpty else {
+                return false
+            }
+            panel = 0
         case .move(let offset):
             highlighted = list.moved(from: highlighted, by: offset)
         case .open(let otherTab):
@@ -448,6 +585,7 @@ struct SearchPalette: View {
             activate(list.item(at: index), otherTab: false)
         case .copySummary:
             guard case .meeting(let hit)? = list.item(at: highlighted), hit.meta.hasSummary else { return false }
+            settings.noteSearch(workspace.searchText)
             copySummary(of: hit)
         case .escape:
             // Spotlight's two steps: the first clears what is typed, the
@@ -461,11 +599,59 @@ struct SearchPalette: View {
         return true
     }
 
+    /// Opening a result is acting on the search, and keeps it among the
+    /// recent ones; a recent one goes back in the field to be searched again.
     private func activate(_ item: SearchPaletteList.Item?, otherTab: Bool) {
         switch item {
-        case .meeting(let hit): workspace.open(hit, otherTab: otherTab, findText: query.findText)
-        case .action(let action): run(action)
-        case nil: break
+        case .recent(let text):
+            workspace.searchText = text
+        case .meeting(let hit):
+            settings.noteSearch(workspace.searchText)
+            workspace.open(hit, otherTab: otherTab, findText: query.findText)
+        case .action(let action):
+            run(action)
+        case nil:
+            break
+        }
+    }
+
+    /// Runs one of a row's actions and shuts its panel. Rename asks over the
+    /// palette and leaves it up; Export and Reveal in Finder put it away,
+    /// because a save panel or Finder is where the user goes next.
+    private func perform(_ action: PaletteItemAction, on item: SearchPaletteList.Item) {
+        panel = nil
+        switch (action, item) {
+        case (.open(let tab), .meeting(let hit)):
+            activate(item, otherTab: tab != PaletteItemAction.primaryTab(of: hit))
+        case (.copySummary, .meeting(let hit)):
+            settings.noteSearch(workspace.searchText)
+            copySummary(of: hit)
+        case (.rename, .meeting(let hit)):
+            settings.noteSearch(workspace.searchText)
+            renameTarget = hit.meta
+        case (.export(let format), .meeting(let hit)):
+            settings.noteSearch(workspace.searchText)
+            workspace.dismissSearch()
+            Task {
+                if let record = await library.loadRecord(hit.id) {
+                    MeetingActions.export(record, as: format)
+                }
+            }
+        case (.revealInFinder, .meeting(let hit)):
+            settings.noteSearch(workspace.searchText)
+            workspace.dismissSearch()
+            MeetingActions.revealInFinder(library.directory(for: hit.id))
+        case (.restore, .meeting(let hit)):
+            settings.noteSearch(workspace.searchText)
+            Task { await library.restore(hit.id) }
+        case (.searchAgain, .recent):
+            activate(item, otherTab: false)
+        case (.forgetSearch, .recent(let text)):
+            settings.forgetSearch(text)
+        case (.clearRecentSearches, _):
+            settings.clearRecentSearches()
+        default:
+            break
         }
     }
 
