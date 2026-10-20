@@ -159,6 +159,18 @@ struct CaptureFactories: Sendable {
     /// blocks on a dialog nobody is there to answer.
     var primePermissions: @Sendable () async -> Void
 
+    /// What macOS has decided about the microphone, read without asking.
+    var microphoneAuthorization: @Sendable () -> MicrophoneAuthorization
+
+    /// Asks for the microphone when macOS has not been asked yet, and says
+    /// whether it is allowed. A seam for the reason `primePermissions` is.
+    var requestMicrophone: @Sendable () async -> Bool
+
+    /// The System Audio Recording probe: a tone of Echo's own, heard or not
+    /// through a tap on Echo alone. It is also the request — it raises the
+    /// dialog when Echo has never asked — so a test never runs the real one.
+    var probeSystemAudio: @Sendable () async -> SystemAudioAccess
+
     var makeInputDeviceWatcher:
         @Sendable (
             _ onDefaultInputChange:
@@ -188,6 +200,9 @@ struct CaptureFactories: Sendable {
             _ = await MicrophoneCapture.requestPermission()
             await SystemAudioCapture.primePermission()
         },
+        microphoneAuthorization: { MicrophoneCapture.authorization },
+        requestMicrophone: { await MicrophoneCapture.requestPermission() },
+        probeSystemAudio: { await SystemAudioAccessProbe.check() },
         makeInputDeviceWatcher: { onChange in
             InputDeviceMonitor(onDefaultInputChange: onChange)
         },

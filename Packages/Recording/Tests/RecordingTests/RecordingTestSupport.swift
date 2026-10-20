@@ -273,6 +273,26 @@ final class CaptureRig: Sendable {
 
     private let permissionPrimings = Mutex(0)
 
+    /// The two permissions as the fakes answer for them: what macOS has
+    /// decided about the microphone and what a request turns it into, and
+    /// the probe's verdicts in order (the last one repeats).
+    struct Access {
+        var microphone: MicrophoneAuthorization
+        var microphoneAnswer: Bool
+        var microphoneRequests = 0
+        var systemAudioVerdicts: [SystemAudioAccess]
+        var systemAudioProbes = 0
+    }
+
+    private let access: Mutex<Access>
+
+    /// Holds every probe until the test releases it, when a test needs one in
+    /// flight.
+    let systemAudioGate: PassGate?
+
+    var microphoneRequestCount: Int { access.withLock { $0.microphoneRequests } }
+    var systemAudioProbeCount: Int { access.withLock { $0.systemAudioProbes } }
+
     /// How many times the session raised the permission dialogs. Once per app
     /// run, on the first record gesture — never at launch.
     var permissionPrimeCount: Int { permissionPrimings.withLock { $0 } }
@@ -291,8 +311,15 @@ final class CaptureRig: Sendable {
         route: OutputRouteClass = .builtInSpeakers,
         engineHealthy: Bool = true,
         micStartOutcome: @escaping @Sendable (Int) throws -> Void = { _ in },
-        systemStartOutcome: @escaping @Sendable (Int) throws -> Void = { _ in }
+        systemStartOutcome: @escaping @Sendable (Int) throws -> Void = { _ in },
+        microphone: MicrophoneAuthorization = .granted,
+        microphoneAnswer: Bool = true,
+        systemAudio: [SystemAudioAccess] = [.granted],
+        systemAudioGate: PassGate? = nil
     ) {
+        self.access = Mutex(
+            Access(microphone: microphone, microphoneAnswer: microphoneAnswer, systemAudioVerdicts: systemAudio))
+        self.systemAudioGate = systemAudioGate
         self.inputDevice = inputDevice
         self.route = route
         self.echoStage = CountingAECStage(healthy: engineHealthy)
@@ -321,6 +348,24 @@ final class CaptureRig: Sendable {
             // with no host, and the live primer would block on a dialog
             // nobody is there to answer.
             primePermissions: { self.permissionPrimings.withLock { $0 += 1 } },
+            microphoneAuthorization: { self.access.withLock { $0.microphone } },
+            requestMicrophone: {
+                self.access.withLock { access in
+                    access.microphoneRequests += 1
+                    if access.microphone == .notDetermined {
+                        access.microphone = access.microphoneAnswer ? .granted : .denied
+                    }
+                    return access.microphone == .granted
+                }
+            },
+            probeSystemAudio: {
+                await self.systemAudioGate?.enter()
+                return self.access.withLock { access in
+                    access.systemAudioProbes += 1
+                    return access.systemAudioVerdicts.count > 1
+                        ? access.systemAudioVerdicts.removeFirst() : access.systemAudioVerdicts[0]
+                }
+            },
             makeInputDeviceWatcher: { _ in
                 let watcher = FakeInputDeviceWatcher(device: self.inputDevice)
                 self.built.withLock { $0.inputWatchers.append(watcher) }

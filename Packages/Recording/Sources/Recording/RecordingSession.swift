@@ -116,6 +116,14 @@ public final class RecordingSession {
     /// reads as waiting until the launch starts following the model.
     public private(set) var summaryReadiness: SummaryReadiness = .waitingToDownload
 
+    /// Whether Echo may record the microphone, as the welcome screen's row
+    /// says it. Read from macOS by `refreshCaptureAccess()`.
+    public private(set) var microphoneAccess: CaptureAccess = .undecided
+
+    /// Whether Echo may record the Mac's audio. Undecided until a check has
+    /// run, and a check runs only once Echo has asked (see `CaptureAccess`).
+    public private(set) var systemAudioAccess: CaptureAccess = .undecided
+
     /// Active notices, in a stable render order (see `RecordingNotice.Kind`).
     public var notices: [RecordingNotice] {
         noticeMessages
@@ -523,7 +531,57 @@ public final class RecordingSession {
     private func primeCapturePermissions() async {
         guard !capturePermissionsPrimed else { return }
         capturePermissionsPrimed = true
+        // The primer's throwaway tap is a request for System Audio
+        // Recording: from here on a check can no longer be the first ask.
+        settings.noteRequestedSystemAudio()
         await factories.primePermissions()
+    }
+
+    // MARK: - Capture permissions
+
+    /// Reads both permissions again: the microphone's from macOS, the Mac's
+    /// audio by the probe — and that only once Echo has asked for it, so a
+    /// look at the welcome screen never puts a dialog in front of anyone.
+    /// The welcome screen calls this when it appears and whenever Echo comes
+    /// back to the front, which is how a change made in System Settings shows.
+    public func refreshCaptureAccess() async {
+        microphoneAccess = CaptureAccess(factories.microphoneAuthorization())
+        guard settings.hasRequestedSystemAudio else { return }
+        await checkSystemAudio()
+    }
+
+    /// Allow, on the microphone's row: raises macOS's dialog when it has
+    /// never been asked, and reads the answer.
+    public func requestMicrophoneAccess() async {
+        _ = await factories.requestMicrophone()
+        microphoneAccess = CaptureAccess(factories.microphoneAuthorization())
+    }
+
+    /// Allow, on the Mac's audio's row: the probe, which raises macOS's
+    /// dialog when Echo has never asked and returns once it is answered.
+    public func requestSystemAudioAccess() async {
+        settings.noteRequestedSystemAudio()
+        await checkSystemAudio()
+    }
+
+    @ObservationIgnored private var systemAudioCheck: Task<SystemAudioAccess, Never>?
+
+    /// One check at a time: a return to the front while Allow is still
+    /// waiting on the dialog joins that check rather than raising a second
+    /// tap. A check that could not tell leaves the last answer standing.
+    private func checkSystemAudio() async {
+        let check: Task<SystemAudioAccess, Never>
+        if let inFlight = systemAudioCheck {
+            check = inFlight
+        } else {
+            let probe = factories.probeSystemAudio
+            check = Task { await probe() }
+            systemAudioCheck = check
+        }
+        let verdict = await check.value
+        if systemAudioCheck == check { systemAudioCheck = nil }
+        guard verdict != .unknown else { return }
+        systemAudioAccess = CaptureAccess(verdict)
     }
 
     // MARK: - Echo handling
