@@ -21,6 +21,9 @@ public struct StorageBreakdown: Equatable, Sendable {
     public var recordingsCount: Int = 0
     /// Trashed meeting folders, whole.
     public var trashBytes: Int64 = 0
+    /// Each trashed folder's own bytes, for the row Trash draws per meeting;
+    /// they sum to `trashBytes`.
+    public var trashedFolderBytes: [UUID: Int64] = [:]
     /// The models directory under the data root.
     public var modelsBytes: Int64 = 0
 
@@ -66,8 +69,9 @@ public struct StorageBreakdown: Equatable, Sendable {
             breakdown.meetingsBytes += max(0, whole - audio)
         }
         for id in trashedIDs {
-            breakdown.trashBytes += directorySize(
-                at: meetingsRoot.appending(path: id.uuidString, directoryHint: .isDirectory))
+            let bytes = directorySize(at: meetingsRoot.appending(path: id.uuidString, directoryHint: .isDirectory))
+            breakdown.trashedFolderBytes[id] = bytes
+            breakdown.trashBytes += bytes
         }
         if let modelsDirectory {
             breakdown.modelsBytes = directorySize(at: modelsDirectory)
