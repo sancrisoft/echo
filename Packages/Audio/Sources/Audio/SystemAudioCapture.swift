@@ -1084,7 +1084,9 @@ public final class SystemAudioCapture: Sendable {
 
     // MARK: - Core Audio helpers
 
-    private static func aggregateDescription(tapUID: String, outputUID: String?) -> [String: Any] {
+    /// Shared with `SystemAudioAccessProbe`, whose tap has to come up exactly
+    /// the way a session's does to say anything about one.
+    static func aggregateDescription(tapUID: String, outputUID: String?) -> [String: Any] {
         var description: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Echo System Capture",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
@@ -1136,7 +1138,7 @@ public final class SystemAudioCapture: Sendable {
         return AVAudioFormat(streamDescription: &asbd)
     }
 
-    private static func defaultOutputDeviceUID() -> String? {
+    static func defaultOutputDeviceUID() -> String? {
         guard let deviceID = DefaultAudioDevices.outputDeviceID() else { return nil }
 
         var uid: Unmanaged<CFString>?

@@ -96,6 +96,17 @@ public final class MicrophoneCapture: Sendable {
         self.onRawBuffer = onRawBuffer
     }
 
+    /// What macOS has decided about the microphone, read without asking:
+    /// the welcome screen's row says it before the user has done anything.
+    public static var authorization: MicrophoneAuthorization {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return .granted
+        case .notDetermined: return .notDetermined
+        case .denied, .restricted: return .denied
+        @unknown default: return .denied
+        }
+    }
+
     /// Prompts for (or verifies) microphone permission.
     public static func requestPermission() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -186,4 +197,13 @@ public final class MicrophoneCapture: Sendable {
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning { engine.stop() }
     }
+}
+
+/// The microphone's permission, as macOS reports it. Restricted (a device
+/// policy) reads as denied: either way the user cannot record with it until
+/// something outside Echo changes.
+public enum MicrophoneAuthorization: Equatable, Sendable {
+    case notDetermined
+    case denied
+    case granted
 }
