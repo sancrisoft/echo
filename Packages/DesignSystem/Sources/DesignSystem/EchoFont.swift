@@ -107,6 +107,17 @@ public nonisolated enum EchoFont {
     /// Mono 12.5 — code inside a summary's prose, on its raised fill.
     public static var inlineCode: Font { mono(12.5) }
 
+    /// 20 / 650 — the title of a list that takes the document's place:
+    /// Trash.
+    public static var listTitle: Font { onest(20, weight: 650) }
+
+    /// 13.5 / 500 — a list row's title while it is selected.
+    public static var rowTitleSelected: Font { onest(13.5, weight: 500) }
+
+    /// 12 — the line under a list row's title, and the note in a list's
+    /// footer.
+    public static var rowCaption: Font { onest(12, weight: 400) }
+
     /// 14.5 / 600 — what an empty or broken screen says happened.
     public static var emptyTitle: Font { onest(14.5, weight: 600) }
 
@@ -242,6 +253,9 @@ public nonisolated enum EchoFont {
 
     /// Extra leading for a transcript turn (1.7 line height).
     public static let transcriptLineSpacing: CGFloat = 14.5 * 0.70 - 3
+
+    /// Tracking for `listTitle`: −0.02em.
+    public static let listTitleTracking: CGFloat = 20 * -0.02
 
     /// Extra leading for `emptyMessage` (1.55 line height).
     public static let emptyMessageLineSpacing: CGFloat = 12.5 * 0.55 - 3

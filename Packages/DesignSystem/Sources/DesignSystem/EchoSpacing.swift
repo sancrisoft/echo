@@ -50,6 +50,10 @@ public nonisolated enum EchoRadius {
     public static let inlineCode: CGFloat = 4
     /// A find match in a transcript.
     public static let findMatch: CGFloat = 3
+    /// A row in Trash's list.
+    public static let listRow: CGFloat = 8
+    /// A key drawn in a footer's hints: ↑↓, ↵, ⌫.
+    public static let keycap: CGFloat = 4
     /// The transcript's speaker split, half its height.
     public static let speakerSplit: CGFloat = 2
     /// A level gauge, half its height.
@@ -147,6 +151,15 @@ public nonisolated enum EchoControl {
     /// The glyph above a document's placeholder, while there is nothing yet
     /// to read.
     public static let placeholderGlyphSize: CGFloat = 34
+
+    /// The count beside a list's title, in its capsule, and the room inside
+    /// a key drawn in a footer's hints.
+    public static let listCountInset = CGSize(width: 8, height: 2)
+    public static let keycapInset = CGSize(width: 5, height: 1)
+    /// The glyph at the head of a Trash row, and the gap between a row's two
+    /// buttons.
+    public static let listRowGlyphSize: CGFloat = 16
+    public static let listRowActionGap: CGFloat = 6
 
     /// The glyph above an empty or broken screen.
     public static let emptyGlyphSize: CGFloat = 30
@@ -394,6 +407,26 @@ public nonisolated enum EchoLayout {
     public static let emptyStateMessageWidth: CGFloat = 280
     public static let emptyStateActionGap: CGFloat = 8
     public static let emptyStateInset: CGFloat = 24
+    /// A list that takes the document's place, as Trash does: its header's
+    /// height, insets and gap; the note under it; the list's inset and the
+    /// gap between rows; a row's height, inset and the gap between its parts;
+    /// the columns of its days left and of its buttons, kept on every row so
+    /// the columns line up; and the footer of key hints.
+    public static let listHeaderHeight: CGFloat = 62
+    public static let listHeaderLeadingInset: CGFloat = 24
+    public static let listHeaderTrailingInset: CGFloat = 20
+    public static let listHeaderGap: CGFloat = 11
+    public static let listNoteBottom: CGFloat = 14
+    public static let listInset: CGFloat = 12
+    public static let listRowSpacing: CGFloat = 3
+    public static let listRowHeight: CGFloat = 58
+    public static let listRowInset: CGFloat = 13
+    public static let listRowGap: CGFloat = 13
+    public static let listDaysWidth: CGFloat = 108
+    public static let listActionsWidth: CGFloat = 176
+    public static let listFooterHeight: CGFloat = 44
+    public static let listFooterGap: CGFloat = 16
+    public static let keyHintGap: CGFloat = 6
     /// The footer under a live session's document — the meter, what is
     /// happening, where it happens — its height, its side insets and the gap
     /// between its parts.

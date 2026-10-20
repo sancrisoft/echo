@@ -218,6 +218,9 @@ struct PrimitiveTests {
             size(of: Button("Allow") {}.buttonStyle(.echoControlProminent)).height
                 == EchoControl.controlButtonHeight)
         #expect(
+            size(of: Button("Delete…") {}.buttonStyle(.echoControlDestructive)).height
+                == EchoControl.controlButtonHeight)
+        #expect(
             size(of: Button("Start using Echo") {}.buttonStyle(.echoProminent)).height
                 == EchoControl.prominentButtonHeight)
     }

@@ -139,6 +139,11 @@ public nonisolated enum EchoColor {
     /// draws, the breadcrumb slash's.
     public static let placeholderGlyph = breadcrumbSlash
 
+    /// The words of an action that removes something for good — Delete…,
+    /// Empty Trash… — and of a trashed meeting's last days: the red the Trash
+    /// artboard writes them in.
+    public static let destructiveText = recording
+
     /// The glyph above a screen that failed: the warning of a pass that did
     /// not finish, in the red the empty-states artboard draws it.
     public static let failureGlyph = recording

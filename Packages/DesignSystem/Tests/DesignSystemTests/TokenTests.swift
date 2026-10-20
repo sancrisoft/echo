@@ -140,6 +140,7 @@ nonisolated let palette: [Token] = [
     .init("placeholderGlyph", EchoColor.placeholderGlyph, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("speakerSplitOthers", EchoColor.speakerSplitOthers, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("failureGlyph", EchoColor.failureGlyph, light: 0xD02B31, dark: 0xED4A49),
+    .init("destructiveText", EchoColor.destructiveText, light: 0xD02B31, dark: 0xED4A49),
     .init("levelOthers", EchoColor.levelOthers, light: 0x8A8D92, dark: 0x616469),
     .init("selection", EchoColor.selection, light: 0xE8EAED, dark: 0x1F2024),
     // The models panel (`Models.dc.html`). Light values borrowed until #120.
@@ -273,6 +274,32 @@ struct MetricTests {
         #expect(EchoLayout.emptyStateMessageWidth == 280)
         #expect(EchoLayout.emptyStateActionGap == 8)
         #expect(EchoLayout.emptyStateInset == 24)
+    }
+
+    /// Trash, as its artboard draws the list that takes the document's place.
+    @Test("the list's measures are the artboard's")
+    func listMatchesTheArtboard() {
+        #expect(EchoLayout.listHeaderHeight == 62)
+        #expect(EchoLayout.listHeaderLeadingInset == 24)
+        #expect(EchoLayout.listHeaderTrailingInset == 20)
+        #expect(EchoLayout.listHeaderGap == 11)
+        #expect(EchoLayout.listNoteBottom == 14)
+        #expect(EchoLayout.listInset == 12)
+        #expect(EchoLayout.listRowSpacing == 3)
+        #expect(EchoLayout.listRowHeight == 58)
+        #expect(EchoLayout.listRowInset == 13)
+        #expect(EchoLayout.listRowGap == 13)
+        #expect(EchoLayout.listDaysWidth == 108)
+        #expect(EchoLayout.listActionsWidth == 176)
+        #expect(EchoLayout.listFooterHeight == 44)
+        #expect(EchoLayout.listFooterGap == 16)
+        #expect(EchoLayout.keyHintGap == 6)
+        #expect(EchoControl.listCountInset == CGSize(width: 8, height: 2))
+        #expect(EchoControl.keycapInset == CGSize(width: 5, height: 1))
+        #expect(EchoControl.listRowGlyphSize == 16)
+        #expect(EchoControl.listRowActionGap == 6)
+        #expect(EchoRadius.listRow == 8)
+        #expect(EchoRadius.keycap == 4)
     }
 
     @Test("the radii are the artboard's, largest to smallest")
