@@ -48,7 +48,7 @@ final class MenuBarMenu: NSObject {
             menu.addItem(item)
         }
         menu.addItem(button("Open Echo", #selector(openEcho)))
-        menu.addItem(button("Settings…", #selector(openSettings)))
+        menu.addItem(button("Settings", #selector(openSettings)))
         menu.addItem(.separator())
         // No action, so `autoenablesItems` draws it as the label it is.
         menu.addItem(NSMenuItem(title: AppIdentity.version.display, action: nil, keyEquivalent: ""))

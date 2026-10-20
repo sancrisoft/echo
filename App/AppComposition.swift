@@ -118,7 +118,7 @@ final class AppComposition {
         let library = library
 
         // One definition of what opening Settings means, for the two surfaces
-        // that ask for it: the app menu's ⌘, and the menu bar item's Settings….
+        // that ask for it: the app menu's ⌘, and the menu bar item's Settings.
         let showSettings = {
             workspace.section = .settings
             windowOpener.openMainWindow()

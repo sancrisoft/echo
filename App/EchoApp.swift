@@ -72,10 +72,10 @@ struct EchoApp: App {
             // Settings. Not the menu bar item — the design draws that menu
             // with four items and this is not one of them.
             CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") { composition.checkForUpdates() }
+                Button("Check for Updates") { composition.checkForUpdates() }
             }
             CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { composition.openSettings() }
+                Button("Settings") { composition.openSettings() }
                     .keyboardShortcut(",", modifiers: .command)
             }
         }
