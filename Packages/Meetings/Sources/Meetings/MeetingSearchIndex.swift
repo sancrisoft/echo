@@ -148,7 +148,7 @@ struct MeetingSearchIndex: Sendable {
         }
         var scored: [(hit: MeetingSearchHit, score: Int)] = []
         for id in pool ?? Set(documents.keys) {
-            guard let document = documents[id], admits(document.meta, query),
+            guard let document = documents[id], query.admits(document.meta),
                 let match = match(document, terms, query)
             else { continue }
             scored.append(match)
@@ -192,10 +192,6 @@ struct MeetingSearchIndex: Sendable {
             low += 1
         }
         return found
-    }
-
-    private func admits(_ meta: MeetingMeta, _ query: MeetingSearchQuery) -> Bool {
-        (!meta.isTrashed || query.includesTrash) && (query.dates?.contains(meta.startedAt) ?? true)
     }
 
     /// Whether a passage is one the query reads: its scope, and its speaker.

@@ -157,4 +157,67 @@ struct MeetingSearchQueryTests {
         #expect(MeetingSearchScope.allCases.map(\.title) == ["All", "Titles", "Summaries", "Transcripts"])
         #expect(parse("budget", scope: .summaries).scope == .summaries)
     }
+
+    // MARK: - The header's filters
+
+    @Test("app:, has:summary, is:failed and a length are filters, with the words they leave")
+    func headerFilters() {
+        let query = parse("app:zoom has:summary is:failed >30m budget")
+        #expect(query.app == "zoom")
+        #expect(query.requiresSummary)
+        #expect(query.onlyFailed)
+        #expect(query.duration == MeetingSearchDuration(bound: .longer, seconds: 30 * 60, label: "> 30 min"))
+        #expect(query.terms == [.word("budget")])
+        #expect(
+            query.filters.map(\.label) == ["App: zoom", "> 30 min", "Has summary", "Failed"])
+        #expect(!parse("is:failed").isEmpty)
+    }
+
+    @Test("an app named in quotes after app: keeps its spaces")
+    func quotedApp() {
+        let query = parse("app:\"Google Meet\" agenda")
+        #expect(query.app == "Google Meet")
+        #expect(query.terms == [.word("agenda")])
+    }
+
+    @Test("a length is minutes or hours, longer or shorter; anything else is words")
+    func lengths() {
+        #expect(parse("<15min").duration == MeetingSearchDuration(bound: .shorter, seconds: 15 * 60, label: "< 15 min"))
+        #expect(parse(">1h").duration?.seconds == 3600)
+        #expect(parse(">1.5h").duration?.seconds == 5400)
+        #expect(parse(">30").duration == nil)
+        #expect(parse(">m").duration == nil)
+        #expect(parse(">0m").duration == nil)
+        let bound = MeetingSearchDuration(bound: .longer, seconds: 1800, label: "> 30 min")
+        #expect(bound.admits(1801))
+        #expect(!bound.admits(1800))
+    }
+
+    @Test("the header's filters read the meta alone")
+    func admitsByHeader() {
+        let start = date(2026, 10, 20, hour: 9)
+        func meta(
+            minutes: Double = 60, app: String? = nil, hasSummary: Bool = false,
+            source: TranscriptProvenance.Source? = nil
+        ) -> MeetingMeta {
+            MeetingMeta(
+                id: UUID(), title: "Weekly", startedAt: start, endedAt: start.addingTimeInterval(minutes * 60),
+                segmentCount: 1, hasSummary: hasSummary,
+                transcriptProvenance: source.map {
+                    TranscriptProvenance(source: $0, modelName: "m", tier: "t", servedByFallback: false)
+                },
+                captureScope: app.map(CaptureScopeRecord.app(named:)) ?? .everything)
+        }
+        #expect(parse("app:zoom").admits(meta(app: "Zoom")))
+        #expect(parse("app:teams").admits(meta(app: "Microsoft Teams")))
+        #expect(!parse("app:zoom").admits(meta()), "a capture of everything names no app")
+        #expect(parse(">30m").admits(meta(minutes: 45)))
+        #expect(!parse(">30m").admits(meta(minutes: 20)))
+        #expect(parse("<30m").admits(meta(minutes: 20)))
+        #expect(parse("has:summary").admits(meta(hasSummary: true)))
+        #expect(!parse("has:summary").admits(meta()))
+        #expect(parse("is:failed").admits(meta(source: .terminalFailure)))
+        #expect(!parse("is:failed").admits(meta(source: .finalPass)))
+        #expect(!parse("is:failed").admits(meta()))
+    }
 }

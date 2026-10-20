@@ -258,4 +258,17 @@ struct MeetingSearchIndexTests {
         #expect(search(all, "retro").isEmpty)
         #expect(all.documents.isEmpty)
     }
+
+    @Test("the header's filters narrow what the words find, and list on their own what they admit")
+    func headerFilters() {
+        let noted = document("Board", you: ["The budget is approved."], summary: "- Budget approved")
+        let bare = document("Standup", you: ["The budget is late."])
+        let all = index(noted, bare)
+        #expect(Set(search(all, "budget").map(\.meta.title)) == ["Board", "Standup"])
+        #expect(search(all, "budget has:summary").map(\.meta.title) == ["Board"])
+        #expect(search(all, "has:summary").map(\.meta.title) == ["Board"])
+        #expect(search(all, "is:failed").isEmpty)
+        #expect(search(all, ">5m").count == 2, "both ran ten minutes")
+        #expect(search(all, "<5m").isEmpty)
+    }
 }

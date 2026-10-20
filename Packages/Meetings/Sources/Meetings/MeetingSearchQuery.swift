@@ -4,9 +4,11 @@
 //
 //  What a line typed into search asks for: the words to find, and the
 //  filters written among them — `you:` and `others:` for who said it (the
-//  channel, as everywhere in Echo), a date by name, `in:trash` to reach into
-//  Trash — plus the scope, which is not typed but chosen. Parsing is pure and
-//  takes the clock and the calendar, so every rule is testable as a value.
+//  channel, as everywhere in Echo), a date by name, `app:zoom` for the app a
+//  capture was limited to, `>30m` and `<15m` for how long it ran,
+//  `has:summary`, `is:failed`, `in:trash` to reach into Trash — plus the
+//  scope, which is not typed but chosen. Parsing is pure and takes the clock
+//  and the calendar, so every rule is testable as a value.
 //
 //  A filter word is a filter wherever it stands. Quotes take it back: "may"
 //  in quotes is the word, `may` bare is the month. Whatever was taken as a
@@ -59,16 +61,47 @@ public struct MeetingSearchDates: Hashable, Sendable {
     }
 }
 
+/// A bound on how long a meeting ran, and how to say it.
+public struct MeetingSearchDuration: Hashable, Sendable {
+    public enum Bound: Hashable, Sendable {
+        case longer
+        case shorter
+    }
+
+    public let bound: Bound
+    public let seconds: TimeInterval
+    public let label: String
+
+    public init(bound: Bound, seconds: TimeInterval, label: String) {
+        self.bound = bound
+        self.seconds = seconds
+        self.label = label
+    }
+
+    public func admits(_ duration: TimeInterval) -> Bool {
+        bound == .longer ? duration > seconds : duration < seconds
+    }
+}
+
 /// A filter a query's words turned into.
 public enum MeetingSearchFilter: Hashable, Sendable {
     case speaker(Speaker)
     case dates(MeetingSearchDates)
+    /// The app a capture was limited to, as typed.
+    case app(String)
+    case duration(MeetingSearchDuration)
+    case hasSummary
+    case failed
     case trash
 
     public var label: String {
         switch self {
         case .speaker(let speaker): return speaker.displayName
         case .dates(let dates): return dates.label
+        case .app(let app): return "App: \(app)"
+        case .duration(let duration): return duration.label
+        case .hasSummary: return "Has summary"
+        case .failed: return "Failed"
         case .trash: return "Trash"
         }
     }
@@ -92,6 +125,16 @@ public struct MeetingSearchQuery: Hashable, Sendable {
     public var speaker: Speaker?
     /// Only meetings that started in this span.
     public var dates: MeetingSearchDates?
+    /// Only meetings whose capture was limited to an app with this in its
+    /// name, as typed. A meeting that captured everything names no app, so
+    /// it never answers.
+    public var app: String?
+    /// Only meetings that ran longer, or shorter, than this.
+    public var duration: MeetingSearchDuration?
+    /// Only meetings with notes.
+    public var requiresSummary: Bool
+    /// Only meetings whose transcription failed, as the sidebar marks them.
+    public var onlyFailed: Bool
     /// Trashed meetings answer too.
     public var includesTrash: Bool
     public var scope: MeetingSearchScope
@@ -103,6 +146,10 @@ public struct MeetingSearchQuery: Hashable, Sendable {
         terms: [Term] = [],
         speaker: Speaker? = nil,
         dates: MeetingSearchDates? = nil,
+        app: String? = nil,
+        duration: MeetingSearchDuration? = nil,
+        requiresSummary: Bool = false,
+        onlyFailed: Bool = false,
         includesTrash: Bool = false,
         scope: MeetingSearchScope = .all,
         findText: String? = nil
@@ -110,6 +157,10 @@ public struct MeetingSearchQuery: Hashable, Sendable {
         self.terms = terms
         self.speaker = speaker
         self.dates = dates
+        self.app = app
+        self.duration = duration
+        self.requiresSummary = requiresSummary
+        self.onlyFailed = onlyFailed
         self.includesTrash = includesTrash
         self.scope = scope
         self.findText = findText
@@ -120,13 +171,33 @@ public struct MeetingSearchQuery: Hashable, Sendable {
         var filters: [MeetingSearchFilter] = []
         if let speaker { filters.append(.speaker(speaker)) }
         if let dates { filters.append(.dates(dates)) }
+        if let app { filters.append(.app(app)) }
+        if let duration { filters.append(.duration(duration)) }
+        if requiresSummary { filters.append(.hasSummary) }
+        if onlyFailed { filters.append(.failed) }
         if includesTrash { filters.append(.trash) }
         return filters
     }
 
     /// Nothing typed asks for anything.
     public var isEmpty: Bool {
-        terms.isEmpty && speaker == nil && dates == nil && !includesTrash
+        terms.isEmpty && filters.isEmpty
+    }
+
+    /// Whether a meeting passes the filters that read its header alone —
+    /// everything but who said what, which is the transcript's.
+    public func admits(_ meta: MeetingMeta) -> Bool {
+        guard !meta.isTrashed || includesTrash else { return false }
+        if let dates, !dates.contains(meta.startedAt) { return false }
+        if let app {
+            guard let scope = meta.captureScope, scope.kind == CaptureScopeRecord.appKind, let name = scope.appName,
+                SearchText.fold(name).contains(SearchText.fold(app))
+            else { return false }
+        }
+        if let duration, !duration.admits(meta.duration) { return false }
+        if requiresSummary, !meta.hasSummary { return false }
+        if onlyFailed, meta.transcriptProvenance?.source != .terminalFailure { return false }
+        return true
     }
 
     // MARK: - Parsing
@@ -141,8 +212,15 @@ public struct MeetingSearchQuery: Hashable, Sendable {
     ) -> MeetingSearchQuery {
         var query = MeetingSearchQuery(scope: scope)
         var typed: [String] = []
+        // `app:` with nothing after the colon takes the quoted name that
+        // follows it: `app:"google meet"`.
+        var appAwaitsName = false
         for piece in pieces(of: text) {
             switch piece {
+            case .quoted(let phrase) where appAwaitsName:
+                appAwaitsName = false
+                let name = phrase.trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty { query.app = name }
             case .quoted(let phrase):
                 let words = SearchText.words(in: phrase)
                 guard let first = words.first else { continue }
@@ -151,8 +229,22 @@ public struct MeetingSearchQuery: Hashable, Sendable {
             case .bare(let raw):
                 let folded = SearchText.fold(raw)
                 var rest = Substring(raw)
+                appAwaitsName = false
                 if folded == "in:trash" {
                     query.includesTrash = true
+                    continue
+                } else if folded == "has:summary" {
+                    query.requiresSummary = true
+                    continue
+                } else if folded == "is:failed" {
+                    query.onlyFailed = true
+                    continue
+                } else if folded.hasPrefix("app:") {
+                    let name = String(raw.dropFirst(4))
+                    if name.isEmpty { appAwaitsName = true } else { query.app = name }
+                    continue
+                } else if let duration = duration(named: folded) {
+                    query.duration = duration
                     continue
                 } else if let (speaker, prefix) = speakerPrefix(of: folded) {
                     query.speaker = speaker
@@ -212,6 +304,34 @@ public struct MeetingSearchQuery: Hashable, Sendable {
             return (speaker, prefix.count)
         }
         return nil
+    }
+
+    // MARK: - How long
+
+    /// `>30m`, `<15min`, `>1h`, `>1.5h`: longer or shorter than that many
+    /// minutes or hours.
+    static func duration(named word: String) -> MeetingSearchDuration? {
+        guard let sign = word.first, sign == ">" || sign == "<" else { return nil }
+        var amount = word.dropFirst()
+        let unit: (seconds: TimeInterval, label: String)
+        if amount.hasSuffix("min") {
+            amount = amount.dropLast(3)
+            unit = (60, "min")
+        } else if amount.hasSuffix("m") {
+            amount = amount.dropLast()
+            unit = (60, "min")
+        } else if amount.hasSuffix("h") {
+            amount = amount.dropLast()
+            unit = (3600, "h")
+        } else {
+            return nil
+        }
+        guard !amount.isEmpty, amount.allSatisfy({ ($0.isASCII && $0.isNumber) || $0 == "." }),
+            let value = Double(amount), value > 0
+        else { return nil }
+        return MeetingSearchDuration(
+            bound: sign == ">" ? .longer : .shorter, seconds: value * unit.seconds,
+            label: "\(sign) \(amount) \(unit.label)")
     }
 
     // MARK: - Dates by name
