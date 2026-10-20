@@ -139,6 +139,21 @@ public nonisolated enum EchoColor {
     /// draws, the breadcrumb slash's.
     public static let placeholderGlyph = breadcrumbSlash
 
+    /// The edge of a control button inside a list row whose own fill is the
+    /// button's: a step darker than the inert edge, so the button still reads
+    /// as one on a selected row (product owner, 2026-10-20). The breadcrumb
+    /// slash's ink, not a new value.
+    public static let controlEdgeInRow = breadcrumbSlash
+
+    /// The words of an action that removes something for good — Delete,
+    /// Empty Trash — and of a trashed meeting's last days: the red the Trash
+    /// artboard writes them in.
+    public static let destructiveText = recording
+
+    /// The glyph above a screen that failed: the warning of a pass that did
+    /// not finish, in the red the empty-states artboard draws it.
+    public static let failureGlyph = recording
+
     /// Others' share of the transcript's speaker split, beside You's accent:
     /// the same ink as the breadcrumb slash, as the transcript artboard draws
     /// it.

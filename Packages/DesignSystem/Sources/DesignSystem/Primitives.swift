@@ -34,6 +34,21 @@ public struct EchoButtonStyle: ButtonStyle {
         case controlProminent
         /// The welcome screen's Start using Echo: the primary, larger.
         case prominent
+        /// A row's action that removes something for good — Trash's Delete
+        /// and Empty Trash: the control button outlined in the failure's edge,
+        /// its words in the destructive red, and no fill (product owner,
+        /// 2026-10-20).
+        case controlDestructive
+        /// A row's action inside a list row — Trash's Restore. Selected, the
+        /// row takes the control's own raised fill, so the button keeps that
+        /// fill and draws a darker edge to still read as a button (product
+        /// owner, 2026-10-20: a white button on the selected row was too
+        /// abrupt a change).
+        case controlInRow
+        /// A quiet button that removes something for good — a trashed
+        /// meeting's Delete in the breadcrumb bar: the quiet button in the
+        /// destructive red.
+        case quietDestructive
     }
 
     private let role: Role
@@ -51,18 +66,28 @@ public struct EchoButtonStyle: ButtonStyle {
     ///
     /// The design draws one held-back button — the welcome screen's Start
     /// using Echo, greyed until the setup is done, with the reason beside it —
-    /// and the title bar's New recording takes the same look. A held-back
-    /// primary or prominent keeps its shape and size and trades the inverted
-    /// fill for a raised grey one with an inert edge, so neither screen
-    /// changes its layout while it explains why. The other roles have no
-    /// drawn held-back look and keep the one they have.
+    /// and the title bar's New recording takes the same look, as does the
+    /// empty library's. A held-back button keeps its shape and size and is
+    /// drawn on a raised grey fill with an inert edge and the quaternary
+    /// label, so no screen changes its layout while it explains why. The
+    /// control button already wears that fill and edge, and held back — the
+    /// Re-transcribe of a meeting whose audio is gone, with its reason —
+    /// only its label greys. The other roles have no decided held-back look
+    /// and keep the one they have.
     private struct Drawn: View {
         let configuration: Configuration
         let role: Role
 
         @Environment(\.isEnabled) private var isEnabled
 
-        private var isHeldBack: Bool { (role == .primary || role == .prominent) && !isEnabled }
+        private var isHeldBack: Bool {
+            switch role {
+            case .primary, .prominent, .controlProminent, .control: return !isEnabled
+            case .secondary, .quiet, .quietIcon, .quietDestructive, .destructive, .controlDestructive,
+                .controlInRow:
+                return false
+            }
+        }
 
         var body: some View {
             configuration.label
@@ -89,14 +114,17 @@ public struct EchoButtonStyle: ButtonStyle {
             switch role {
             case .primary, .controlProminent: return EchoFont.primaryButton
             case .prominent: return EchoFont.prominentButton
-            case .secondary, .quiet, .quietIcon, .destructive, .control: return EchoFont.control
+            case .secondary, .quiet, .quietIcon, .quietDestructive, .destructive, .control, .controlDestructive,
+                .controlInRow:
+                return EchoFont.control
             }
         }
 
         private var height: CGFloat {
             switch role {
-            case .quiet, .quietIcon: return EchoLayout.toolbarButtonHeight
-            case .control, .controlProminent: return EchoControl.controlButtonHeight
+            case .quiet, .quietIcon, .quietDestructive: return EchoLayout.toolbarButtonHeight
+            case .control, .controlProminent, .controlDestructive, .controlInRow:
+                return EchoControl.controlButtonHeight
             case .prominent: return EchoControl.prominentButtonHeight
             case .primary, .secondary, .destructive: return EchoControl.primaryButtonHeight
             }
@@ -104,9 +132,10 @@ public struct EchoButtonStyle: ButtonStyle {
 
         private var inset: CGFloat {
             switch role {
-            case .quiet: return EchoControl.toolbarButtonInset
+            case .quiet, .quietDestructive: return EchoControl.toolbarButtonInset
             case .quietIcon: return 0
-            case .control, .controlProminent: return EchoControl.controlButtonInset
+            case .control, .controlProminent, .controlDestructive, .controlInRow:
+                return EchoControl.controlButtonInset
             case .prominent: return EchoControl.prominentButtonInset
             case .primary, .secondary, .destructive: return EchoControl.primaryButtonInset
             }
@@ -114,7 +143,9 @@ public struct EchoButtonStyle: ButtonStyle {
 
         private var radius: CGFloat {
             switch role {
-            case .quiet, .quietIcon, .control, .controlProminent: return EchoRadius.row
+            case .quiet, .quietIcon, .quietDestructive, .control, .controlProminent, .controlDestructive,
+                .controlInRow:
+                return EchoRadius.row
             case .primary, .secondary, .destructive, .prominent: return EchoRadius.control
             }
         }
@@ -124,7 +155,10 @@ public struct EchoButtonStyle: ButtonStyle {
             switch role {
             case .secondary: return EchoColor.border
             case .control: return EchoColor.inertBorder
-            case .primary, .quiet, .quietIcon, .destructive, .controlProminent, .prominent: return nil
+            case .controlInRow: return EchoColor.controlEdgeInRow
+            case .controlDestructive: return EchoColor.failureEdge
+            case .primary, .quiet, .quietIcon, .quietDestructive, .destructive, .controlProminent, .prominent:
+                return nil
             }
         }
 
@@ -138,7 +172,8 @@ public struct EchoButtonStyle: ButtonStyle {
             case .secondary: return EchoColor.textPrimary
             case .quiet, .quietIcon: return EchoColor.textSecondary
             case .destructive: return EchoColor.danger
-            case .control: return EchoColor.textValue
+            case .control, .controlInRow: return EchoColor.textValue
+            case .controlDestructive, .quietDestructive: return EchoColor.destructiveText
             }
         }
 
@@ -148,8 +183,8 @@ public struct EchoButtonStyle: ButtonStyle {
             // Not the accent. The accent marks selection and links; a button
             // that wore it would be the loudest thing on a grey screen.
             case .primary, .controlProminent, .prominent: return EchoColor.textPrimary.opacity(pressed ? 0.85 : 1)
-            case .secondary, .control: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
-            case .quiet, .quietIcon: return pressed ? EchoColor.hover : .clear
+            case .secondary, .control, .controlInRow: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
+            case .quiet, .quietIcon, .quietDestructive, .controlDestructive: return pressed ? EchoColor.hover : .clear
             case .destructive: return EchoColor.danger.opacity(pressed ? 0.16 : 0.1)
             }
         }
@@ -164,6 +199,9 @@ extension ButtonStyle where Self == EchoButtonStyle {
     public static var echoDestructive: EchoButtonStyle { EchoButtonStyle(.destructive) }
     public static var echoControl: EchoButtonStyle { EchoButtonStyle(.control) }
     public static var echoControlProminent: EchoButtonStyle { EchoButtonStyle(.controlProminent) }
+    public static var echoControlDestructive: EchoButtonStyle { EchoButtonStyle(.controlDestructive) }
+    public static var echoControlInRow: EchoButtonStyle { EchoButtonStyle(.controlInRow) }
+    public static var echoQuietDestructive: EchoButtonStyle { EchoButtonStyle(.quietDestructive) }
     public static var echoProminent: EchoButtonStyle { EchoButtonStyle(.prominent) }
 }
 
@@ -343,45 +381,61 @@ public struct TabStrip<Tab: Hashable>: View {
 
 // MARK: - Empty state
 
-/// The screen when there is nothing to show: an icon, a title, a line of copy,
-/// and optionally one action.
-public struct EmptyState<Action: View>: View {
-    private let symbol: String
+/// A screen with nothing to show, as the empty-states artboard draws it: the
+/// glyph for why, what happened, a sentence, and the one action that gets the
+/// user out of it — a dead end with no button is a bug, not a state. Only
+/// an empty Trash has nothing to offer, and it takes no actions.
+///
+/// Bare and centred in whatever holds it (product owner, 2026-10-20): the
+/// artboard's cards are the frames of its sheet, not part of the state.
+public struct EmptyState<Actions: View>: View {
+    private let glyph: EmptyGlyph
     private let title: String
     private let message: String
-    private let action: Action
+    private let actions: Actions
 
-    public init(symbol: String, title: String, message: String, @ViewBuilder action: () -> Action) {
-        self.symbol = symbol
+    public init(glyph: EmptyGlyph, title: String, message: String, @ViewBuilder actions: () -> Actions) {
+        self.glyph = glyph
         self.title = title
         self.message = message
-        self.action = action()
+        self.actions = actions()
     }
 
     public var body: some View {
-        VStack(spacing: EchoSpacing.m) {
-            Image(systemName: symbol)
-                .font(.system(size: 34, weight: .light))
-                .foregroundStyle(EchoColor.textTertiary)
+        VStack(spacing: EchoLayout.emptyStateGap) {
+            EmptyGlyphShape(glyph)
+                .stroke(
+                    glyph == .warning ? EchoColor.failureGlyph : EchoColor.placeholderGlyph,
+                    style: StrokeStyle(
+                        lineWidth: EmptyGlyph.lineWidth(at: EchoControl.emptyGlyphSize), lineCap: .round,
+                        lineJoin: .round)
+                )
+                .frame(width: EchoControl.emptyGlyphSize, height: EchoControl.emptyGlyphSize)
+                .accessibilityHidden(true)
             Text(title)
-                .font(EchoFont.sectionTitle)
-                .foregroundStyle(EchoColor.textPrimary)
-            Text(message)
-                .font(EchoFont.body)
-                .foregroundStyle(EchoColor.textSecondary)
+                .font(EchoFont.emptyTitle)
+                .foregroundStyle(EchoColor.textValue)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-            action
-                .padding(.top, EchoSpacing.xs)
+            Text(message)
+                .font(EchoFont.emptyMessage)
+                .lineSpacing(EchoFont.emptyMessageLineSpacing)
+                .foregroundStyle(EchoColor.textTertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: EchoLayout.emptyStateMessageWidth)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: EchoLayout.emptyStateActionGap) {
+                actions
+            }
         }
+        .padding(EchoLayout.emptyStateInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(EchoSpacing.xxl)
+        .accessibilityElement(children: .contain)
     }
 }
 
-extension EmptyState where Action == EmptyView {
-    public init(symbol: String, title: String, message: String) {
-        self.init(symbol: symbol, title: title, message: message) { EmptyView() }
+extension EmptyState where Actions == EmptyView {
+    public init(glyph: EmptyGlyph, title: String, message: String) {
+        self.init(glyph: glyph, title: title, message: message) { EmptyView() }
     }
 }
 

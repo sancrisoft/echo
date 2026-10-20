@@ -2,13 +2,15 @@
 //  SettingsScreen.swift
 //  Workspace
 //
-//  The settings that exist for the library: launch at login, the island,
-//  recordings, summaries, updates, storage. Sections for call detection and models arrive
-//  with the packages that own them. Launch at login reads `SMAppService`, the
+//  The settings that exist for the library: launch at login, the island, call
+//  detection and the apps it ignores, recordings, summaries, updates, storage.
+//  The models have the panel above the meetings, not a section here. Launch at
+//  login reads `SMAppService`, the
 //  OS's own answer, and is never mirrored into `settings.json`: the user can
 //  change login items in System Settings behind our back.
 //
 
+import CallDetection
 import DesignSystem
 import EchoCore
 import Meetings
@@ -45,6 +47,7 @@ struct SettingsScreen: View {
             Divider()
             Form {
                 general
+                callDetection
                 recordings
                 summaries
                 updatesSection
@@ -100,6 +103,36 @@ struct SettingsScreen: View {
         }
     }
 
+    /// Ported from v1: the switch, then one row per app detection can name —
+    /// the curated table and every browser installed on this Mac, since calls
+    /// like Google Meet run in one. Greyed, never hidden, while the switch is
+    /// off. The second tier, every app that declares microphone use, is a
+    /// later feature (product owner, 2026-10-02).
+    private var callDetection: some View {
+        Section {
+            Toggle(
+                "Suggest recording when a call starts",
+                isOn: Binding(get: { settings.callDetectionEnabled }, set: { settings.setCallDetection(enabled: $0) })
+            )
+            ForEach(CallAppCatalog.detectableDisplayNames(browsers: BrowserCatalog.installed()), id: \.self) { name in
+                Toggle(
+                    name,
+                    isOn: Binding(
+                        get: { !settings.disabledCallApps.contains(name) },
+                        set: { settings.setCallApp(name, enabled: $0) })
+                )
+                .toggleStyle(.checkbox)
+                .disabled(!settings.callDetectionEnabled)
+            }
+        } header: {
+            Text("Call Detection")
+        } footer: {
+            Text(
+                "Echo watches these apps for microphone use and offers to record. Every browser you have installed is listed, because calls like Google Meet run in them."
+            )
+        }
+    }
+
     private var recordings: some View {
         Section {
             Toggle(
@@ -113,7 +146,7 @@ struct SettingsScreen: View {
                 Text(recordingsSummary)
                     .foregroundStyle(EchoColor.textSecondary)
                 Spacer()
-                Button("Delete All Saved Recordings…") { confirmDeleteRecordings = true }
+                Button("Delete All Saved Recordings") { confirmDeleteRecordings = true }
                     .buttonStyle(.echoDestructive)
                     .disabled((library.storage?.recordingsCount ?? 0) == 0)
             }
@@ -217,7 +250,7 @@ struct SettingsScreen: View {
             storageRow("Trash", library.storage?.trashBytes)
             storageRow("AI models", library.storage?.modelsBytes)
             HStack {
-                Button("Empty Trash…") { confirmEmptyTrash = true }
+                Button("Empty Trash") { confirmEmptyTrash = true }
                     .buttonStyle(.echoDestructive)
                     .disabled(library.trashedMetas.isEmpty)
                 Button("Reveal Data Folder in Finder") { MeetingActions.revealInFinder(dataRoot.url) }

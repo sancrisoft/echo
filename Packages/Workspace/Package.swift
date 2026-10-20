@@ -9,6 +9,8 @@ import PackageDescription
 // Settings › Updates is why it sees Updates and Recording: the section renders
 // `UpdateChecker`'s answer, and Update Now is disabled while a session is live
 // because updating quits Echo and mid-meeting that is a lost meeting.
+// Settings › Call Detection is why it sees CallDetection: the section lists
+// every app detection can name, the installed browsers among them.
 let package = Package(
     name: "Workspace",
     platforms: [.macOS("15.6")],
@@ -20,6 +22,7 @@ let package = Package(
         .package(path: "../Meetings"),
         .package(path: "../Recording"),
         .package(path: "../Updates"),
+        .package(path: "../CallDetection"),
         .package(path: "../DesignSystem"),
     ],
     targets: [
@@ -30,6 +33,7 @@ let package = Package(
                 .product(name: "Meetings", package: "Meetings"),
                 .product(name: "Recording", package: "Recording"),
                 .product(name: "Updates", package: "Updates"),
+                .product(name: "CallDetection", package: "CallDetection"),
                 .product(name: "DesignSystem", package: "DesignSystem"),
             ],
             swiftSettings: [

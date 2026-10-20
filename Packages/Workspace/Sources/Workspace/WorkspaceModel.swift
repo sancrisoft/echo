@@ -48,6 +48,11 @@ public final class WorkspaceModel {
     /// The meeting selected in Trash, independent of the library selection.
     public var selectedTrashedID: UUID?
 
+    /// The trashed meeting whose document Trash shows in place of its list,
+    /// opened with Return; `nil` shows the list. Looking never takes a
+    /// meeting out of Trash (product owner, 2026-10-20).
+    public private(set) var openedTrashedID: UUID?
+
     /// Summary first: it is what the user opens a meeting for.
     public var documentTab: DocumentTab = .summary
 
@@ -139,9 +144,43 @@ public final class WorkspaceModel {
         selectedMeetingID = metas.max { $0.startedAt < $1.startedAt }?.id
     }
 
-    /// Drops the trash selection when its row is gone.
+    /// Drops the trash selection when its row is gone, and closes its
+    /// document with it.
     public func reconcileTrashSelection(with trashed: [MeetingMeta]) {
         selectedTrashedID = MeetingListSelection.reconcile(selectedTrashedID, with: trashed.map(\.id))
+        openedTrashedID = MeetingListSelection.reconcile(openedTrashedID, with: trashed.map(\.id))
+    }
+
+    // MARK: - Trash
+
+    /// Shows Trash's list, whatever was open in it.
+    public func showTrash() {
+        section = .trash
+        openedTrashedID = nil
+    }
+
+    /// Shows a trashed meeting's document without taking it out of Trash.
+    public func openTrashed(_ id: UUID) {
+        section = .trash
+        selectedTrashedID = id
+        openedTrashedID = id
+    }
+
+    /// Back from a trashed meeting's document to the list, on the same row.
+    public func closeTrashed() {
+        openedTrashedID = nil
+    }
+
+    /// Moves the trash selection with the keyboard. Returns `false` when
+    /// there was nowhere to go, so the key can fall through.
+    @discardableResult
+    public func moveTrashSelection(_ move: MeetingListSelection.Move, in trashed: [MeetingMeta]) -> Bool {
+        guard
+            let destination = MeetingListSelection.destination(
+                from: selectedTrashedID, move: move, in: trashed.map(\.id))
+        else { return false }
+        selectedTrashedID = destination
+        return true
     }
 
     // MARK: - The live session

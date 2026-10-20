@@ -32,6 +32,8 @@ struct MeetingSidebar: View {
     @State private var hovered: SidebarHover?
     @State private var contextClicks = RowContextClickWatcher()
     @State private var renameTarget: MeetingMeta?
+    @State private var retranscribeTarget: MeetingMeta?
+    @State private var deleteRecordingTarget: MeetingMeta?
 
     /// Which row the pointer is over. One value for the whole column, because
     /// the pointer is only ever over one row.
@@ -65,6 +67,7 @@ struct MeetingSidebar: View {
         }
         .onDisappear { contextClicks.stop() }
         .renameMeetingAlert($renameTarget)
+        .savedRecordingDialogs(retranscribe: $retranscribeTarget, deleteRecording: $deleteRecordingTarget)
     }
 
     // MARK: The app
@@ -219,19 +222,20 @@ struct MeetingSidebar: View {
     @ViewBuilder
     private var list: some View {
         if library.metas.isEmpty {
-            Spacer()
-            Text("No meetings yet")
-                .font(EchoFont.row)
-                .foregroundStyle(EchoColor.textTertiary)
+            // The document says so, with the one action out of it; the list
+            // saying it too would be the same sentence twice.
             Spacer()
         } else if workspace.searchHidesEverything(in: library.metas) {
-            Spacer()
-            Text("No results for “\(workspace.searchText)”")
-                .font(EchoFont.row)
-                .foregroundStyle(EchoColor.textTertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, EchoLayout.sidebarRowInset)
-            Spacer()
+            // In the list's place, where the rows were (product owner,
+            // 2026-10-20); the document keeps the meeting being read. It says
+            // what search reads, because it does not read transcripts.
+            EmptyState(
+                glyph: .magnifier, title: "No meeting matches “\(workspace.searchText)”",
+                message: "Search reads titles, one-line descriptions and dates — not the body of the transcript."
+            ) {
+                Button("Clear search") { workspace.searchText = "" }
+                    .buttonStyle(.echoControl)
+            }
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -296,8 +300,8 @@ struct MeetingSidebar: View {
         Button("Open Summary") { workspace.open(meta.id, tab: .summary) }
         Button("Open Transcript") { workspace.open(meta.id, tab: .transcript) }
         Divider()
-        Button("Rename…") { renameTarget = meta }
-        Menu("Export…") {
+        Button("Rename") { renameTarget = meta }
+        Menu("Export") {
             ForEach(MeetingExportFormat.allCases) { format in
                 Button(format.menuTitle) {
                     Task {
@@ -318,6 +322,8 @@ struct MeetingSidebar: View {
         .disabled(!meta.hasSummary)
         Button("Reveal in Finder") { MeetingActions.revealInFinder(library.directory(for: meta.id)) }
         Divider()
+        SavedRecordingMenuItems(meta: meta, retranscribe: $retranscribeTarget, deleteRecording: $deleteRecordingTarget)
+        if library.keepsRecording(meta.id) { Divider() }
         Button("Move to Trash", role: .destructive) { trash(meta.id) }
     }
 
@@ -356,7 +362,7 @@ struct MeetingSidebar: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                workspace.section = .trash
+                workspace.showTrash()
             } label: {
                 HStack(spacing: EchoSpacing.s) {
                     Image(systemName: "trash")

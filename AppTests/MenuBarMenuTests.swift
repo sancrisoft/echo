@@ -101,7 +101,7 @@ struct MenuBarMenuTests {
         for entries in [[], [IslandMenuEntry(title: "Record", kind: .action({}))]] {
             let titles = menu(entries).items.filter { !$0.isSeparatorItem }.map(\.title)
             #expect(titles.contains("Open Echo"))
-            #expect(titles.contains("Settings…"))
+            #expect(titles.contains("Settings"))
             #expect(titles.last == "Quit Echo")
         }
     }

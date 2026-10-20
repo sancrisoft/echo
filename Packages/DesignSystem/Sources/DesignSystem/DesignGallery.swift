@@ -188,15 +188,36 @@ import SwiftUI
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(EchoColor.Island.shell, in: .rect(cornerRadius: EchoRadius.window))
 
-                Text("Empty state").font(EchoFont.sectionTitle)
-                EmptyState(
-                    symbol: "waveform",
-                    title: "No meetings yet",
-                    message: "Record a call and it will show up here with its transcript and notes."
-                ) {
-                    Button("New recording") {}.buttonStyle(.echoPrimary)
+                Text("Empty states").font(EchoFont.sectionTitle)
+                HStack(spacing: EchoSpacing.l) {
+                    EmptyState(
+                        glyph: .waveform, title: "No meetings yet",
+                        message: "Start one from the island in the notch, or right here."
+                    ) {
+                        Button("New recording") {}.buttonStyle(.echoControlProminent)
+                    }
+                    EmptyState(
+                        glyph: .warning, title: "Transcription failed",
+                        message: "The audio survived, so the pass can run again from the start."
+                    ) {
+                        Button("Re-transcribe") {}.buttonStyle(.echoControlProminent)
+                        Button("Show details") {}.buttonStyle(.echoControl)
+                    }
+                    EmptyState(glyph: .trash, title: "Trash is empty", message: "Nothing to show, nothing to do.")
                 }
                 .frame(height: 260)
+                HStack(spacing: EchoSpacing.xl) {
+                    ForEach(EmptyGlyph.allCases, id: \.self) { glyph in
+                        EmptyGlyphShape(glyph)
+                            .stroke(
+                                EchoColor.textTertiary,
+                                style: StrokeStyle(
+                                    lineWidth: EmptyGlyph.lineWidth(at: EchoControl.emptyGlyphSize), lineCap: .round,
+                                    lineJoin: .round)
+                            )
+                            .frame(width: EchoControl.emptyGlyphSize, height: EchoControl.emptyGlyphSize)
+                    }
+                }
             }
             .padding(EchoSpacing.xl)
             // In the app the composition root registers the typefaces at

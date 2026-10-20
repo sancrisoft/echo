@@ -218,6 +218,15 @@ struct PrimitiveTests {
             size(of: Button("Allow") {}.buttonStyle(.echoControlProminent)).height
                 == EchoControl.controlButtonHeight)
         #expect(
+            size(of: Button("Delete") {}.buttonStyle(.echoControlDestructive)).height
+                == EchoControl.controlButtonHeight)
+        #expect(
+            size(of: Button("Restore") {}.buttonStyle(.echoControlInRow)).height
+                == EchoControl.controlButtonHeight)
+        #expect(
+            size(of: Button("Delete") {}.buttonStyle(.echoQuietDestructive)).height
+                == EchoLayout.toolbarButtonHeight)
+        #expect(
             size(of: Button("Start using Echo") {}.buttonStyle(.echoProminent)).height
                 == EchoControl.prominentButtonHeight)
     }
@@ -231,6 +240,62 @@ struct PrimitiveTests {
             let off = try image(of: heldBack.background(EchoColor.windowBackground).environment(\.colorScheme, scheme))
             #expect(on.width == off.width && on.height == off.height)
             #expect(on.dataProvider?.data != off.dataProvider?.data, "held back looks enabled in \(scheme)")
+        }
+    }
+
+    @Test("every empty-state glyph draws something, and no two draw the same")
+    func emptyGlyphs() throws {
+        var seen: [Data] = []
+        for glyph in EmptyGlyph.allCases {
+            let drawn = EmptyGlyphShape(glyph)
+                .stroke(Color.black, lineWidth: EmptyGlyph.lineWidth(at: EchoControl.emptyGlyphSize))
+                .frame(width: EchoControl.emptyGlyphSize, height: EchoControl.emptyGlyphSize)
+            let data = try #require(image(of: drawn).dataProvider?.data as Data?)
+            #expect(!seen.contains(data), "\(glyph) draws the same as another glyph")
+            seen.append(data)
+        }
+    }
+
+    @Test("in a list row a control button keeps its shape and fill, and draws a darker edge")
+    func controlInRow() throws {
+        let plain = try image(of: Button("Restore") {}.buttonStyle(.echoControl).background(EchoColor.surfaceRaised))
+        let lifted = try image(
+            of: Button("Restore") {}.buttonStyle(.echoControlInRow).background(EchoColor.surfaceRaised))
+        #expect(plain.width == lifted.width && plain.height == lifted.height)
+        #expect(plain.dataProvider?.data != lifted.dataProvider?.data)
+    }
+
+    @Test("a Trash row's buttons, selected and hovered, for the eye, in both appearances")
+    func selectedRowButtonsForTheEye() throws {
+        EchoFont.registerBundledTypefaces()
+        for (appearance, scheme) in [("light", ColorScheme.light), ("dark", .dark)] {
+            func row(_ fill: Color) -> some View {
+                HStack(spacing: EchoControl.listRowActionGap) {
+                    Button("Restore") {}.buttonStyle(.echoControlInRow)
+                    Button("Delete") {}.buttonStyle(.echoControlDestructive)
+                }
+                .padding(EchoSpacing.l)
+                .background(fill)
+            }
+            // Selected, then hovered: the two rows that show their buttons.
+            let row = VStack(spacing: 0) {
+                row(EchoColor.surfaceRaised)
+                row(EchoColor.surface)
+            }
+            .environment(\.colorScheme, scheme)
+            Attachment.record(try image(of: row), named: "selected-row-buttons-\(appearance).png")
+        }
+    }
+
+    @Test("a control button held back keeps its size and changes its look, inverted or not")
+    func heldBackControls() throws {
+        for style in [EchoButtonStyle(.controlProminent), .init(.control)] {
+            let enabled = Button("Re-transcribe") {}.buttonStyle(style)
+            let heldBack = Button("Re-transcribe") {}.buttonStyle(style).disabled(true)
+            let on = try image(of: enabled.background(EchoColor.windowBackground))
+            let off = try image(of: heldBack.background(EchoColor.windowBackground))
+            #expect(on.width == off.width && on.height == off.height)
+            #expect(on.dataProvider?.data != off.dataProvider?.data)
         }
     }
 
@@ -264,13 +329,13 @@ struct PrimitiveTests {
         }
     }
 
-    @Test("only the primary and the prominent have a held-back look; the other roles keep theirs")
-    func onlyThePrimaryIsDrawnHeldBack() throws {
-        // The design draws one held-back button. A role it has not drawn is
-        // not given a look nobody decided.
-        for style in [
-            EchoButtonStyle(.secondary), .init(.quiet), .init(.destructive), .init(.control), .init(.controlProminent),
-        ] {
+    @Test("only the roles with a decided held-back look change; the others keep theirs")
+    func onlyTheDecidedAreDrawnHeldBack() throws {
+        // The design draws one held-back button. The product owner gave its
+        // look to New recording wherever it is held back — the title bar's and
+        // the empty library's — and to a Re-transcribe that cannot run. A role
+        // nobody decided a look for is not given one.
+        for style in [EchoButtonStyle(.secondary), .init(.quiet), .init(.destructive)] {
             let on = try image(of: Button("Export") {}.buttonStyle(style).background(EchoColor.windowBackground))
             let off = try image(
                 of: Button("Export") {}.buttonStyle(style).disabled(true).background(EchoColor.windowBackground))

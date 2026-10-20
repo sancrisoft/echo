@@ -66,3 +66,99 @@ public nonisolated struct ReadyCheckGlyph: Shape {
         return stroke.strokedPath(StrokeStyle(lineWidth: grid.length(2), lineCap: .round, lineJoin: .round))
     }
 }
+
+/// The glyph above a screen that has nothing to show, one per reason, as the
+/// empty-states artboard draws them on its 24 × 24 grid: the waveform of a
+/// library with nothing recorded (and of a session still being captured), the
+/// magnifier of a search that found nothing, the trash, the lines of a
+/// transcript with no words, the warning of a pass that failed, and the
+/// folder of a meeting whose files are gone.
+public nonisolated enum EmptyGlyph: Sendable, CaseIterable {
+    case waveform
+    case magnifier
+    case trash
+    case lines
+    case warning
+    case missingFolder
+
+    /// The stroke the artboard draws, scaled with the glyph.
+    public static func lineWidth(at size: CGFloat) -> CGFloat { 1.4 * size / 24 }
+}
+
+/// An `EmptyGlyph` as a path to stroke.
+public nonisolated struct EmptyGlyphShape: Shape {
+
+    private let glyph: EmptyGlyph
+
+    public init(_ glyph: EmptyGlyph) {
+        self.glyph = glyph
+    }
+
+    public func path(in rect: CGRect) -> Path {
+        let grid = GlyphGrid(rect: rect, side: 24)
+        var path = Path()
+        func line(_ x1: CGFloat, _ y1: CGFloat, _ x2: CGFloat, _ y2: CGFloat) {
+            path.move(to: grid.point(x1, y1))
+            path.addLine(to: grid.point(x2, y2))
+        }
+        /// A rounded corner at the grid point (x, y), between the current
+        /// point and (nextX, nextY).
+        func corner(_ x: CGFloat, _ y: CGFloat, toward nextX: CGFloat, _ nextY: CGFloat, radius: CGFloat) {
+            path.addArc(
+                tangent1End: grid.point(x, y), tangent2End: grid.point(nextX, nextY), radius: grid.length(radius))
+        }
+
+        switch glyph {
+        case .waveform:
+            for (x, top, bottom) in [(3.0, 11.0, 13.0), (7, 8, 16), (11, 4.5, 19.5), (15, 8, 16), (19, 11, 13)] {
+                line(x, top, x, bottom)
+            }
+
+        case .magnifier:
+            let centre = grid.point(10.8, 10.8)
+            let radius = grid.length(6.6)
+            path.addEllipse(
+                in: CGRect(x: centre.x - radius, y: centre.y - radius, width: 2 * radius, height: 2 * radius))
+            line(15.7, 15.7, 20.7, 20.7)
+
+        case .trash:
+            line(4.6, 6.4, 19.4, 6.4)
+            // The handle.
+            path.move(to: grid.point(9.4, 6.4))
+            corner(9.4, 3.4, toward: 14.6, 3.4, radius: 1.3)
+            corner(14.6, 3.4, toward: 14.6, 6.4, radius: 1.3)
+            path.addLine(to: grid.point(14.6, 6.4))
+            // The can, its sides leaning in to a rounded foot.
+            path.move(to: grid.point(6.6, 6.4))
+            corner(7.593, 20.3, toward: 16.407, 20.3, radius: 1.4)
+            corner(16.407, 20.3, toward: 17.4, 6.4, radius: 1.4)
+            path.addLine(to: grid.point(17.4, 6.4))
+
+        case .lines:
+            line(5, 6.6, 19, 6.6)
+            line(5, 12, 19, 12)
+            line(5, 17.4, 12, 17.4)
+
+        case .warning:
+            path.move(to: grid.point(12, 4.2))
+            path.addLine(to: grid.point(21, 19.2))
+            path.addLine(to: grid.point(3, 19.2))
+            path.closeSubpath()
+            line(12, 10, 12, 14)
+            line(12, 16.6, 12, 16.7)
+
+        case .missingFolder:
+            path.move(to: grid.point(3.2, 6.4))
+            corner(3.2, 5, toward: 8.7, 5, radius: 1.4)
+            path.addLine(to: grid.point(8.7, 5))
+            path.addLine(to: grid.point(10.7, 7.4))
+            corner(19.8, 7.4, toward: 19.8, 19.6, radius: 1.4)
+            corner(19.8, 19.6, toward: 3.2, 19.6, radius: 1.4)
+            corner(3.2, 19.6, toward: 3.2, 5, radius: 1.4)
+            path.closeSubpath()
+            line(9.4, 11.4, 14.6, 16.6)
+            line(14.6, 11.4, 9.4, 16.6)
+        }
+        return path
+    }
+}

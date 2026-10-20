@@ -10,28 +10,48 @@
 //  foot of the pane. On the Transcript tab, find sits to the right of the
 //  tabs (`TranscriptFind`).
 //
+//  A meeting with nothing to read — silent, failed, or unreadable — shows
+//  why in place of the tabs, centred in what is left of the pane
+//  (`MeetingCondition`).
+//
+//  A trashed meeting, opened from Trash to look at, is the same document
+//  under "Trash": its bar says how long until it is removed for good and
+//  offers Restore and Delete instead, and Escape or the trail goes back to
+//  the list. Looking never takes it out of Trash.
+//
 
 import DesignSystem
 import EchoCore
 import Meetings
+import Recording
 import SwiftUI
 
 struct MeetingDocumentView: View {
     @Environment(MeetingLibrary.self) private var library
     @Environment(WorkspaceModel.self) private var workspace
+    @Environment(RecordingSession.self) private var session
 
     let meta: MeetingMeta
+    /// Where Show details points: the folder holding Echo's logs.
+    let dataRoot: DataRoot
 
     @State private var record: MeetingRecord?
     @State private var loadFailed = false
     @State private var copied = false
     @State private var renameTarget: MeetingMeta?
+    @State private var confirmDeleteForGood = false
+    @State private var retranscribeTarget: MeetingMeta?
+    @State private var deleteRecordingTarget: MeetingMeta?
     /// The transcript as turns, derived once per load: find searches them
     /// and the Transcript tab draws them.
     @State private var turns: [TranscriptUtterance] = []
     @State private var findQuery = ""
     @State private var currentMatch: Int?
     @FocusState private var findFocused: Bool
+    /// The audio the meeting still holds, read with the record: whether its
+    /// recording was kept, and whether a failed pass can run again.
+    @State private var keepsRecording = false
+    @State private var canRetry = false
 
     /// Reload when the files behind the document change: a new summary, a
     /// replaced transcript, a rename.
@@ -40,49 +60,75 @@ struct MeetingDocumentView: View {
         let hasSummary: Bool
         let segmentCount: Int
         let title: String
+        let transcriptSource: TranscriptProvenance.Source?
     }
 
     var body: some View {
         // Find is the Transcript tab's: on Summary there is nothing to match.
         let matches = workspace.documentTab == .transcript ? TranscriptFind.matches(of: findQuery, in: turns) : []
         VStack(spacing: 0) {
-            Breadcrumb(trail: "Meetings", current: meta.title) { actions }
-            ScrollViewReader { proxy in
-                ScrollView {
-                    column(matches)
-                        .frame(maxWidth: EchoLayout.readingWidth, alignment: .leading)
-                        .padding(.horizontal, EchoSpacing.xl)
-                        .padding(.top, EchoLayout.readingTopInset)
-                        // Room for the last line to scroll clear of the fade.
-                        .padding(.bottom, EchoLayout.documentFadeHeight)
-                        .frame(maxWidth: .infinity)
+            Breadcrumb(
+                trail: meta.isTrashed ? "Trash" : "Meetings", current: meta.title,
+                back: meta.isTrashed ? { workspace.closeTrashed() } : nil
+            ) {
+                if meta.isTrashed { trashedActions } else { actions }
+            }
+            GeometryReader { viewport in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        column(matches)
+                            .frame(maxWidth: EchoLayout.readingWidth, maxHeight: .infinity, alignment: .topLeading)
+                            .padding(.horizontal, EchoSpacing.xl)
+                            .padding(.top, EchoLayout.readingTopInset)
+                            // Room for the last line to scroll clear of the fade.
+                            .padding(.bottom, EchoLayout.documentFadeHeight)
+                            // At least the pane's height, so a face with nothing
+                            // to read centres in what the header leaves.
+                            .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .top)
+                    }
+                    .overlay(alignment: .bottom) { DocumentFade() }
+                    // A new query lands on its first match; ⌘G and Return move
+                    // on from there. Either way the turn holding the match comes
+                    // into view.
+                    .onChange(of: findQuery) { _, _ in
+                        currentMatch = matches.isEmpty ? nil : 0
+                        reveal(currentMatch, in: matches, proxy)
+                    }
+                    .onChange(of: currentMatch) { _, index in reveal(index, in: matches, proxy) }
                 }
-                .overlay(alignment: .bottom) { DocumentFade() }
-                // A new query lands on its first match; ⌘G and Return move
-                // on from there. Either way the turn holding the match comes
-                // into view.
-                .onChange(of: findQuery) { _, _ in
-                    currentMatch = matches.isEmpty ? nil : 0
-                    reveal(currentMatch, in: matches, proxy)
-                }
-                .onChange(of: currentMatch) { _, index in reveal(index, in: matches, proxy) }
             }
         }
         .background { findShortcuts(matches) }
         .renameMeetingAlert($renameTarget)
+        .savedRecordingDialogs(retranscribe: $retranscribeTarget, deleteRecording: $deleteRecordingTarget)
+        .confirmationDialog(
+            "Delete “\(meta.title)” permanently?", isPresented: $confirmDeleteForGood, titleVisibility: .visible
+        ) {
+            Button("Delete Permanently", role: .destructive) {
+                let id = meta.id
+                workspace.closeTrashed()
+                Task { await library.deletePermanently(id) }
+            }
+        } message: {
+            Text("Its transcript, notes and any saved recording are removed from this Mac. This cannot be undone.")
+        }
         .onChange(of: workspace.documentTab) { _, _ in copied = false }
         .task(
-            id: ReloadKey(id: meta.id, hasSummary: meta.hasSummary, segmentCount: meta.segmentCount, title: meta.title)
+            id: ReloadKey(
+                id: meta.id, hasSummary: meta.hasSummary, segmentCount: meta.segmentCount, title: meta.title,
+                transcriptSource: meta.transcriptProvenance?.source)
         ) {
-            loadFailed = false
-            if let loaded = await library.loadRecord(meta.id) {
-                record = loaded
-                turns = TranscriptUtterance.derive(from: loaded.segments)
-            } else {
-                record = nil
-                turns = []
-                loadFailed = true
-            }
+            // Every answer first, then the state, in one go: a record shown
+            // before its audio is known reads as a meeting whose recording
+            // was not kept, Re-transcribe held back, until the answer lands.
+            let loaded = await library.loadRecord(meta.id)
+            let keeps = await library.hasPreservedAudio(for: meta.id)
+            let retry = await library.canRetryTranscription(meta.id)
+            record = loaded
+            turns = loaded.map { TranscriptUtterance.derive(from: $0.segments) } ?? []
+            loadFailed = loaded == nil
+            keepsRecording = keeps
+            canRetry = retry
         }
     }
 
@@ -121,9 +167,12 @@ struct MeetingDocumentView: View {
             // (product owner, 2026-10-20): the artboard draws the button and
             // not what it opens.
             Menu {
-                Button("Rename…") { renameTarget = meta }
+                Button("Rename") { renameTarget = meta }
                 Button("Reveal in Finder") { MeetingActions.revealInFinder(library.directory(for: meta.id)) }
                 Divider()
+                SavedRecordingMenuItems(
+                    meta: meta, retranscribe: $retranscribeTarget, deleteRecording: $deleteRecordingTarget)
+                if library.keepsRecording(meta.id) { Divider() }
                 Button("Move to Trash", role: .destructive) { trash() }
             } label: {
                 Image(systemName: "ellipsis")
@@ -133,6 +182,45 @@ struct MeetingDocumentView: View {
             .buttonStyle(.echoQuietIcon)
             .menuIndicator(.hidden)
             .accessibilityLabel("More")
+        }
+    }
+
+    /// What a trashed meeting's bar offers in place of Copy, Export and the
+    /// "…" (product owner, 2026-10-20): how long until it is removed for
+    /// good, in the list's words and red in its last days, then Restore, and
+    /// Delete in red because it cannot be undone. Escape goes back to
+    /// Trash's list, unless it is clearing a find first.
+    private var trashedActions: some View {
+        HStack(spacing: EchoControl.toolbarButtonGap) {
+            if let trashedAt = meta.trashedAt {
+                let days = TrashRow.daysLeft(trashedAt: trashedAt)
+                Text(TrashRow.daysLeftText(days))
+                    .font(EchoFont.rowCaption)
+                    .foregroundStyle(TrashRow.isExpiring(days) ? EchoColor.destructiveText : EchoColor.textQuaternary)
+                    .padding(.trailing, EchoControl.toolbarButtonInset)
+            }
+            Button("Restore") {
+                let id = meta.id
+                workspace.closeTrashed()
+                Task { await library.restore(id) }
+            }
+            .buttonStyle(.echoQuiet)
+            Button("Delete") { confirmDeleteForGood = true }
+                .buttonStyle(.echoQuietDestructive)
+        }
+        .background {
+            Button("") {
+                if findFocused || !findQuery.isEmpty {
+                    findQuery = ""
+                    findFocused = false
+                } else {
+                    workspace.closeTrashed()
+                }
+            }
+            .keyboardShortcut(.cancelAction)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
         }
     }
 
@@ -166,6 +254,18 @@ struct MeetingDocumentView: View {
 
     private var status: MeetingStatus { MeetingStatus.resolve(meta) }
 
+    private var condition: MeetingCondition {
+        MeetingCondition.resolve(
+            meta, loadFailed: loadFailed, segmentCount: record?.segments.count, keepsRecording: keepsRecording,
+            canRetry: canRetry)
+    }
+
+    /// A pass for this meeting is queued or running: asking again would only
+    /// queue it twice.
+    private var isBeingTranscribed: Bool {
+        session.queuedMeetingIDs.contains(meta.id) || session.phase.meetingID == meta.id
+    }
+
     /// Each tab has its own facts under the title.
     private var properties: [MeetingProperty] {
         switch workspace.documentTab {
@@ -194,15 +294,19 @@ struct MeetingDocumentView: View {
                 .padding(.top, EchoLayout.documentDividerTop)
                 .padding(.bottom, EchoLayout.documentDividerBottom)
 
-            HStack(spacing: EchoSpacing.m) {
-                tabs
-                Spacer(minLength: 0)
-                if workspace.documentTab == .transcript, !turns.isEmpty {
-                    findField(matches)
+            if condition == .readable {
+                HStack(spacing: EchoSpacing.m) {
+                    tabs
+                    Spacer(minLength: 0)
+                    if workspace.documentTab == .transcript, !turns.isEmpty {
+                        findField(matches)
+                    }
                 }
-            }
 
-            content(matches)
+                content(matches)
+            } else {
+                conditionFace
+            }
         }
     }
 
@@ -294,20 +398,54 @@ struct MeetingDocumentView: View {
         proxy.scrollTo(matches[index].turn, anchor: .center)
     }
 
+    // MARK: Nothing to read
+
+    /// The meeting-wide faces of the empty-states artboard, each with the one
+    /// action that gets out of it.
+    @ViewBuilder
+    private var conditionFace: some View {
+        switch condition {
+        case .readable:
+            EmptyView()
+        case .silent(let duration, let canRetranscribe):
+            EmptyState(
+                glyph: .lines, title: "Nothing was said",
+                message: MeetingCondition.silentMessage(duration: duration, canRetranscribe: canRetranscribe)
+            ) {
+                Button("Re-transcribe") { Task { await session.retranscribe(meta.id) } }
+                    .buttonStyle(.echoControl)
+                    .disabled(!canRetranscribe || isBeingTranscribed)
+            }
+        case .failed(let canRetry):
+            EmptyState(
+                glyph: .warning, title: "Transcription failed",
+                message: MeetingCondition.failedMessage(canRetry: canRetry)
+            ) {
+                Button("Re-transcribe") { session.retryTranscription(meta.id) }
+                    .buttonStyle(.echoControlProminent)
+                    .disabled(!canRetry || isBeingTranscribed)
+                // No reason is kept per meeting; the log is where one is
+                // (product owner, 2026-10-20).
+                Button("Show details") { MeetingActions.revealLogs(of: dataRoot) }
+                    .buttonStyle(.echoControl)
+            }
+        case .unreadable:
+            EmptyState(
+                glyph: .missingFolder, title: "This meeting can't be opened",
+                message:
+                    "Its files are missing or unreadable. Nothing was uploaded anywhere, so the folder on this Mac is the only copy."
+            ) {
+                Button("Reveal in Finder") { MeetingActions.revealInFinder(library.directory(for: meta.id)) }
+                    .buttonStyle(.echoControl)
+            }
+        }
+    }
+
     // MARK: Content
 
     @ViewBuilder
     private func content(_ matches: [TranscriptMatch]) -> some View {
-        if loadFailed {
-            EmptyState(
-                symbol: "exclamationmark.triangle",
-                title: "This meeting can't be opened",
-                message: "Its files are missing or unreadable. Reveal the folder in Finder to inspect them."
-            ) {
-                Button("Reveal in Finder") { MeetingActions.revealInFinder(library.directory(for: meta.id)) }
-                    .buttonStyle(.echoSecondary)
-            }
-        } else if let record {
+        if let record {
             switch workspace.documentTab {
             case .summary: summary(record).padding(.top, EchoLayout.summaryTopGap)
             case .transcript: transcript(record, matches: matches).padding(.top, EchoLayout.transcriptTopGap)
@@ -321,7 +459,7 @@ struct MeetingDocumentView: View {
             MarkdownView(markdown: markdown)
         } else {
             EmptyState(
-                symbol: "text.badge.checkmark",
+                glyph: .lines,
                 title: "No summary yet",
                 message: status.isTranscriptReadable
                     ? "The transcript is in. Notes are written once the summary model is available."
@@ -334,12 +472,8 @@ struct MeetingDocumentView: View {
     private func transcript(_ record: MeetingRecord, matches: [TranscriptMatch]) -> some View {
         if record.segments.isEmpty {
             EmptyState(
-                symbol: "text.quote",
-                title: status == .failed ? "Transcription failed" : "No transcript yet",
-                message: status == .failed
-                    ? "The transcription pass did not produce words for this meeting."
-                    : "The transcript is written after the recording stops."
-            )
+                glyph: .lines, title: "No transcript yet",
+                message: "The transcript is written after the recording stops.")
         } else {
             TranscriptView(turns: turns, matches: matches, current: currentMatch)
         }

@@ -2,7 +2,7 @@
 //  RenameMeeting.swift
 //  Workspace
 //
-//  Rename…, asked the same way wherever it is offered: the sidebar row's menu
+//  Rename, asked the same way wherever it is offered: the sidebar row's menu
 //  and the document's "…". The field starts on the meeting's current title,
 //  and the library decides what an acceptable title is (it trims, and ignores
 //  an empty one).

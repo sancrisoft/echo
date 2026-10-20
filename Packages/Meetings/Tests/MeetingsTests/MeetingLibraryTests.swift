@@ -229,6 +229,37 @@ struct MeetingLibraryTests {
 
     // MARK: - rename
 
+    // MARK: - Audio a meeting still holds
+
+    @Test("a meeting has a saved recording exactly while its preserved audio is on disk")
+    func savedRecording() async throws {
+        try await withTempLibrary { library, store in
+            let id = try await saveMeeting(in: store)
+            #expect(await !library.hasPreservedAudio(for: id))
+            try Data("audio".utf8).write(
+                to: store.directory(for: id).appending(path: MeetingStore.preservedAudioFileName(for: .microphone)))
+            #expect(await library.hasPreservedAudio(for: id))
+            await library.deletePreservedAudio(for: id)
+            #expect(await !library.hasPreservedAudio(for: id))
+        }
+    }
+
+    @Test("a failed transcription can run again only while its audio is kept")
+    func retryNeedsTheAudio() async throws {
+        try await withTempLibrary { library, store in
+            let id = try await saveMeeting(in: store, segments: [])
+            let audio = store.directory(for: id).appending(path: MeetingStore.retainedAudioFileName(for: .microphone))
+            try Data("audio".utf8).write(to: audio)
+            // Audio and no outcome yet is a pass still owed, not a failure.
+            #expect(await !library.canRetryTranscription(id))
+            try await store.recordTerminalProvenance(
+                for: id, provenance: TranscriptProvenance(source: .terminalFailure, modelName: "parakeet-tdt-0.6b-v3"))
+            #expect(await library.canRetryTranscription(id))
+            try FileManager.default.removeItem(at: audio)
+            #expect(await !library.canRetryTranscription(id))
+        }
+    }
+
     @Test("rename trims whitespace and persists; an empty result is ignored")
     func renameTrimsAndIgnoresEmpty() async throws {
         try await withTempLibrary { library, store in

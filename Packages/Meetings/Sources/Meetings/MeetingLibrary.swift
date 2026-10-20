@@ -221,6 +221,18 @@ public final class MeetingLibrary {
         await store.preservedAudioFiles(for: id)
     }
 
+    /// Whether the meeting keeps its recording after transcription — what
+    /// Re-transcribe reads from and Delete Recording removes.
+    public func hasPreservedAudio(for id: UUID) async -> Bool {
+        await store.hasPreservedAudio(for: id)
+    }
+
+    /// Whether a meeting whose transcription gave up still holds the audio
+    /// the pass needs to run again. A failed meeting without it has no Retry.
+    public func canRetryTranscription(_ id: UUID) async -> Bool {
+        await store.retainedAudioDisposition(for: id) == .terminalFailure
+    }
+
     /// Deletes exactly the meeting's preserved recording and re-measures.
     public func deletePreservedAudio(for id: UUID) async {
         await store.deletePreservedAudio(for: id)

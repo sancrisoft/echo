@@ -77,12 +77,15 @@ struct StorageBreakdownTests {
             // Recordings: two 50 kB files (allocated size ≥ payload).
             #expect(breakdown.recordingsCount == 1)
             #expect(breakdown.recordingsBytes >= 100_000)
+            // Which meeting keeps it, and how much it is.
+            #expect(breakdown.recordingBytes == [withRecording: breakdown.recordingsBytes])
             // Meetings: both live folders' meta+transcript bytes, audio
             // excluded — nonzero and far below the audio payload.
             #expect(breakdown.meetingsBytes > 0)
             #expect(breakdown.meetingsBytes < 100_000)
-            // Trash: the whole trashed folder.
+            // Trash: the whole trashed folder, and that folder on its own.
             #expect(breakdown.trashBytes > 0)
+            #expect(breakdown.trashedFolderBytes == [trashed: breakdown.trashBytes])
             // Models: at least the synthetic weights file.
             #expect(breakdown.modelsBytes >= 10_000)
         }
