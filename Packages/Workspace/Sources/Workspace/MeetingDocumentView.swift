@@ -194,7 +194,7 @@ struct MeetingDocumentView: View {
         } else if let record {
             switch workspace.documentTab {
             case .summary: summary(record).padding(.top, EchoLayout.summaryTopGap)
-            case .transcript: transcript(record).padding(.top, EchoSpacing.xl)
+            case .transcript: transcript(record).padding(.top, EchoLayout.transcriptTopGap)
             }
         }
     }
@@ -281,34 +281,5 @@ private struct DocumentFade: View {
         .frame(height: EchoLayout.documentFadeHeight)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-    }
-}
-
-/// The transcript as turns: speaker and timestamp on one line, the paragraph
-/// below. You in the accent, Others in grey — the two labels there are.
-struct TranscriptView: View {
-    let segments: [TranscriptSegment]
-
-    var body: some View {
-        let utterances = TranscriptUtterance.derive(from: segments)
-        LazyVStack(alignment: .leading, spacing: EchoSpacing.l) {
-            ForEach(utterances) { utterance in
-                VStack(alignment: .leading, spacing: EchoSpacing.xs) {
-                    HStack(spacing: EchoSpacing.s) {
-                        Text(utterance.speaker.displayName)
-                            .font(EchoFont.row)
-                            .foregroundStyle(utterance.speaker == .me ? EchoColor.accent : EchoColor.textSecondary)
-                        Text(MeetingExport.timestamp(utterance.start))
-                            .font(EchoFont.mono(11.5))
-                            .foregroundStyle(EchoColor.textTertiary)
-                    }
-                    Text(utterance.text)
-                        .font(EchoFont.body)
-                        .lineSpacing(EchoFont.bodyLineSpacing)
-                        .foregroundStyle(EchoColor.textPrimary)
-                        .textSelection(.enabled)
-                }
-            }
-        }
     }
 }
