@@ -50,6 +50,11 @@ jobs:
       # layer below it, the stack merges as a whole, and the push to v2 after
       # the merge builds the result on both toolchains. A pull request from a
       # fork always builds: its branch name means nothing in this repository.
+      #
+      # A pull request builds every package through one shared scratch path
+      # ("shared"), so each dependency compiles once. Pushes and manual runs
+      # build each package on its own ("isolated"), the only run that proves
+      # every Package.swift declares what it imports.
       - name: Decide what to build
         id: scope
         env:
@@ -60,15 +65,15 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
-          floor='{"name":"Build and test","runner":"macos-26","xcode":"/Applications/Xcode_26.6.app","results":"AppTests-xcode-26.6"}'
-          newest='{"name":"Build and test (Xcode 27)","runner":"xcode-27","xcode":"/Applications/Xcode_27.0.app","results":"AppTests-xcode-27.0"}'
+          floor() { echo '{"name":"Build and test","runner":"macos-26","xcode":"/Applications/Xcode_26.6.app","results":"xcode-26.6","mode":"'"$1"'"}'; }
+          newest='{"name":"Build and test (Xcode 27)","runner":"xcode-27","xcode":"/Applications/Xcode_27.0.app","results":"xcode-27.0","mode":"isolated"}'
 
           if [ "$EVENT" != "pull_request" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "matrix={\"include\":[$floor,$newest]}" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[$(floor isolated),$newest]}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "matrix={\"include\":[$floor]}" >> "$GITHUB_OUTPUT"
+          echo "matrix={\"include\":[$(floor shared)]}" >> "$GITHUB_OUTPUT"
 
           # gh stack opens a stack's pull requests bottom up, a few seconds
           # apart (37 s for eleven), so the one above may not exist yet when
@@ -115,15 +120,20 @@ jobs:
       - name: Lint
         run: make lint
 
-      # Every package runs its own `swift test` with no host app (ADR-004).
-      # Acceptance suites gate themselves on ECHO_ACCEPTANCE and skip here:
-      # CI has no models and no Fixtures/.
+      # Every package runs its own `swift test` with no host app (ADR-004),
+      # each on its own build or all on one. Acceptance suites gate themselves
+      # on ECHO_ACCEPTANCE and skip here: CI has no models and no Fixtures/.
       - name: Package tests
+        if: matrix.mode == 'isolated'
         run: make test-packages
+
+      - name: Package tests, one shared build
+        if: matrix.mode == 'shared'
+        run: make test-packages-shared
 
       # Builds Echo.app (Debug, the test host) and runs the few hosted tests.
       # arm64 only and ad-hoc signed, like the release: there is no signing
-      # identity on the runner.
+      # identity on the runner. No debug info: nobody attaches a debugger here.
       - name: App build and hosted tests
         run: |
           xcodebuild test \
@@ -138,7 +148,8 @@ jobs:
             -skipPackagePluginValidation \
             ARCHS=arm64 \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY=-
+            CODE_SIGN_IDENTITY=- \
+            GCC_GENERATE_DEBUGGING_SYMBOLS=NO
 
       # The result bundle holds the per-test outcomes, the build log and any
       # attachments; open it in Xcode to see what failed.
@@ -146,6 +157,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.results }}.xcresult
+          name: AppTests-${{ matrix.results }}.xcresult
           path: build/AppTests.xcresult
           if-no-files-found: ignore

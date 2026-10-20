@@ -1,8 +1,10 @@
 # Echo v2 — the commands the repository is worked with. `make help` lists them.
 #
 # Package tests run with `swift test` and no host app; only AppTests is hosted
-# in Echo.app (ADR-004). Builds are arm64 and ad-hoc signed, like CI and the
-# release.
+# in Echo.app (ADR-004). `test-packages` builds each package on its own, which
+# proves every Package.swift declares what it imports; `test-packages-shared`
+# shares one build between them, for speed. Builds are arm64 and ad-hoc
+# signed, like CI and the release.
 
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
@@ -14,12 +16,14 @@ DESTINATION     := platform=macOS,arch=arm64
 XCODEBUILD      := xcodebuild -project Echo.xcodeproj -scheme Echo -destination '$(DESTINATION)' \
                    -derivedDataPath $(DERIVED) -skipMacroValidation -skipPackagePluginValidation \
                    CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=-
+SHARED_SCRATCH  := $(DERIVED)/spm
+NO_DEBUG_INFO   := -Xswiftc -gnone -Xcc -g0 -Xcxx -g0
 APP             := $(DERIVED)/Build/Products/Debug/Echo.app
 
-.PHONY: help build run test test-packages test-package test-app lint format check-boundaries app-icon clean
+.PHONY: help build run test test-packages test-packages-shared test-package test-app lint format check-boundaries app-icon clean
 
 help: ## List the targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[1m%-16s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[1m%-22s\033[0m %s\n", $$1, $$2}'
 
 build: ## Build Echo.app (Debug)
 	$(XCODEBUILD) -quiet build
@@ -33,6 +37,17 @@ test-packages: ## swift test for every package under Packages/
 	@for package in $(PACKAGES); do \
 		echo "==> $$package"; \
 		swift test --package-path Packages/$$package || exit 1; \
+	done
+
+# Every package's tests through one scratch path, so a dependency several
+# packages share compiles once (MLX would otherwise compile in four). The pins
+# must agree across packages for that to hold. No debug info: nobody attaches
+# a debugger to this run. A shared build can lend a module to a package that
+# never declared it, so this does not replace `test-packages`.
+test-packages-shared: ## Every package's tests in one shared build, dependencies compiled once
+	@for package in $(PACKAGES); do \
+		echo "==> $$package"; \
+		swift test --package-path Packages/$$package --scratch-path $(SHARED_SCRATCH) $(NO_DEBUG_INFO) || exit 1; \
 	done
 
 test-package: ## One package: make test-package P=Meetings

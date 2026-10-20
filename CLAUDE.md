@@ -258,6 +258,7 @@ make build                    # Debug Echo.app into build/
 make run                      # build and launch
 make test                     # every package + hosted AppTests
 make test-package P=Meetings
+make test-packages-shared     # every package, one shared build (what a PR runs in CI)
 make lint                     # swift-format --strict + scripts/check_boundaries.sh
 make format
 make app-icon                 # render the app icon set from the mark's geometry
@@ -268,8 +269,11 @@ ECHO_DATA_ROOT=/tmp/x ECHO_OPEN_WINDOW=1 build/Build/Products/Debug/Echo.app/Con
 CI (`.github/workflows/ci.yml`) runs lint, package tests and the hosted tests.
 A pull request builds on Xcode 26.6 only (the "Build and test" check, and what
 releases use), and in a stack only the top pull request builds: the others are
-covered by its run, which their Scope job names. Pushes to `main` and `v2`, and
-a manual run (`workflow_dispatch`), build on both 26.6 and 27.0.
+covered by its run, which their Scope job names. A pull request also builds every
+package through one shared scratch path (`make test-packages-shared`), so each
+dependency compiles once, without debug info. Pushes to `main` and `v2`, and a manual run
+(`workflow_dispatch`), build on both 26.6 and 27.0, each package on its own with
+`swift test`: only that proves every `Package.swift` declares what it imports.
 
 ## Conventions
 
