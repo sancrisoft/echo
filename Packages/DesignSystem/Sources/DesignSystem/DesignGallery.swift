@@ -117,6 +117,11 @@ import SwiftUI
                     Button("New recording") {}.buttonStyle(.echoPrimary).disabled(true)
                     Button("Export") {}.buttonStyle(.echoSecondary)
                     Button("Copy") {}.buttonStyle(.echoQuiet)
+                    Button {
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: EchoControl.toolbarGlyphSize))
+                    }
+                    .buttonStyle(.echoQuietIcon)
                     Button("Delete") {}.buttonStyle(.echoDestructive)
                 }
 

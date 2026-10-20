@@ -207,6 +207,13 @@ struct PrimitiveTests {
         #expect(
             size(of: Button("Retry") {}.buttonStyle(.echoControl)).height
                 == EchoControl.controlButtonHeight)
+        // The breadcrumb's "…" is square whatever its glyph measures.
+        let more = size(
+            of: Button {
+            } label: {
+                Image(systemName: "ellipsis")
+            }.buttonStyle(.echoQuietIcon))
+        #expect(more.width == EchoLayout.toolbarButtonHeight && more.height == EchoLayout.toolbarButtonHeight)
         #expect(
             size(of: Button("Allow") {}.buttonStyle(.echoControlProminent)).height
                 == EchoControl.controlButtonHeight)

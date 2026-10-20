@@ -73,6 +73,10 @@ public nonisolated enum EchoControl {
 
     /// A quiet button in the breadcrumb bar: Copy, Export, the "…".
     public static let toolbarButtonInset: CGFloat = 9
+    /// Between two buttons in the breadcrumb bar, and the glyph the "…" one
+    /// carries.
+    public static let toolbarButtonGap: CGFloat = 3
+    public static let toolbarGlyphSize: CGFloat = 15
 
     /// The well a segmented tab strip sits in, and the segments inside it.
     public static let tabStripInset: CGFloat = 3
