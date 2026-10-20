@@ -138,6 +138,7 @@ nonisolated let palette: [Token] = [
         "recordingPillWash", EchoColor.recordingPillWash, light: 0xD02B31, dark: 0xED4A49,
         lightOpacity: 0.14, darkOpacity: 0.14),
     .init("placeholderGlyph", EchoColor.placeholderGlyph, light: 0xC4C7CB, dark: 0x3A3D41),
+    .init("speakerSplitOthers", EchoColor.speakerSplitOthers, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("levelOthers", EchoColor.levelOthers, light: 0x8A8D92, dark: 0x616469),
     .init("selection", EchoColor.selection, light: 0xE8EAED, dark: 0x1F2024),
     // The models panel (`Models.dc.html`). Light values borrowed until #120.
@@ -255,6 +256,12 @@ struct MetricTests {
         #expect(EchoControl.findGlyphSize == 13)
         #expect(EchoControl.findMatchInset == CGSize(width: 3, height: 1))
         #expect(EchoRadius.findMatch == 3)
+        #expect(EchoLayout.speakerSplitWidth == 180)
+        #expect(EchoControl.speakerSplitHeight == 4)
+        #expect(EchoControl.speakerSplitGap == 2)
+        #expect(EchoControl.speakerSplitLabelGap == 12)
+        #expect(EchoControl.provenanceGap == 8)
+        #expect(EchoRadius.speakerSplit == 2)
     }
 
     @Test("the radii are the artboard's, largest to smallest")

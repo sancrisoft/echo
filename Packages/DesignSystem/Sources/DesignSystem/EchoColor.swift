@@ -139,6 +139,11 @@ public nonisolated enum EchoColor {
     /// draws, the breadcrumb slash's.
     public static let placeholderGlyph = breadcrumbSlash
 
+    /// Others' share of the transcript's speaker split, beside You's accent:
+    /// the same ink as the breadcrumb slash, as the transcript artboard draws
+    /// it.
+    public static let speakerSplitOthers = breadcrumbSlash
+
     /// The Others channel in the window's level meter, beside You in the
     /// accent. Light mode does not draw it; it takes the tertiary text's light
     /// value until the light audit (#120).

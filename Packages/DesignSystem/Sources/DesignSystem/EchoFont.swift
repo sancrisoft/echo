@@ -101,6 +101,9 @@ public nonisolated enum EchoFont {
     /// Mono 11.5 — when a transcript turn began, beside its speaker.
     public static var timestamp: Font { mono(11.5) }
 
+    /// Mono 11.5 — the model that wrote a transcript, after its status.
+    public static var provenance: Font { mono(11.5) }
+
     /// Mono 12.5 — code inside a summary's prose, on its raised fill.
     public static var inlineCode: Font { mono(12.5) }
 

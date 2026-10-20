@@ -50,6 +50,8 @@ public nonisolated enum EchoRadius {
     public static let inlineCode: CGFloat = 4
     /// A find match in a transcript.
     public static let findMatch: CGFloat = 3
+    /// The transcript's speaker split, half its height.
+    public static let speakerSplit: CGFloat = 2
     /// A level gauge, half its height.
     public static let gauge: CGFloat = 2
 }
@@ -124,6 +126,15 @@ public nonisolated enum EchoControl {
     /// How far a find match's fill reaches past its letters: at each side,
     /// and above and below.
     public static let findMatchInset = CGSize(width: 3, height: 1)
+
+    /// The speaker split under a transcript's title: the bar's height, the
+    /// gap between You's share and Others', and the gap between the bar and
+    /// each share's words.
+    public static let speakerSplitHeight: CGFloat = 4
+    public static let speakerSplitGap: CGFloat = 2
+    public static let speakerSplitLabelGap: CGFloat = 12
+    /// Between a transcript's status and the model that wrote it.
+    public static let provenanceGap: CGFloat = 8
 
     /// The dot inside the live status pill, and the gap between it and the
     /// word.
@@ -402,6 +413,8 @@ public nonisolated enum EchoLayout {
     public static let turnTextGap: CGFloat = 5
     /// The find field to the right of the transcript's tabs.
     public static let findFieldWidth: CGFloat = 208
+    /// The speaker split's bar.
+    public static let speakerSplitWidth: CGFloat = 180
     /// A card's inset in the models panel, and the gap between two cards.
     public static let modelCardInset = CGSize(width: 16, height: 14)
     public static let modelPanelGap: CGFloat = 12
