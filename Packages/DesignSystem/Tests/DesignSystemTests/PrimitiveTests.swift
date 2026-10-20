@@ -206,6 +206,14 @@ struct PrimitiveTests {
                 == EchoLayout.toolbarButtonHeight)
     }
 
+    @Test("the live status pill carries its dot, and no other pill does")
+    func theLivePillHasItsDot() {
+        let live = size(of: StatusBadge("Recording", tone: .recording))
+        let accent = size(of: StatusBadge("Recording", tone: .accent))
+        #expect(live.height == accent.height)
+        #expect(live.width == accent.width + EchoControl.pillDotSize + EchoControl.pillGap)
+    }
+
     @Test("a primary held back keeps its shape and changes what it is drawn in")
     func aHeldBackPrimary() throws {
         // New recording while the transcription model is missing: the title

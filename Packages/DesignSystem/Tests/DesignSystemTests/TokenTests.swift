@@ -130,6 +130,10 @@ nonisolated let palette: [Token] = [
         "recordingWashEdge", EchoColor.recordingWashEdge, light: 0xD02B31, dark: 0xED4A49,
         lightOpacity: 0.28, darkOpacity: 0.28),
     .init("recordingTimer", EchoColor.recordingTimer, light: 0xD02B31, dark: 0xF0908F),
+    .init(
+        "recordingPillWash", EchoColor.recordingPillWash, light: 0xD02B31, dark: 0xED4A49,
+        lightOpacity: 0.14, darkOpacity: 0.14),
+    .init("placeholderGlyph", EchoColor.placeholderGlyph, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("selection", EchoColor.selection, light: 0xE8EAED, dark: 0x1F2024),
 ]
 

@@ -118,8 +118,19 @@ public nonisolated enum EchoColor {
 
     /// The running clock's digits on that wash: the red, lifted, so the
     /// numbers read on their own tint. Light mode does not draw it; a lifted
-    /// red on white would wash out, so it takes the light red itself.
+    /// red on white would wash out, so it takes the light red itself. The
+    /// live status pill and the sidebar's live row write in it too.
     public static let recordingTimer = Color(light: 0xD02B31, dark: 0xF0908F)
+
+    /// Behind the live status pill: a touch more red than the clock's pill.
+    /// Light mode does not draw it; it takes the light red at the dark
+    /// side's percentage until the light audit (#120).
+    public static let recordingPillWash = Color(
+        light: 0xD02B31, dark: 0xED4A49, lightOpacity: 0.14, darkOpacity: 0.14)
+
+    /// The glyph above a document's placeholder: the faintest ink the window
+    /// draws, the breadcrumb slash's.
+    public static let placeholderGlyph = breadcrumbSlash
 
     public static let success = Color(nsColor: .systemGreen)
     public static let warning = Color(nsColor: .systemOrange)

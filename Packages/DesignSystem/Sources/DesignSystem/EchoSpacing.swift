@@ -95,6 +95,20 @@ public nonisolated enum EchoControl {
     /// column and the value.
     public static let propertyIconSize: CGFloat = 14
     public static let propertyGap: CGFloat = 10
+    /// Between a property's value and the quieter qualifier after it.
+    public static let propertyQualifierGap: CGFloat = 7
+
+    /// The dot inside the live status pill, and the gap between it and the
+    /// word.
+    public static let pillDotSize: CGFloat = 6
+    public static let pillGap: CGFloat = 6
+
+    /// The mark in the sidebar's app row.
+    public static let appMarkSize: CGFloat = 17
+
+    /// The glyph above a document's placeholder, while there is nothing yet
+    /// to read.
+    public static let placeholderGlyphSize: CGFloat = 34
 
     // MARK: On the island
 
@@ -185,8 +199,10 @@ public nonisolated enum EchoLayout {
 
     /// The sidebar's fixed width.
     public static let sidebarWidth: CGFloat = 256
-    /// The app row at the very top, with the mark and the chevron.
+    /// The app row at the very top, with the mark and the chevron, and its
+    /// inset — a point tighter than every other row's, as drawn.
     public static let appRowHeight: CGFloat = 34
+    public static let appRowInset: CGFloat = 8
     /// A row in the sidebar: a meeting, Search, Settings, Trash.
     public static let sidebarRowHeight: CGFloat = 29
     /// The horizontal inset inside a sidebar row.
@@ -253,14 +269,28 @@ public nonisolated enum EchoLayout {
 
     /// The breadcrumb bar above the document.
     public static let breadcrumbHeight: CGFloat = 40
-    /// The horizontal inset of the breadcrumb bar.
+    /// The horizontal inset of the breadcrumb bar, and the room either side
+    /// of the "/" between its parts.
     public static let breadcrumbInset: CGFloat = 18
+    public static let breadcrumbSlashGap: CGFloat = 7
     /// A button in the breadcrumb bar: Copy, Export, the "…" icon button.
     public static let toolbarButtonHeight: CGFloat = 26
     /// The widest a reading column gets.
     public static let readingWidth: CGFloat = 720
     /// The gap between the breadcrumb bar and the document title.
     public static let readingTopInset: CGFloat = 26
+    /// Between the title and the first property row under it.
+    public static let titleBottomGap: CGFloat = 18
+    /// The rule between the property rows and the tabs, and the air above
+    /// and below it.
+    public static let documentDividerTop: CGFloat = 26
+    public static let documentDividerBottom: CGFloat = 20
+    /// A placeholder in the document — glyph, line, sentence — the gap
+    /// between its parts, how wide the sentence may run, and how far above
+    /// the centre it sits.
+    public static let placeholderGap: CGFloat = 14
+    public static let placeholderWidth: CGFloat = 380
+    public static let placeholderBottomInset: CGFloat = 40
     /// A property row under the title.
     public static let propertyRowHeight: CGFloat = 30
     /// The label column of a property row: icon plus its word.

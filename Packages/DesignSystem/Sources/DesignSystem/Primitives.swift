@@ -144,21 +144,34 @@ public struct StatusBadge: View {
     }
 
     public var body: some View {
-        Text(text)
-            .font(EchoFont.statusPill)
-            .foregroundStyle(color)
-            .padding(.horizontal, EchoControl.pillInset.width)
-            .padding(.vertical, EchoControl.pillInset.height)
-            .background(fill, in: .rect(cornerRadius: EchoRadius.pill))
-            .lineLimit(1)
-            .fixedSize()
+        HStack(spacing: EchoControl.pillGap) {
+            if tone == .recording {
+                Circle()
+                    .fill(EchoColor.recording)
+                    .frame(width: EchoControl.pillDotSize, height: EchoControl.pillDotSize)
+                    .accessibilityHidden(true)
+            }
+            Text(text)
+        }
+        .font(EchoFont.statusPill)
+        .foregroundStyle(color)
+        .padding(.horizontal, EchoControl.pillInset.width)
+        .padding(.vertical, EchoControl.pillInset.height)
+        .background(fill, in: .rect(cornerRadius: EchoRadius.pill))
+        .lineLimit(1)
+        .fixedSize()
     }
 
-    /// The design draws one of these: the accent pill, on the accent's own
-    /// wash. The other tones are states it has not drawn, and they borrow the
+    /// The design draws two of these: the accent pill on the accent's own
+    /// wash, and the live one — the red lifted for the word, a red dot before
+    /// it. The other tones are states it has not drawn, and they borrow the
     /// wash's weight rather than inventing one.
     private var fill: Color {
-        tone == .accent ? EchoColor.accentWash : color.opacity(0.15)
+        switch tone {
+        case .accent: EchoColor.accentWash
+        case .recording: EchoColor.recordingPillWash
+        case .neutral, .success, .warning, .danger: color.opacity(0.15)
+        }
     }
 
     private var color: Color {
@@ -168,7 +181,7 @@ public struct StatusBadge: View {
         case .success: return EchoColor.success
         case .warning: return EchoColor.warning
         case .danger: return EchoColor.danger
-        case .recording: return EchoColor.recording
+        case .recording: return EchoColor.recordingTimer
         }
     }
 }
