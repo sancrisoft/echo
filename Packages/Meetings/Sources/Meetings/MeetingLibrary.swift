@@ -3,9 +3,9 @@
 //  Meetings
 //
 //  The main-actor, observable façade over `MeetingStore` that the UI reads:
-//  the live meetings, the trashed ones, and what the library occupies on disk.
-//  Disk is the source of truth; this is a cache that re-reads after its own
-//  mutations.
+//  the live meetings, the trashed ones, what the library occupies on disk, and
+//  search over their words. Disk is the source of truth; this is a cache that
+//  re-reads after its own mutations.
 //
 //  Reading never writes. `refresh()` lists and measures; the launch-time
 //  housekeeping that deletes or rewrites files — purging expired trash, folding
@@ -40,12 +40,34 @@ public final class MeetingLibrary {
     /// What the library occupies on disk. `nil` until the first measurement.
     public private(set) var storage: StorageBreakdown?
 
+    /// Whether search is still reading meetings' words. A query answered
+    /// meanwhile is answered from what has been read, and the surface says
+    /// so rather than pass a partial answer off as the whole one.
+    public private(set) var isReadingForSearch = false
+
+    /// Moves each time the search index takes in what it read, so a query
+    /// asked while it read can be asked again.
+    public private(set) var searchRevision = 0
+
     private var isBackfilling = false
+
+    private let searchIndexer: MeetingSearchIndexer
+    /// Search reads nothing until it is first asked for; from then on every
+    /// `refresh()` keeps it current.
+    private var searchPrepared = false
+    private var searchPass: Task<Void, Never>?
+    private var searchPassAgain = false
+
+    /// How many meetings a pass reads before the index takes them in. Small
+    /// enough that results arrive while the rest is still being read; a
+    /// choice, not a measurement.
+    private static let searchReadBatch = 8
 
     /// Builds the library. Performs no I/O: call `refresh()` to load.
     public init(store: MeetingStore, modelsDirectory: URL? = nil) {
         self.store = store
         self.modelsDirectory = modelsDirectory
+        searchIndexer = MeetingSearchIndexer(store: store)
     }
 
     /// The library at a data root.
@@ -72,6 +94,7 @@ public final class MeetingLibrary {
             all.filter(\.isTrashed)
             .sorted { ($0.trashedAt ?? .distantPast) > ($1.trashedAt ?? .distantPast) }
         measureStorage()
+        syncSearch()
     }
 
     /// Permanently deletes meetings that have sat in Trash past the retention
@@ -244,6 +267,46 @@ public final class MeetingLibrary {
     public func deleteAllPreservedAudio() async {
         await store.deleteAllPreservedAudio()
         measureStorage()
+    }
+
+    // MARK: - Search
+
+    /// Reads every meeting's words for search — the live ones and the
+    /// trashed — and returns once they are read. The first call starts the
+    /// reading; later ones wait for whatever pass is under way.
+    public func prepareSearch() async {
+        searchPrepared = true
+        syncSearch()
+        await searchPass?.value
+    }
+
+    /// The meetings that answer `query`, best first, from what has been read.
+    public func search(_ query: MeetingSearchQuery) async -> [MeetingSearchHit] {
+        await searchIndexer.search(query)
+    }
+
+    /// One pass at a time: a change during a pass asks for another, read from
+    /// the lists as they are then.
+    private func syncSearch() {
+        guard searchPrepared else { return }
+        guard searchPass == nil else {
+            searchPassAgain = true
+            return
+        }
+        searchPass = Task(priority: .utility) {
+            repeat {
+                searchPassAgain = false
+                let (forgot, toRead) = await searchIndexer.reconcile(with: metas + trashedMetas)
+                if forgot { searchRevision += 1 }
+                if !toRead.isEmpty { isReadingForSearch = true }
+                for start in stride(from: 0, to: toRead.count, by: Self.searchReadBatch) {
+                    await searchIndexer.read(Array(toRead[start..<min(start + Self.searchReadBatch, toRead.count)]))
+                    searchRevision += 1
+                }
+            } while searchPassAgain
+            isReadingForSearch = false
+            searchPass = nil
+        }
     }
 
     // MARK: - Storage
