@@ -31,9 +31,14 @@ public struct WorkspaceWindow: View {
     @Environment(WorkspaceModel.self) private var workspace
 
     private let dataRoot: DataRoot
+    private let startRecording: () -> Void
 
-    public init(dataRoot: DataRoot) {
+    /// - Parameter startRecording: New recording. The composition root's, so
+    ///   the window starts the same gated recording, with the same capture, as
+    ///   every other surface (`TitleBar`).
+    public init(dataRoot: DataRoot, startRecording: @escaping () -> Void) {
         self.dataRoot = dataRoot
+        self.startRecording = startRecording
     }
 
     public var body: some View {
@@ -55,6 +60,7 @@ public struct WorkspaceWindow: View {
         }
         .frame(minWidth: EchoLayout.minimumWindow.width, minHeight: EchoLayout.minimumWindow.height)
         .background(WindowChromeReader(background: EchoColor.windowBackground))
+        .toolbar { TitleBarToolbar(startRecording: startRecording) }
         // A selection the library no longer holds (trashed, deleted, purged)
         // is dropped so the document never shows a meeting that is gone.
         .onChange(of: library.metas.map(\.id)) { _, _ in

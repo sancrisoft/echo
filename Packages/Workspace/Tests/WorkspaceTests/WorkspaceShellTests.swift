@@ -14,6 +14,7 @@ import EchoCore
 import EchoCoreTestSupport
 import Foundation
 import Meetings
+import Recording
 import SwiftUI
 import Testing
 
@@ -35,10 +36,12 @@ struct WorkspaceShellTests {
     }
 
     private func window(_ library: MeetingLibrary, _ dataRoot: DataRoot) -> some View {
-        WorkspaceWindow(dataRoot: dataRoot)
+        let settings = AppSettings(dataRoot: dataRoot)
+        return WorkspaceWindow(dataRoot: dataRoot, startRecording: {})
             .environment(library)
             .environment(WorkspaceModel())
-            .environment(AppSettings(dataRoot: dataRoot))
+            .environment(settings)
+            .environment(RecordingSession(library: library, settings: settings, dataRoot: dataRoot))
     }
 
     private func save(_ titles: [String], to store: MeetingStore) async throws {

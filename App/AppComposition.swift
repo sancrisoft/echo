@@ -77,6 +77,10 @@ final class AppComposition {
     /// recording (#119).
     let globalShortcut: GlobalShortcut
 
+    /// The window's New recording: the same gated start the shortcut and the
+    /// menu run, with the capture they share.
+    let startRecording: () -> Void
+
     /// Whether the main window is on screen as soon as the scene is built.
     /// True for `ECHO_OPEN_WINDOW`, and for the one launch that finds this Mac
     /// has never run Echo before. Read by the scene, which SwiftUI builds only
@@ -186,16 +190,23 @@ final class AppComposition {
         )
 
         // The same gated start every surface runs, with the capture the chip
-        // and the menu share, and the same stop. A refused start opens the
+        // and the menu share. The capture is read at the press, not when the
+        // start lands.
+        let record = { () -> Task<RecordingRefusal?, Never> in
+            let scope = capture.current
+            return Task { await session.start(scope: scope) }
+        }
+
+        // The shortcut's start and the same stop. A refused start opens the
         // menu, which says why: the shortcut has no face of its own to say it
         // on.
         let menuBarItem = menuBarItem
         globalShortcut = GlobalShortcut(pressed: {
             switch GlobalShortcut.Press.of(session.phase) {
             case .start:
-                let scope = capture.current
+                let start = record()
                 Task {
-                    if await session.start(scope: scope) != nil {
+                    if await start.value != nil {
                         menuBarItem.showMenu()
                     }
                 }
@@ -205,6 +216,11 @@ final class AppComposition {
                 break
             }
         })
+
+        // The window's. A refusal needs no answer here: the title bar holds
+        // the button back and says why for as long as the model is missing,
+        // so a refused click can only be one that raced the model's state.
+        startRecording = { _ = record() }
     }
 
     /// A meeting, as the island speaks of it.
