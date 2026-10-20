@@ -43,7 +43,7 @@ struct EchoApp: App {
         // ever gives Echo, which is the one that would otherwise leave a new
         // user with nothing on screen to find.
         Window("Echo", id: EchoWindow.main) {
-            WorkspaceWindow(dataRoot: composition.dataRoot)
+            WorkspaceWindow(dataRoot: composition.dataRoot, startRecording: composition.startRecording)
                 .environment(composition.library)
                 .environment(composition.settings)
                 .environment(composition.workspace)
@@ -59,6 +59,11 @@ struct EchoApp: App {
         .restorationBehavior(.disabled)
         .defaultSize(width: EchoLayout.defaultWindow.width, height: EchoLayout.defaultWindow.height)
         .windowResizability(.contentMinSize)
+        // The title bar holds New recording, and a toolbar item is the one
+        // thing AppKit centres with the traffic lights. Compact is the
+        // nearest height to the artboard's (`TitleBar` in Workspace); the
+        // window's name is not drawn, as the artboard does not draw it.
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         // ⌘, lands in the main window's settings section. There is no
         // `Settings` scene: a second, bare window with its own Cmd-Tab entry
         // was the worse of two hosts for the same screen.

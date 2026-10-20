@@ -39,6 +39,30 @@ public enum RecordingReadiness: Equatable, Sendable {
 
     public var isReady: Bool { self == .ready }
 
+    /// Why a recording cannot start, as every surface that offers one says it
+    /// beside its held-back Record: the models artboard's row label and state
+    /// ("Transcription · Waiting to download", "Transcription · 41%"), or the
+    /// fetch's own reason. Approved by the product owner, 2026-10-02. `nil`
+    /// once nothing is in the way.
+    ///
+    /// Here rather than with any one surface, because the island's faces, the
+    /// menu and the window's title bar all say it, and one sentence said three
+    /// ways is three sentences.
+    public var waitingFor: String? {
+        let state: String
+        switch self {
+        case .ready: return nil
+        case .waitingToDownload: state = "Waiting to download"
+        case .downloading(let fraction):
+            // Whole percent, rounded down so it never claims 100 before the
+            // files are verified, and written the way the English interface
+            // writes it whatever the Mac's region.
+            state = "\(Int(min(max(fraction, 0), 1) * 100))%"
+        case .downloadFailed(let reason): state = reason
+        }
+        return "Transcription · \(state)"
+    }
+
     /// The readiness the model's own state amounts to.
     init(_ state: ParakeetModelState) {
         switch state {

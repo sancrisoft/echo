@@ -84,6 +84,26 @@ public nonisolated enum EchoFont {
     /// identifiers at this size go through `mono` instead.
     public static var micro: Font { onest(11.5, weight: 400) }
 
+    /// 12 — the qualifier after a property's value, in a quieter ink: the
+    /// "mic + system" after the capture.
+    public static var propertyQualifier: Font { onest(12, weight: 400) }
+
+    /// 15 / 600 — what a document is waiting for, under its glyph, while
+    /// there is nothing yet to read.
+    public static var placeholderTitle: Font { onest(15, weight: 600) }
+
+    /// 13.5 — the sentence under it.
+    public static var placeholderMessage: Font { onest(13.5, weight: 400) }
+
+    /// 10 — the channel names beside the window's level meter: You, Others.
+    public static var meterLabel: Font { onest(10, weight: 400) }
+
+    /// 13 / 500 — what the live footer says is happening: "Recording…".
+    public static var footerStatus: Font { onest(13, weight: 500) }
+
+    /// 13 — the note at the live footer's end: "Processed locally".
+    public static var footerNote: Font { onest(13, weight: 400) }
+
     // The island sets its own controls: a capsule, a value chip and the label
     // beside a level gauge. They are smaller and tighter than anything in the
     // window, because they hang off the bezel with the wallpaper behind them.
@@ -171,6 +191,15 @@ public nonisolated enum EchoFont {
 
     /// Extra leading for a transcript turn (1.7 line height).
     public static let transcriptLineSpacing: CGFloat = 14.5 * 0.70 - 3
+
+    /// Extra leading for `placeholderMessage` (1.6 line height).
+    public static let placeholderLineSpacing: CGFloat = 13.5 * 0.60 - 3
+
+    /// −0.01em on `placeholderTitle`.
+    public static let placeholderTitleTracking: CGFloat = 15 * -0.01
+
+    /// +0.02em on `meterLabel`.
+    public static let meterLabelTracking: CGFloat = 10 * 0.02
 
     /// −0.028em on the document title.
     public static let documentTitleTracking: CGFloat = 30 * -0.028

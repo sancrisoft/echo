@@ -58,6 +58,17 @@ public nonisolated enum EchoControl {
     public static let primaryButtonHeight: CGFloat = 29
     public static let primaryButtonInset: CGFloat = 14
 
+    /// The glyph a primary button carries before its label — New recording's
+    /// dot, Stop's square — and the gap between the two.
+    public static let primaryButtonGlyphSize: CGFloat = 9
+    public static let primaryButtonGap: CGFloat = 8
+
+    /// The pill the title bar's running clock sits in, beside Stop: as tall as
+    /// the button, a little tighter at the sides, and the gap between its red
+    /// dot (`recordingDotSize`) and the digits.
+    public static let timerPillInset: CGFloat = 11
+    public static let timerPillGap: CGFloat = 7
+
     /// A quiet button in the breadcrumb bar: Copy, Export, the "…".
     public static let toolbarButtonInset: CGFloat = 9
 
@@ -84,6 +95,38 @@ public nonisolated enum EchoControl {
     /// column and the value.
     public static let propertyIconSize: CGFloat = 14
     public static let propertyGap: CGFloat = 10
+    /// Between a property's value and the quieter qualifier after it.
+    public static let propertyQualifierGap: CGFloat = 7
+
+    /// The dot inside the live status pill, and the gap between it and the
+    /// word.
+    public static let pillDotSize: CGFloat = 6
+    public static let pillGap: CGFloat = 6
+
+    /// The mark in the sidebar's app row.
+    public static let appMarkSize: CGFloat = 17
+
+    /// The glyph above a document's placeholder, while there is nothing yet
+    /// to read.
+    public static let placeholderGlyphSize: CGFloat = 34
+
+    /// The window's level meter: a row of bars per channel, the newest at the
+    /// right. A bar's width, the gap between two, how many a row holds, the
+    /// height of a bar at rest, and the pitch between the two rows — which is
+    /// also the tallest a bar gets, so You and Others never touch. The
+    /// artboard draws a sample whose loudest bars run past the meter's edge;
+    /// a measured level never does.
+    public static let meterBarWidth: CGFloat = 2
+    public static let meterBarGap: CGFloat = 1.4
+    public static let meterBarCount = 40
+    public static let meterBarRest: CGFloat = 3
+    public static let meterRowPitch: CGFloat = 16
+    /// Between the two channel names beside the meter.
+    public static let meterLabelGap: CGFloat = 3
+
+    /// The glyph before the live footer's note, and the gap after it.
+    public static let footerGlyphSize: CGFloat = 14
+    public static let footerGlyphGap: CGFloat = 6
 
     // MARK: On the island
 
@@ -116,7 +159,8 @@ public nonisolated enum EchoControl {
     public static let gaugeLabelGap: CGFloat = 6
 
     /// The red dot that says a session is live: on the expanded recording
-    /// face, and in the ear it collapses into.
+    /// face, in the ear it collapses into, and in the window's title bar
+    /// beside the clock.
     public static let recordingDotSize: CGFloat = 7
 
     /// The glyph at the head of an open face: the mark, the camera, the
@@ -155,8 +199,13 @@ public nonisolated enum EchoLayout {
     /// pixel — a half-point line disappears on the artboards' scale.
     public static let hairline: CGFloat = 1
 
-    /// The title bar, with a hairline under it.
-    public static let titleBarHeight: CGFloat = 44
+    // The title bar has no token. The artboard draws it 44 pt, and AppKit
+    // fixes a title bar's height per style — measured on macOS 27.0.1: 32 bare,
+    // 40 with a compact toolbar, 52 with a unified one, whatever the items in
+    // it. The window takes the compact toolbar, the nearest, because that is
+    // the one height at which the system centres the traffic lights and the
+    // title bar's button together (`TitleBar` in Workspace).
+
     /// The window's smallest size at which nothing clips. Not drawn: the
     /// artboard shows one window size, and this is the floor the layout keeps.
     public static let minimumWindow = CGSize(width: 900, height: 560)
@@ -168,8 +217,10 @@ public nonisolated enum EchoLayout {
 
     /// The sidebar's fixed width.
     public static let sidebarWidth: CGFloat = 256
-    /// The app row at the very top, with the mark and the chevron.
+    /// The app row at the very top, with the mark and the chevron, and its
+    /// inset — a point tighter than every other row's, as drawn.
     public static let appRowHeight: CGFloat = 34
+    public static let appRowInset: CGFloat = 8
     /// A row in the sidebar: a meeting, Search, Settings, Trash.
     public static let sidebarRowHeight: CGFloat = 29
     /// The horizontal inset inside a sidebar row.
@@ -236,14 +287,34 @@ public nonisolated enum EchoLayout {
 
     /// The breadcrumb bar above the document.
     public static let breadcrumbHeight: CGFloat = 40
-    /// The horizontal inset of the breadcrumb bar.
+    /// The horizontal inset of the breadcrumb bar, and the room either side
+    /// of the "/" between its parts.
     public static let breadcrumbInset: CGFloat = 18
+    public static let breadcrumbSlashGap: CGFloat = 7
     /// A button in the breadcrumb bar: Copy, Export, the "…" icon button.
     public static let toolbarButtonHeight: CGFloat = 26
     /// The widest a reading column gets.
     public static let readingWidth: CGFloat = 720
     /// The gap between the breadcrumb bar and the document title.
     public static let readingTopInset: CGFloat = 26
+    /// Between the title and the first property row under it.
+    public static let titleBottomGap: CGFloat = 18
+    /// The rule between the property rows and the tabs, and the air above
+    /// and below it.
+    public static let documentDividerTop: CGFloat = 26
+    public static let documentDividerBottom: CGFloat = 20
+    /// A placeholder in the document — glyph, line, sentence — the gap
+    /// between its parts, how wide the sentence may run, and how far above
+    /// the centre it sits.
+    public static let placeholderGap: CGFloat = 14
+    public static let placeholderWidth: CGFloat = 380
+    public static let placeholderBottomInset: CGFloat = 40
+    /// The footer under a live session's document — the meter, what is
+    /// happening, where it happens — its height, its side insets and the gap
+    /// between its parts.
+    public static let liveFooterHeight: CGFloat = 56
+    public static let liveFooterInset: CGFloat = 20
+    public static let liveFooterGap: CGFloat = 16
     /// A property row under the title.
     public static let propertyRowHeight: CGFloat = 30
     /// The label column of a property row: icon plus its word.

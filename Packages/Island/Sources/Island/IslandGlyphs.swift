@@ -8,38 +8,15 @@
 //  where the design puts them at whatever size a face asks for.
 //
 //  All `nonisolated`, because `Shape` asks for its path off the main actor and
-//  this package defaults to it.
+//  this package defaults to it. The grid, and the Record dot the window draws
+//  too, are `DesignSystem`'s (`EchoGlyphs`).
 //
 
 import DesignSystem
 import SwiftUI
 
-/// Maps the artboards' 16 × 16 grid onto a rect.
-nonisolated struct GlyphGrid {
-
-    let rect: CGRect
-
-    var unit: CGFloat { min(rect.width, rect.height) / 16 }
-
-    func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-        CGPoint(x: rect.midX + (x - 8) * unit, y: rect.midY + (y - 8) * unit)
-    }
-
-    func length(_ value: CGFloat) -> CGFloat { value * unit }
-}
-
-/// The dot on the Record capsule.
-nonisolated struct RecordGlyph: Shape {
-    func path(in rect: CGRect) -> Path {
-        let grid = GlyphGrid(rect: rect)
-        let radius = grid.length(6.6)
-        let centre = grid.point(8, 8)
-        return Path(
-            ellipseIn: CGRect(x: centre.x - radius, y: centre.y - radius, width: 2 * radius, height: 2 * radius))
-    }
-}
-
-/// The square on the Stop capsule.
+/// The square on the Stop capsule. Not the window's Stop square: the title
+/// bar's artboard draws that one larger on the same grid.
 nonisolated struct StopGlyph: Shape {
     func path(in rect: CGRect) -> Path {
         let grid = GlyphGrid(rect: rect)

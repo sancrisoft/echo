@@ -24,16 +24,25 @@
 import DesignSystem
 import EchoCore
 import Meetings
+import Recording
 import SwiftUI
 
 public struct WorkspaceWindow: View {
     @Environment(MeetingLibrary.self) private var library
     @Environment(WorkspaceModel.self) private var workspace
+    @Environment(RecordingSession.self) private var session
+    @Environment(AppSettings.self) private var settings
 
     private let dataRoot: DataRoot
+    private let startRecording: () async -> Void
 
-    public init(dataRoot: DataRoot) {
+    /// - Parameter startRecording: New recording. The composition root's, so
+    ///   the window starts the same gated recording, with the same capture, as
+    ///   every other surface (`TitleBar`). It returns once the start has
+    ///   landed, so the window knows whether there is a session to show.
+    public init(dataRoot: DataRoot, startRecording: @escaping () async -> Void) {
         self.dataRoot = dataRoot
+        self.startRecording = startRecording
     }
 
     public var body: some View {
@@ -55,13 +64,52 @@ public struct WorkspaceWindow: View {
         }
         .frame(minWidth: EchoLayout.minimumWindow.width, minHeight: EchoLayout.minimumWindow.height)
         .background(WindowChromeReader(background: EchoColor.windowBackground))
+        .toolbar { TitleBarToolbar(startRecording: { recordFromTheWindow() }) }
+        // Capture ended: if the window was showing the session, it follows
+        // the meeting the stop saved into the library.
+        .onChange(of: session.phase) { _, phase in
+            switch phase {
+            case .recording, .stopping:
+                break
+            case .idle, .finalizing, .summarizing:
+                workspace.liveSessionEnded(savedMeeting: phase.meetingID)
+            }
+        }
         // A selection the library no longer holds (trashed, deleted, purged)
-        // is dropped so the document never shows a meeting that is gone.
+        // is dropped so the document never shows a meeting that is gone, and
+        // the library opens on another rather than on nothing.
         .onChange(of: library.metas.map(\.id)) { _, _ in
             workspace.reconcileSelection(with: library.metas)
+            settleSelection()
+        }
+        // The window opens on the meeting last open, and remembers each one
+        // it opens for the next launch.
+        .onAppear { settleSelection() }
+        .onChange(of: workspace.selectedMeetingID) { _, id in
+            if let id {
+                settings.noteOpenMeeting(id)
+            } else {
+                settleSelection()
+            }
         }
         .onChange(of: library.trashedMetas.map(\.id)) { _, _ in
             workspace.reconcileTrashSelection(with: library.trashedMetas)
+        }
+    }
+
+    private func settleSelection() {
+        workspace.settleSelection(in: library.metas, lastOpen: settings.lastOpenMeeting)
+    }
+
+    /// New recording, from the title bar. The window shows the session only
+    /// once there is one: a refused start, or one whose capture failed, has
+    /// nothing to show, and the window stays where it was.
+    private func recordFromTheWindow() {
+        Task {
+            await startRecording()
+            if session.phase.isRecording {
+                workspace.showLiveSession()
+            }
         }
     }
 
@@ -75,11 +123,18 @@ public struct WorkspaceWindow: View {
             section: workspace.section,
             selection: workspace.selectedMeetingID,
             hasMeetings: !library.metas.isEmpty,
-            meta: { id in library.metas.first { $0.id == id } })
+            meta: { id in library.metas.first { $0.id == id } },
+            phase: session.phase)
         {
         case .meeting(let meta):
             MeetingDocumentView(meta: meta)
                 .id(meta.id)
+        case .liveSession(let live):
+            LiveSessionDocument(session: live)
+        case .savingSession:
+            // A moment's blank rather than the meeting that was open before:
+            // the one being saved is about to take its place.
+            Color.clear
         case .noMeetings:
             EmptyState(
                 symbol: "waveform",

@@ -2,10 +2,9 @@
 //  WindowChromeTests.swift
 //  WorkspaceTests
 //
-//  The title bar is the one surface a snapshot cannot check: the window
-//  renders its content view, and the title bar is not in it. So the chrome is
-//  checked on a real window instead — what it sets, and that the colour it
-//  sets is the design's in both appearances.
+//  A snapshot shows the title bar to the eye, but cannot say what the window
+//  was told to be. So the chrome is checked on a real window — what it sets,
+//  and that the colour it sets is the design's in both appearances.
 //
 
 import AppKit
@@ -13,6 +12,7 @@ import DesignSystem
 import EchoCore
 import EchoCoreTestSupport
 import Meetings
+import Recording
 import SwiftUI
 import Testing
 
@@ -47,11 +47,14 @@ struct WindowChromeTests {
         defer { temporary.remove() }
         let dataRoot = DataRoot(url: temporary.url)
         let window = window()
+        let library = MeetingLibrary(dataRoot: dataRoot)
+        let settings = AppSettings(dataRoot: dataRoot)
         let hosting = NSHostingView(
-            rootView: WorkspaceWindow(dataRoot: dataRoot)
-                .environment(MeetingLibrary(dataRoot: dataRoot))
+            rootView: WorkspaceWindow(dataRoot: dataRoot, startRecording: {})
+                .environment(library)
                 .environment(WorkspaceModel())
-                .environment(AppSettings(dataRoot: dataRoot)))
+                .environment(settings)
+                .environment(RecordingSession(library: library, settings: settings, dataRoot: dataRoot)))
         window.contentView = hosting
         // The representable's view reaches the window during layout; no sleep,
         // just the layout the window would do anyway.

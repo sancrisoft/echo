@@ -19,6 +19,9 @@ public final class WorkspaceModel {
 
     public enum Section: Hashable, Sendable {
         case meetings
+        /// The session being recorded: the window's view of a meeting that
+        /// is not on disk yet.
+        case recording
         case trash
         case settings
     }
@@ -105,8 +108,45 @@ public final class WorkspaceModel {
         if let tab { documentTab = tab }
     }
 
+    /// Where the library opens with nothing selected: never on nothing. The
+    /// meeting selected stays while the library holds it; otherwise the
+    /// window opens on the meeting last open, and when that one is gone, on
+    /// the most recent (product owner, 2026-10-02). An empty library has
+    /// nothing to open, and the window says so instead.
+    public func settleSelection(in metas: [MeetingMeta], lastOpen: UUID?) {
+        guard !metas.isEmpty else { return }
+        if let selectedMeetingID, metas.contains(where: { $0.id == selectedMeetingID }) { return }
+        if let lastOpen, metas.contains(where: { $0.id == lastOpen }) {
+            selectedMeetingID = lastOpen
+            return
+        }
+        selectedMeetingID = metas.max { $0.startedAt < $1.startedAt }?.id
+    }
+
     /// Drops the trash selection when its row is gone.
     public func reconcileTrashSelection(with trashed: [MeetingMeta]) {
         selectedTrashedID = MeetingListSelection.reconcile(selectedTrashedID, with: trashed.map(\.id))
+    }
+
+    // MARK: - The live session
+
+    /// Shows the session being recorded in the document's place. The meeting
+    /// selection survives underneath, as it does through Trash and Settings.
+    public func showLiveSession() {
+        section = .recording
+    }
+
+    /// Capture ended while the window showed it. The window follows the
+    /// meeting into the library: it opens the one the stop saved — the one
+    /// the session is now working on — or, with none, the library as it was.
+    /// Showing anything else, nothing moves: a stop made from the island does
+    /// not pull the window away from what the user is reading.
+    public func liveSessionEnded(savedMeeting: UUID?) {
+        guard section == .recording else { return }
+        if let savedMeeting {
+            open(savedMeeting)
+        } else {
+            section = .meetings
+        }
     }
 }

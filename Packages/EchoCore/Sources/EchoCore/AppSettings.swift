@@ -30,6 +30,7 @@ public final class AppSettings {
         var checkForUpdatesAutomatically = true
         var hasLaunchedBefore = false
         var showsIsland = true
+        var lastOpenMeeting: UUID?
 
         init() {}
 
@@ -66,6 +67,9 @@ public final class AppSettings {
             showsIsland =
                 try container.decodeIfPresent(Bool.self, forKey: .showsIsland)
                 ?? defaults.showsIsland
+            lastOpenMeeting =
+                try container.decodeIfPresent(UUID.self, forKey: .lastOpenMeeting)
+                ?? defaults.lastOpenMeeting
         }
     }
 
@@ -113,6 +117,13 @@ public final class AppSettings {
     /// what the island would have said.
     public private(set) var showsIsland: Bool
 
+    /// The meeting the window last showed, so the window opens on it after a
+    /// relaunch (product owner, 2026-10-02). Navigation rather than a
+    /// preference, but it has to outlive the process, and this is the one
+    /// small file that does. `nil` until a meeting has been open; one that
+    /// has since gone is the window's to step past.
+    public private(set) var lastOpenMeeting: UUID?
+
     @ObservationIgnored private let fileURL: URL
 
     /// Loads the preferences from `fileURL`, falling back to defaults when the
@@ -128,6 +139,7 @@ public final class AppSettings {
         self.checkForUpdatesAutomatically = stored.checkForUpdatesAutomatically
         self.hasLaunchedBefore = stored.hasLaunchedBefore
         self.showsIsland = stored.showsIsland
+        self.lastOpenMeeting = stored.lastOpenMeeting
     }
 
     /// The app's preferences, at the data root's `settings.json`.
@@ -200,6 +212,13 @@ public final class AppSettings {
         persist()
     }
 
+    /// Records the meeting the window shows and persists it.
+    public func noteOpenMeeting(_ id: UUID) {
+        guard lastOpenMeeting != id else { return }
+        lastOpenMeeting = id
+        persist()
+    }
+
     private static func load(from url: URL) -> Stored {
         guard let data = try? Data(contentsOf: url) else { return Stored() }
         do {
@@ -220,6 +239,7 @@ public final class AppSettings {
         stored.checkForUpdatesAutomatically = checkForUpdatesAutomatically
         stored.hasLaunchedBefore = hasLaunchedBefore
         stored.showsIsland = showsIsland
+        stored.lastOpenMeeting = lastOpenMeeting
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(),

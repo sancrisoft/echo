@@ -42,8 +42,9 @@ import Workspace
             let workspace = composition.workspace
             switch scene {
             case .library:
+                // As it opens: on the meeting last open, since the window
+                // never shows nothing selected.
                 workspace.section = .meetings
-                workspace.selectedMeetingID = nil
             case .summary, .transcript:
                 if let first = composition.library.metas.first {
                     workspace.open(first.id, tab: scene == .summary ? .summary : .transcript)
@@ -60,8 +61,11 @@ import Workspace
         }
 
         private func write(to path: URL) {
+            // The content view's superview is the window's frame view, which
+            // holds the title bar and its toolbar too: the title bar carries
+            // New recording, and a snapshot without it would not show it.
             guard let window = NSApp.windows.first(where: { $0.identifier?.rawValue == EchoWindow.main }),
-                let view = window.contentView
+                let view = window.contentView?.superview ?? window.contentView
             else {
                 ErrorTrace.record("Snapshot requested but the main window has no content view", category: "Snapshot")
                 return

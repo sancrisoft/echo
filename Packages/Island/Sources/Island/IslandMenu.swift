@@ -196,7 +196,7 @@ extension IslandMenuEntry {
         // reason as a line, Record held back, and the artboard's Retry once
         // the fetch has failed — the one way to run it again short of a
         // relaunch.
-        let waiting = FaceText.waitingFor(reading.readiness)
+        let waiting = reading.readiness.waitingFor
         var waitingEntries: [IslandMenuEntry] {
             guard let waiting else { return [] }
             var entries = [IslandMenuEntry(title: waiting, kind: .status)]

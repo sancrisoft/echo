@@ -114,6 +114,7 @@ import SwiftUI
                 Text("Buttons").font(EchoFont.sectionTitle)
                 HStack {
                     Button("New recording") {}.buttonStyle(.echoPrimary)
+                    Button("New recording") {}.buttonStyle(.echoPrimary).disabled(true)
                     Button("Export") {}.buttonStyle(.echoSecondary)
                     Button("Copy") {}.buttonStyle(.echoQuiet)
                     Button("Delete") {}.buttonStyle(.echoDestructive)

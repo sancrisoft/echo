@@ -2,9 +2,11 @@
 //  MeetingSidebar.swift
 //  Workspace
 //
-//  The sidebar the design draws: Search and Settings as rows at the top, the
-//  meetings under a section label that counts them, grouped by date, and the
-//  way to Trash with what the library occupies at the foot.
+//  The sidebar the design draws: the app's row with the mark, Search and
+//  Settings as rows under it, the meetings under a section label that counts
+//  them, grouped by date — with the session being recorded pinned above the
+//  groups while there is one — and the way to Trash with what the library
+//  occupies at the foot.
 //
 //  Every row is the same shape — one height, one inset, one radius — so the
 //  list reads as one column whatever a row holds. Rows are custom views in a
@@ -17,11 +19,13 @@
 import DesignSystem
 import EchoCore
 import Meetings
+import Recording
 import SwiftUI
 
 struct MeetingSidebar: View {
     @Environment(MeetingLibrary.self) private var library
     @Environment(WorkspaceModel.self) private var workspace
+    @Environment(RecordingSession.self) private var session
 
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
@@ -35,15 +39,20 @@ struct MeetingSidebar: View {
     private enum SidebarHover: Hashable {
         case search
         case settings
+        case liveSession
         case trash
         case meeting(UUID)
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            appRow
             searchRow
             settingsRow
             sectionLabel
+            if let startedAt = session.phase.startedAt {
+                liveRow(startedAt)
+            }
             list
             footer
         }
@@ -68,6 +77,31 @@ struct MeetingSidebar: View {
             }
             Button("Cancel", role: .cancel) { renameTarget = nil }
         }
+    }
+
+    // MARK: The app
+
+    /// The mark and the app's name. The artboard puts a chevron at the end of
+    /// this row and no artboard says what it opens, so it is left out until
+    /// one does (product owner, 2026-10-19): a chevron that opens nothing
+    /// reads as broken.
+    private var appRow: some View {
+        // The mark carries its clear space with it. The artboard measures the
+        // row's inset and the gap to the name from the mark's grid, so the
+        // clear space comes out of both rather than being added to them.
+        let clear = EchoMark.clearSpaceInset(for: EchoControl.appMarkSize).width
+        return HStack(spacing: EchoSpacing.s - clear) {
+            EchoMark(size: EchoControl.appMarkSize, ink: EchoColor.accent)
+            Text("Echo")
+                .font(EchoFont.appName)
+                .tracking(EchoFont.appNameTracking)
+                .foregroundStyle(EchoColor.textPrimary)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, EchoLayout.appRowInset - clear)
+        .padding(.trailing, EchoLayout.appRowInset)
+        .frame(height: EchoLayout.appRowHeight)
+        .padding(.bottom, EchoSpacing.s)
     }
 
     // MARK: Search
@@ -171,6 +205,25 @@ struct MeetingSidebar: View {
             }
         }
         .pickerStyle(.inline)
+    }
+
+    // MARK: The live session
+
+    /// The session being recorded, pinned above the date groups for as long
+    /// as capture runs. It is the session, not a stored meeting: the meeting
+    /// joins the groups once the stop has saved it.
+    private func liveRow(_ startedAt: Date) -> some View {
+        Button {
+            workspace.showLiveSession()
+        } label: {
+            LiveSessionRow(
+                startedAt: startedAt,
+                isSelected: workspace.section == .recording,
+                isHovered: hovered == .liveSession
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in hover(.liveSession, hovering) }
     }
 
     private var visible: [MeetingMeta] { workspace.visibleMeetings(in: library.metas) }
@@ -354,6 +407,35 @@ struct MeetingSidebar: View {
             .font(isSelected ? EchoFont.rowSelected : EchoFont.row)
             .foregroundStyle(isSelected ? EchoColor.textPrimary : EchoColor.textSecondary)
             .lineLimit(1)
+    }
+}
+
+/// The session being recorded, as a sidebar row: the red dot, the word, and
+/// the clock.
+struct LiveSessionRow: View {
+    let startedAt: Date
+    let isSelected: Bool
+    let isHovered: Bool
+
+    var body: some View {
+        HStack(spacing: EchoSpacing.s) {
+            Circle()
+                .fill(EchoColor.recording)
+                .frame(width: EchoControl.recordingDotSize, height: EchoControl.recordingDotSize)
+                .accessibilityHidden(true)
+            Text("Recording")
+                .font(isSelected ? EchoFont.rowSelected : EchoFont.row)
+                .foregroundStyle(isSelected ? EchoColor.textPrimary : EchoColor.textSecondary)
+                .lineLimit(1)
+            Spacer(minLength: EchoSpacing.s)
+            TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                Text(EchoClock.compact(EchoClock.elapsedSeconds(since: startedAt, now: context.date)))
+                    .font(EchoFont.mono(11.5))
+                    .foregroundStyle(EchoColor.recordingTimer)
+                    .fixedSize()
+            }
+        }
+        .sidebarRow(isSelected: isSelected, isHovered: isHovered)
     }
 }
 

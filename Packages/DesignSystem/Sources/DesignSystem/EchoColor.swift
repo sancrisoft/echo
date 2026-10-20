@@ -67,6 +67,12 @@ public nonisolated enum EchoColor {
     /// control.
     public static let border = Color(light: 0xE1E3E6, dark: 0x292B2F)
 
+    /// The edge of something that cannot be pressed: a held-back button, a
+    /// key hint. A step lighter than `border` in dark, so an inert control
+    /// still has an outline once its fill has gone grey. Light mode does not
+    /// draw it; it takes `border`'s light value until the light audit (#120).
+    public static let inertBorder = Color(light: 0xE1E3E6, dark: 0x2F3237)
+
     // MARK: Text
     //
     // Seven steps, from the title down to the storage line in the sidebar's
@@ -101,6 +107,35 @@ public nonisolated enum EchoColor {
     /// The recording red — the only saturated color while a session runs. It
     /// lifts in dark mode: the brand sheet's red is too heavy on near-black.
     public static let recording = Color(light: 0xD02B31, dark: 0xED4A49)
+
+    /// The recording red at a whisper, and its edge: the pill the title bar's
+    /// running clock sits in. Light mode does not draw the pill; it takes the
+    /// light red at the dark side's percentages until the light audit (#120).
+    public static let recordingWash = Color(
+        light: 0xD02B31, dark: 0xED4A49, lightOpacity: 0.12, darkOpacity: 0.12)
+    public static let recordingWashEdge = Color(
+        light: 0xD02B31, dark: 0xED4A49, lightOpacity: 0.28, darkOpacity: 0.28)
+
+    /// The running clock's digits on that wash: the red, lifted, so the
+    /// numbers read on their own tint. Light mode does not draw it; a lifted
+    /// red on white would wash out, so it takes the light red itself. The
+    /// live status pill and the sidebar's live row write in it too.
+    public static let recordingTimer = Color(light: 0xD02B31, dark: 0xF0908F)
+
+    /// Behind the live status pill: a touch more red than the clock's pill.
+    /// Light mode does not draw it; it takes the light red at the dark
+    /// side's percentage until the light audit (#120).
+    public static let recordingPillWash = Color(
+        light: 0xD02B31, dark: 0xED4A49, lightOpacity: 0.14, darkOpacity: 0.14)
+
+    /// The glyph above a document's placeholder: the faintest ink the window
+    /// draws, the breadcrumb slash's.
+    public static let placeholderGlyph = breadcrumbSlash
+
+    /// The Others channel in the window's level meter, beside You in the
+    /// accent. Light mode does not draw it; it takes the tertiary text's light
+    /// value until the light audit (#120).
+    public static let levelOthers = Color(light: 0x8A8D92, dark: 0x616469)
 
     public static let success = Color(nsColor: .systemGreen)
     public static let warning = Color(nsColor: .systemOrange)

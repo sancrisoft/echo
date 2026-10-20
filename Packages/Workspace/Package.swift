@@ -44,6 +44,7 @@ let package = Package(
                 .product(name: "EchoCore", package: "EchoCore"),
                 .product(name: "EchoCoreTestSupport", package: "EchoCore"),
                 .product(name: "Meetings", package: "Meetings"),
+                .product(name: "Recording", package: "Recording"),
                 .product(name: "Updates", package: "Updates"),
             ],
             swiftSettings: [

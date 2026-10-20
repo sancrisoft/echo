@@ -206,6 +206,40 @@ struct PrimitiveTests {
                 == EchoLayout.toolbarButtonHeight)
     }
 
+    @Test("the live status pill carries its dot, and no other pill does")
+    func theLivePillHasItsDot() {
+        let live = size(of: StatusBadge("Recording", tone: .recording))
+        let accent = size(of: StatusBadge("Recording", tone: .accent))
+        #expect(live.height == accent.height)
+        #expect(live.width == accent.width + EchoControl.pillDotSize + EchoControl.pillGap)
+    }
+
+    @Test("a primary held back keeps its shape and changes what it is drawn in")
+    func aHeldBackPrimary() throws {
+        // New recording while the transcription model is missing: the title
+        // bar must not change its layout while it explains why.
+        let enabled = Button("New recording") {}.buttonStyle(.echoPrimary)
+        let heldBack = Button("New recording") {}.buttonStyle(.echoPrimary).disabled(true)
+        for scheme in [ColorScheme.light, .dark] {
+            let on = try image(of: enabled.background(EchoColor.windowBackground).environment(\.colorScheme, scheme))
+            let off = try image(of: heldBack.background(EchoColor.windowBackground).environment(\.colorScheme, scheme))
+            #expect(on.width == off.width && on.height == off.height)
+            #expect(on.dataProvider?.data != off.dataProvider?.data, "held back looks enabled in \(scheme)")
+        }
+    }
+
+    @Test("only the primary has a held-back look; the other roles keep theirs")
+    func onlyThePrimaryIsDrawnHeldBack() throws {
+        // The design draws one held-back button. A role it has not drawn is
+        // not given a look nobody decided.
+        for style in [EchoButtonStyle(.secondary), .init(.quiet), .init(.destructive)] {
+            let on = try image(of: Button("Export") {}.buttonStyle(style).background(EchoColor.windowBackground))
+            let off = try image(
+                of: Button("Export") {}.buttonStyle(style).disabled(true).background(EchoColor.windowBackground))
+            #expect(on.dataProvider?.data == off.dataProvider?.data)
+        }
+    }
+
     @Test("the island's capsules and the window's buttons are two families")
     func theTwoFamiliesStayApart() {
         // DEC-4 is open: the island takes iOS capsules, the window keeps its

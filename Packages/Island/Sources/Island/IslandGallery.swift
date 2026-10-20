@@ -85,7 +85,7 @@ import SwiftUI
         private var startedAt: Date { now.addingTimeInterval(-761) }
 
         /// The readiness line, part-way through the fetch.
-        private static let waiting = FaceText.waitingFor(.downloading(0.41))
+        private static let waiting = RecordingReadiness.downloading(0.41).waitingFor
 
         /// The session's own sentence for a lost microphone.
         private static let notice = "Microphone unavailable — recording continues with meeting audio only."
