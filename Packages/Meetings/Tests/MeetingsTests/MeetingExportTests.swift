@@ -194,6 +194,36 @@ struct MeetingExportTests {
         #expect(copy.contains("\n### Decisions\n"))
     }
 
+    // MARK: - The transcript on the clipboard
+
+    @Test func copiedTranscriptIsTheTurnsTheTabShows() throws {
+        let record = MeetingRecord(
+            meta: makeMeta(),
+            segments: [
+                TranscriptSegment(channel: .system, speaker: .teammates, text: "Shall we start?", start: 62, end: 64),
+                TranscriptSegment(
+                    channel: .system, speaker: .teammates, text: "The release first.", start: 65, end: 68),
+                TranscriptSegment(channel: .microphone, speaker: .me, text: "Sounds good.", start: 70, end: 71),
+            ]
+        )
+        let markdown = try #require(MeetingExport.transcriptMarkdown(record))
+        let lines = markdown.components(separatedBy: "\n")
+
+        #expect(lines.first == "# Weekly sync")
+        #expect(lines[2].hasPrefix("_") && lines[2].contains("420 words"))
+        // One paragraph per turn: the two segments Others said back to back
+        // are one turn, as on screen, and each turn stands alone.
+        #expect(
+            Array(lines.dropFirst(3))
+                == ["", "**1:02 · Others:** Shall we start? The release first.", "", "**1:10 · You:** Sounds good."])
+        #expect(!markdown.hasSuffix("\n"))
+    }
+
+    @Test func aMeetingWithoutATranscriptHasNothingToCopy() {
+        let record = MeetingRecord(meta: makeMeta(), segments: [])
+        #expect(MeetingExport.transcriptMarkdown(record) == nil)
+    }
+
     // MARK: - Records without a summary
 
     @Test func aRecordWithoutASummaryExportsNoSummarySection() {

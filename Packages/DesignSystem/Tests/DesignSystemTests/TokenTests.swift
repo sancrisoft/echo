@@ -122,6 +122,10 @@ nonisolated let palette: [Token] = [
     .init(
         "accentWash", EchoColor.accentWash, light: 0x1673C0, dark: 0x3B9CF6,
         lightOpacity: 0.13, darkOpacity: 0.15),
+    // Not drawn: the current find match, chosen by the product owner.
+    .init(
+        "findCurrentMatch", EchoColor.findCurrentMatch, light: 0x1673C0, dark: 0x3B9CF6,
+        lightOpacity: 0.32, darkOpacity: 0.40),
     .init("recording", EchoColor.recording, light: 0xD02B31, dark: 0xED4A49),
     .init(
         "recordingWash", EchoColor.recordingWash, light: 0xD02B31, dark: 0xED4A49,
@@ -134,6 +138,7 @@ nonisolated let palette: [Token] = [
         "recordingPillWash", EchoColor.recordingPillWash, light: 0xD02B31, dark: 0xED4A49,
         lightOpacity: 0.14, darkOpacity: 0.14),
     .init("placeholderGlyph", EchoColor.placeholderGlyph, light: 0xC4C7CB, dark: 0x3A3D41),
+    .init("speakerSplitOthers", EchoColor.speakerSplitOthers, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("levelOthers", EchoColor.levelOthers, light: 0x8A8D92, dark: 0x616469),
     .init("selection", EchoColor.selection, light: 0xE8EAED, dark: 0x1F2024),
     // The models panel (`Models.dc.html`). Light values borrowed until #120.
@@ -220,6 +225,43 @@ struct MetricTests {
         #expect(EchoLayout.propertyRowHeight == 30)
         #expect(EchoLayout.propertyLabelWidth == 104)
         #expect(EchoLayout.documentFadeHeight == 76)
+    }
+
+    /// A summary under the tabs, as the workspace artboard sets its sections,
+    /// lists and inline code.
+    @Test("the summary's measures are the artboard's")
+    func summaryMatchesTheArtboard() {
+        #expect(EchoLayout.summaryTopGap == 24)
+        #expect(EchoLayout.summaryHeadingTop == 26)
+        #expect(EchoLayout.summaryHeadingBottom == 9)
+        #expect(EchoLayout.summaryBlockGap == 9)
+        #expect(EchoLayout.listMarkerGap == 11)
+        #expect(EchoControl.bulletSize == 4.5)
+        #expect(EchoControl.checkboxSize == 15)
+        #expect(EchoControl.inlineCodeInset == CGSize(width: 5, height: 1.5))
+        #expect(EchoRadius.inlineCode == 4)
+    }
+
+    /// A transcript under the tabs, as the transcript artboard sets its turns.
+    @Test("the transcript's measures are the artboard's")
+    func transcriptMatchesTheArtboard() {
+        #expect(EchoLayout.transcriptTopGap == 26)
+        #expect(EchoLayout.turnGap == 21)
+        #expect(EchoLayout.turnLabelGap == 9)
+        #expect(EchoLayout.turnTextGap == 5)
+        #expect(EchoLayout.findFieldWidth == 208)
+        #expect(EchoControl.findFieldHeight == 28)
+        #expect(EchoControl.findFieldInset == 11)
+        #expect(EchoControl.findFieldGap == 8)
+        #expect(EchoControl.findGlyphSize == 13)
+        #expect(EchoControl.findMatchInset == CGSize(width: 3, height: 1))
+        #expect(EchoRadius.findMatch == 3)
+        #expect(EchoLayout.speakerSplitWidth == 180)
+        #expect(EchoControl.speakerSplitHeight == 4)
+        #expect(EchoControl.speakerSplitGap == 2)
+        #expect(EchoControl.speakerSplitLabelGap == 12)
+        #expect(EchoControl.provenanceGap == 8)
+        #expect(EchoRadius.speakerSplit == 2)
     }
 
     @Test("the radii are the artboard's, largest to smallest")

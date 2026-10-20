@@ -77,7 +77,8 @@ public enum MeetingStatus: Equatable, Sendable {
 
     public var tone: StatusBadge.Tone {
         switch self {
-        case .summarized: return .success
+        // The design draws this one: the accent on its own wash.
+        case .summarized: return .accent
         case .transcribed: return .neutral
         case .failed: return .danger
         case .draft: return .warning

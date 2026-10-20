@@ -110,6 +110,24 @@ public enum MeetingExport {
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// The transcript as the Transcript tab shows it, for the clipboard: the
+    /// title heading, the meta line, then one paragraph per turn —
+    /// "**14:22 · Others:** …". Turns rather than segments, because the tab
+    /// merges a speaker's run of segments into one turn and the paste should
+    /// read like what was on screen; a blank line between turns, so each lands
+    /// as its own paragraph wherever Markdown is rendered. `nil` when there is
+    /// no transcript to copy. No trailing newline, as with the summary.
+    public static func transcriptMarkdown(_ record: MeetingRecord) -> String? {
+        let turns = TranscriptUtterance.derive(from: record.segments)
+        guard !turns.isEmpty else { return nil }
+        var lines = ["# \(record.meta.title)", "", "_\(header(for: record.meta))_"]
+        for turn in turns {
+            lines.append("")
+            lines.append("**\(timestamp(turn.start)) · \(turn.speaker.displayName):** \(turn.text)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// The meta line: "Aug 26, 2026 at 12:03 · 58 min · 5,512 words".
     public static func header(for meta: MeetingMeta) -> String {
         let date = meta.startedAt.formatted(date: .abbreviated, time: .shortened)

@@ -32,7 +32,6 @@ struct MeetingSidebar: View {
     @State private var hovered: SidebarHover?
     @State private var contextClicks = RowContextClickWatcher()
     @State private var renameTarget: MeetingMeta?
-    @State private var renameText = ""
 
     /// Which row the pointer is over. One value for the whole column, because
     /// the pointer is only ever over one row.
@@ -65,18 +64,7 @@ struct MeetingSidebar: View {
             contextClicks.start()
         }
         .onDisappear { contextClicks.stop() }
-        .alert(
-            "Rename Meeting", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
-        ) {
-            TextField("Title", text: $renameText)
-            Button("Rename") {
-                if let target = renameTarget {
-                    Task { await library.rename(target.id, to: renameText) }
-                }
-                renameTarget = nil
-            }
-            Button("Cancel", role: .cancel) { renameTarget = nil }
-        }
+        .renameMeetingAlert($renameTarget)
     }
 
     // MARK: The app
@@ -308,10 +296,7 @@ struct MeetingSidebar: View {
         Button("Open Summary") { workspace.open(meta.id, tab: .summary) }
         Button("Open Transcript") { workspace.open(meta.id, tab: .transcript) }
         Divider()
-        Button("Rename…") {
-            renameText = meta.title
-            renameTarget = meta
-        }
+        Button("Rename…") { renameTarget = meta }
         Menu("Export…") {
             ForEach(MeetingExportFormat.allCases) { format in
                 Button(format.menuTitle) {

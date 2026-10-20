@@ -117,6 +117,11 @@ import SwiftUI
                     Button("New recording") {}.buttonStyle(.echoPrimary).disabled(true)
                     Button("Export") {}.buttonStyle(.echoSecondary)
                     Button("Copy") {}.buttonStyle(.echoQuiet)
+                    Button {
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: EchoControl.toolbarGlyphSize))
+                    }
+                    .buttonStyle(.echoQuietIcon)
                     Button("Delete") {}.buttonStyle(.echoDestructive)
                 }
 
@@ -128,14 +133,6 @@ import SwiftUI
                     StatusBadge("Failed", tone: .danger)
                     StatusBadge("Processing", tone: .accent)
                 }
-
-                Text("Meta strip").font(EchoFont.sectionTitle)
-                MetaStrip([
-                    MetaItem("calendar", "Aug 27, 2026 · 10:04 – 11:02"),
-                    MetaItem("clock", "58 min"),
-                    MetaItem("text.word.spacing", "5,512 words"),
-                    MetaItem("checkmark.seal", "Summarized"),
-                ])
 
                 Text("Property rows").font(EchoFont.sectionTitle)
                 VStack(alignment: .leading, spacing: 0) {
