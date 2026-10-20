@@ -19,7 +19,11 @@ import Meetings
 import SwiftUI
 
 struct TranscriptView: View {
-    let segments: [TranscriptSegment]
+    let turns: [TranscriptUtterance]
+    /// Where the open find's query occurs, in reading order, and which of
+    /// those places the user is on.
+    var matches: [TranscriptMatch] = []
+    var current: Int?
 
     /// Half the leading a transcript line carries, which a CSS line box puts
     /// above its first line and below its last and a `Text` does not: the
@@ -33,19 +37,36 @@ struct TranscriptView: View {
     static let textSpacing = EchoLayout.turnTextGap + halfLeading
 
     var body: some View {
+        let highlights = Self.highlights(matches, current: current)
         LazyVStack(alignment: .leading, spacing: Self.turnSpacing) {
-            ForEach(TranscriptUtterance.derive(from: segments)) { turn in
-                TranscriptTurn(turn: turn)
+            ForEach(turns) { turn in
+                TranscriptTurn(turn: turn, highlights: highlights[turn.id] ?? [])
                     .id(turn.id)
             }
         }
     }
+
+    /// The matches grouped by turn, each marked current or not.
+    static func highlights(_ matches: [TranscriptMatch], current: Int?) -> [UUID: [TurnHighlight]] {
+        var byTurn: [UUID: [TurnHighlight]] = [:]
+        for (index, match) in matches.enumerated() {
+            byTurn[match.turn, default: []].append(TurnHighlight(range: match.range, isCurrent: index == current))
+        }
+        return byTurn
+    }
+}
+
+/// A find match inside one turn's words.
+struct TurnHighlight: Equatable {
+    let range: Range<String.Index>
+    let isCurrent: Bool
 }
 
 /// One turn: the speaker and the time on one line, sharing a baseline, and the
 /// paragraph under them.
 private struct TranscriptTurn: View {
     let turn: TranscriptUtterance
+    let highlights: [TurnHighlight]
 
     var body: some View {
         VStack(alignment: .leading, spacing: TranscriptView.textSpacing) {
@@ -58,12 +79,42 @@ private struct TranscriptTurn: View {
                     .font(EchoFont.timestamp)
                     .foregroundStyle(EchoColor.textQuaternary)
             }
-            Text(turn.text)
+            words
                 .font(EchoFont.body)
                 .lineSpacing(EchoFont.transcriptLineSpacing)
                 .foregroundStyle(EchoColor.textProse)
+                .textRenderer(InlineHighlightRenderer())
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    /// The paragraph, with each match on its fill in the primary ink. The
+    /// fill reaches past the letters without moving them, so the words do
+    /// not reflow as the query changes.
+    private var words: Text {
+        guard !highlights.isEmpty else { return Text(turn.text) }
+        var text = Text(verbatim: "")
+        var cursor = turn.text.startIndex
+        for highlight in highlights {
+            if cursor < highlight.range.lowerBound {
+                text = Text("\(text)\(Text(turn.text[cursor..<highlight.range.lowerBound]))")
+            }
+            let match = Text(turn.text[highlight.range])
+                .foregroundStyle(EchoColor.textPrimary)
+                .customAttribute(
+                    InlineHighlight(
+                        fill: highlight.isCurrent ? EchoColor.findCurrentMatch : EchoColor.accentWash,
+                        radius: EchoRadius.findMatch,
+                        leading: EchoControl.findMatchInset.width,
+                        trailing: EchoControl.findMatchInset.width,
+                        vertical: EchoControl.findMatchInset.height))
+            text = Text("\(text)\(match)")
+            cursor = highlight.range.upperBound
+        }
+        if cursor < turn.text.endIndex {
+            text = Text("\(text)\(Text(turn.text[cursor...]))")
+        }
+        return text
     }
 }

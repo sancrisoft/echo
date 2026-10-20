@@ -7,7 +7,8 @@
 //  the facts under it as property rows, a rule, the two tabs (Summary first,
 //  because it is what the user opens a meeting for) and what the open tab
 //  shows. The bar stays put; the column scrolls under it and fades out at the
-//  foot of the pane.
+//  foot of the pane. On the Transcript tab, find sits to the right of the
+//  tabs (`TranscriptFind`).
 //
 
 import DesignSystem
@@ -25,6 +26,12 @@ struct MeetingDocumentView: View {
     @State private var loadFailed = false
     @State private var copied = false
     @State private var renameTarget: MeetingMeta?
+    /// The transcript as turns, derived once per load: find searches them
+    /// and the Transcript tab draws them.
+    @State private var turns: [TranscriptUtterance] = []
+    @State private var findQuery = ""
+    @State private var currentMatch: Int?
+    @FocusState private var findFocused: Bool
 
     /// Reload when the files behind the document change: a new summary, a
     /// replaced transcript, a rename.
@@ -36,19 +43,32 @@ struct MeetingDocumentView: View {
     }
 
     var body: some View {
+        // Find is the Transcript tab's: on Summary there is nothing to match.
+        let matches = workspace.documentTab == .transcript ? TranscriptFind.matches(of: findQuery, in: turns) : []
         VStack(spacing: 0) {
             Breadcrumb(trail: "Meetings", current: meta.title) { actions }
-            ScrollView {
-                column
-                    .frame(maxWidth: EchoLayout.readingWidth, alignment: .leading)
-                    .padding(.horizontal, EchoSpacing.xl)
-                    .padding(.top, EchoLayout.readingTopInset)
-                    // Room for the last line to scroll clear of the fade.
-                    .padding(.bottom, EchoLayout.documentFadeHeight)
-                    .frame(maxWidth: .infinity)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    column(matches)
+                        .frame(maxWidth: EchoLayout.readingWidth, alignment: .leading)
+                        .padding(.horizontal, EchoSpacing.xl)
+                        .padding(.top, EchoLayout.readingTopInset)
+                        // Room for the last line to scroll clear of the fade.
+                        .padding(.bottom, EchoLayout.documentFadeHeight)
+                        .frame(maxWidth: .infinity)
+                }
+                .overlay(alignment: .bottom) { DocumentFade() }
+                // A new query lands on its first match; ⌘G and Return move
+                // on from there. Either way the turn holding the match comes
+                // into view.
+                .onChange(of: findQuery) { _, _ in
+                    currentMatch = matches.isEmpty ? nil : 0
+                    reveal(currentMatch, in: matches, proxy)
+                }
+                .onChange(of: currentMatch) { _, index in reveal(index, in: matches, proxy) }
             }
-            .overlay(alignment: .bottom) { DocumentFade() }
         }
+        .background { findShortcuts(matches) }
         .renameMeetingAlert($renameTarget)
         .onChange(of: workspace.documentTab) { _, _ in copied = false }
         .task(
@@ -57,8 +77,10 @@ struct MeetingDocumentView: View {
             loadFailed = false
             if let loaded = await library.loadRecord(meta.id) {
                 record = loaded
+                turns = TranscriptUtterance.derive(from: loaded.segments)
             } else {
                 record = nil
+                turns = []
                 loadFailed = true
             }
         }
@@ -144,7 +166,7 @@ struct MeetingDocumentView: View {
 
     private var status: MeetingStatus { MeetingStatus.resolve(meta) }
 
-    private var column: some View {
+    private func column(_ matches: [TranscriptMatch]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(meta.title)
                 .font(EchoFont.documentTitle)
@@ -164,9 +186,15 @@ struct MeetingDocumentView: View {
                 .padding(.top, EchoLayout.documentDividerTop)
                 .padding(.bottom, EchoLayout.documentDividerBottom)
 
-            tabs
+            HStack(spacing: EchoSpacing.m) {
+                tabs
+                Spacer(minLength: 0)
+                if workspace.documentTab == .transcript, !turns.isEmpty {
+                    findField(matches)
+                }
+            }
 
-            content
+            content(matches)
         }
     }
 
@@ -178,10 +206,90 @@ struct MeetingDocumentView: View {
         return TabStrip(WorkspaceModel.DocumentTab.allCases, selection: $workspace.documentTab) { $0.title }
     }
 
+    // MARK: Find
+
+    /// Find in transcript: local to this document, and nothing to do with
+    /// the sidebar's search across the library. The placeholder is drawn in
+    /// the design's own ink rather than the field's; the field carries the
+    /// name for VoiceOver.
+    private func findField(_ matches: [TranscriptMatch]) -> some View {
+        HStack(spacing: EchoControl.findFieldGap) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: EchoControl.findGlyphSize))
+                .foregroundStyle(EchoColor.textQuaternary)
+                .accessibilityHidden(true)
+            ZStack(alignment: .leading) {
+                if findQuery.isEmpty {
+                    Text("Find in transcript")
+                        .foregroundStyle(EchoColor.textQuaternary)
+                        .accessibilityHidden(true)
+                }
+                TextField("", text: $findQuery)
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(EchoColor.textPrimary)
+                    .accessibilityLabel("Find in transcript")
+                    .focused($findFocused)
+                    .onSubmit { step(by: 1, count: matches.count) }
+                    .onExitCommand {
+                        findQuery = ""
+                        findFocused = false
+                    }
+            }
+            .font(EchoFont.control)
+            .lineLimit(1)
+            if !findQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(TranscriptFind.counter(current: currentMatch, count: matches.count))
+                    .font(EchoFont.mono(11))
+                    .foregroundStyle(EchoColor.textQuaternary)
+                    .fixedSize()
+            }
+        }
+        .padding(.horizontal, EchoControl.findFieldInset)
+        .frame(width: EchoLayout.findFieldWidth, height: EchoControl.findFieldHeight)
+        .overlay {
+            RoundedRectangle(cornerRadius: EchoRadius.control)
+                .strokeBorder(EchoColor.border, lineWidth: EchoLayout.hairline)
+        }
+        .contentShape(.rect)
+        .onTapGesture { findFocused = true }
+    }
+
+    /// ⌘F opens find from either tab, ⌘G and ⇧⌘G step through the matches.
+    /// Disabled when there is nothing to do, so the keys fall through.
+    private func findShortcuts(_ matches: [TranscriptMatch]) -> some View {
+        ZStack {
+            Button("") {
+                workspace.documentTab = .transcript
+                // The field exists once the Transcript tab has drawn.
+                Task { findFocused = true }
+            }
+            .keyboardShortcut("f", modifiers: .command)
+            .disabled(turns.isEmpty)
+            Button("") { step(by: 1, count: matches.count) }
+                .keyboardShortcut("g", modifiers: .command)
+                .disabled(matches.isEmpty)
+            Button("") { step(by: -1, count: matches.count) }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(matches.isEmpty)
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+
+    private func step(by offset: Int, count: Int) {
+        currentMatch = TranscriptFind.step(from: currentMatch, by: offset, count: count)
+    }
+
+    private func reveal(_ index: Int?, in matches: [TranscriptMatch], _ proxy: ScrollViewProxy) {
+        guard let index, matches.indices.contains(index) else { return }
+        proxy.scrollTo(matches[index].turn, anchor: .center)
+    }
+
     // MARK: Content
 
     @ViewBuilder
-    private var content: some View {
+    private func content(_ matches: [TranscriptMatch]) -> some View {
         if loadFailed {
             EmptyState(
                 symbol: "exclamationmark.triangle",
@@ -194,7 +302,7 @@ struct MeetingDocumentView: View {
         } else if let record {
             switch workspace.documentTab {
             case .summary: summary(record).padding(.top, EchoLayout.summaryTopGap)
-            case .transcript: transcript(record).padding(.top, EchoLayout.transcriptTopGap)
+            case .transcript: transcript(record, matches: matches).padding(.top, EchoLayout.transcriptTopGap)
             }
         }
     }
@@ -215,7 +323,7 @@ struct MeetingDocumentView: View {
     }
 
     @ViewBuilder
-    private func transcript(_ record: MeetingRecord) -> some View {
+    private func transcript(_ record: MeetingRecord, matches: [TranscriptMatch]) -> some View {
         if record.segments.isEmpty {
             EmptyState(
                 symbol: "text.quote",
@@ -225,7 +333,7 @@ struct MeetingDocumentView: View {
                     : "The transcript is written after the recording stops."
             )
         } else {
-            TranscriptView(segments: record.segments)
+            TranscriptView(turns: turns, matches: matches, current: currentMatch)
         }
     }
 }
