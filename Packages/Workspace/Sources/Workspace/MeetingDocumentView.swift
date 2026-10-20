@@ -167,7 +167,6 @@ struct MeetingDocumentView: View {
             tabs
 
             content
-                .padding(.top, EchoSpacing.xl)
         }
     }
 
@@ -194,8 +193,8 @@ struct MeetingDocumentView: View {
             }
         } else if let record {
             switch workspace.documentTab {
-            case .summary: summary(record)
-            case .transcript: transcript(record)
+            case .summary: summary(record).padding(.top, EchoLayout.summaryTopGap)
+            case .transcript: transcript(record).padding(.top, EchoSpacing.xl)
             }
         }
     }
