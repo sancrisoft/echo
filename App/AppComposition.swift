@@ -78,8 +78,9 @@ final class AppComposition {
     let globalShortcut: GlobalShortcut
 
     /// The window's New recording: the same gated start the shortcut and the
-    /// menu run, with the capture they share.
-    let startRecording: () -> Void
+    /// menu run, with the capture they share. It returns once the start has
+    /// landed.
+    let startRecording: () async -> Void
 
     /// Whether the main window is on screen as soon as the scene is built.
     /// True for `ECHO_OPEN_WINDOW`, and for the one launch that finds this Mac
@@ -220,7 +221,7 @@ final class AppComposition {
         // The window's. A refusal needs no answer here: the title bar holds
         // the button back and says why for as long as the model is missing,
         // so a refused click can only be one that raced the model's state.
-        startRecording = { _ = record() }
+        startRecording = { _ = await record().value }
     }
 
     /// A meeting, as the island speaks of it.

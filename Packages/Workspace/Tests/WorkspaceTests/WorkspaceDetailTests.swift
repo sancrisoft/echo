@@ -1,5 +1,6 @@
 import Foundation
 import Meetings
+import Recording
 import Testing
 
 @testable import Workspace
@@ -21,7 +22,8 @@ struct WorkspaceDetailTests {
         _ section: WorkspaceModel.Section, selection: UUID?, library: [MeetingMeta]
     ) -> WorkspaceDetail {
         WorkspaceDetail.resolve(
-            section: section, selection: selection, hasMeetings: !library.isEmpty, meta: lookup(library))
+            section: section, selection: selection, hasMeetings: !library.isEmpty, meta: lookup(library),
+            phase: .idle)
     }
 
     @Test("a selected meeting that is in the library is the document, and carries it")
@@ -58,12 +60,59 @@ struct WorkspaceDetailTests {
             return [self.first, self.second].first { $0.id == id }
         }
         _ = WorkspaceDetail.resolve(
-            section: .meetings, selection: first.id, hasMeetings: true, meta: counting)
+            section: .meetings, selection: first.id, hasMeetings: true, meta: counting, phase: .idle)
         #expect(asked == [first.id])
 
         asked.removeAll()
-        _ = WorkspaceDetail.resolve(section: .trash, selection: first.id, hasMeetings: true, meta: counting)
-        _ = WorkspaceDetail.resolve(section: .meetings, selection: nil, hasMeetings: true, meta: counting)
+        _ = WorkspaceDetail.resolve(
+            section: .trash, selection: first.id, hasMeetings: true, meta: counting, phase: .idle)
+        _ = WorkspaceDetail.resolve(
+            section: .meetings, selection: nil, hasMeetings: true, meta: counting, phase: .idle)
         #expect(asked.isEmpty, "the pane is decided without walking the library")
+    }
+
+    // MARK: The live session
+
+    private let startedAt = Date(timeIntervalSince1970: 1_756_900_000)
+
+    @Test("the live session is the pane while capture runs, whatever the library holds")
+    func liveSessionWhileCapturing() {
+        let resolved = WorkspaceDetail.resolve(
+            section: .recording, selection: first.id, hasMeetings: true, meta: lookup([first]),
+            phase: .recording(startedAt: startedAt, scope: .everything))
+        #expect(resolved == .liveSession(LiveSession(startedAt: startedAt, capture: "Everything")))
+    }
+
+    @Test("while the session is saved there is nothing to show, not an old meeting")
+    func savingShowsNothingOld() {
+        let resolved = WorkspaceDetail.resolve(
+            section: .recording, selection: first.id, hasMeetings: true, meta: lookup([first]), phase: .stopping)
+        #expect(resolved == .savingSession)
+    }
+
+    @Test("with no session to show, the live section reads as the library")
+    func noSessionReadsAsTheLibrary() {
+        let meeting = UUID()
+        for phase in [
+            RecordingPhase.idle, .finalizing(meetingID: meeting, progress: 0.2), .summarizing(meetingID: meeting),
+        ] {
+            let resolved = WorkspaceDetail.resolve(
+                section: .recording, selection: first.id, hasMeetings: true, meta: lookup([first]), phase: phase)
+            #expect(resolved == .meeting(first), "\(phase)")
+        }
+    }
+
+    @Test("a live session never takes the pane from the library uninvited")
+    func theLibraryStaysPut() {
+        let resolved = WorkspaceDetail.resolve(
+            section: .meetings, selection: first.id, hasMeetings: true, meta: lookup([first]),
+            phase: .recording(startedAt: startedAt, scope: .everything))
+        #expect(resolved == .meeting(first))
+    }
+
+    @Test("the capture in the island's words")
+    func captureInWords() {
+        #expect(LiveSession.capture("Zoom") == "Zoom only")
+        #expect(LiveSession.capture(nil) == "Everything")
     }
 }
