@@ -118,6 +118,25 @@ public nonisolated enum EchoFont {
     /// 12 mono — a download's percentage: "41%".
     public static var modelPercent: Font { mono(12) }
 
+    /// 32 / 650 — the welcome screen's title.
+    public static var welcomeTitle: Font { onest(32, weight: 650) }
+
+    /// 15 — the paragraph under it.
+    public static var welcomeIntro: Font { onest(15, weight: 400) }
+
+    /// 13.5 — a row's title: "Microphone", "System Audio Recording".
+    public static var rowTitle: Font { onest(13.5, weight: 400) }
+
+    /// 13 / 600 — the label of the welcome screen's Start using Echo.
+    public static var prominentButton: Font { onest(13, weight: 600) }
+
+    /// 11.5 mono — a model's figure after its bar on the welcome screen:
+    /// "41%", "3.3 GB".
+    public static var welcomeModelValue: Font { mono(11.5) }
+
+    /// 11 mono — the welcome screen's footer: where everything lands.
+    public static var welcomeFooter: Font { mono(11) }
+
     // The island sets its own controls: a capsule, a value chip and the label
     // beside a level gauge. They are smaller and tighter than anything in the
     // window, because they hang off the bezel with the wallpaper behind them.
@@ -211,6 +230,12 @@ public nonisolated enum EchoFont {
 
     /// Extra leading for `rowDescription` (1.45 line height).
     public static let rowDescriptionLineSpacing: CGFloat = 12.5 * 0.45 - 3
+
+    /// Extra leading for `welcomeIntro` (1.6 line height).
+    public static let welcomeIntroLineSpacing: CGFloat = 15 * 0.60 - 3
+
+    /// −0.03em on `welcomeTitle`.
+    public static let welcomeTitleTracking: CGFloat = 32 * -0.03
 
     /// −0.01em on `placeholderTitle`.
     public static let placeholderTitleTracking: CGFloat = 15 * -0.01

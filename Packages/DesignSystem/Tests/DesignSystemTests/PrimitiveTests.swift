@@ -207,6 +207,24 @@ struct PrimitiveTests {
         #expect(
             size(of: Button("Retry") {}.buttonStyle(.echoControl)).height
                 == EchoControl.controlButtonHeight)
+        #expect(
+            size(of: Button("Allow") {}.buttonStyle(.echoControlProminent)).height
+                == EchoControl.controlButtonHeight)
+        #expect(
+            size(of: Button("Start using Echo") {}.buttonStyle(.echoProminent)).height
+                == EchoControl.prominentButtonHeight)
+    }
+
+    @Test("the welcome screen's Start, held back, keeps its shape and changes what it is drawn in")
+    func aHeldBackProminent() throws {
+        let enabled = Button("Start using Echo") {}.buttonStyle(.echoProminent)
+        let heldBack = Button("Start using Echo") {}.buttonStyle(.echoProminent).disabled(true)
+        for scheme in [ColorScheme.light, .dark] {
+            let on = try image(of: enabled.background(EchoColor.windowBackground).environment(\.colorScheme, scheme))
+            let off = try image(of: heldBack.background(EchoColor.windowBackground).environment(\.colorScheme, scheme))
+            #expect(on.width == off.width && on.height == off.height)
+            #expect(on.dataProvider?.data != off.dataProvider?.data, "held back looks enabled in \(scheme)")
+        }
     }
 
     @Test("the live status pill carries its dot, and no other pill does")
@@ -239,11 +257,13 @@ struct PrimitiveTests {
         }
     }
 
-    @Test("only the primary has a held-back look; the other roles keep theirs")
+    @Test("only the primary and the prominent have a held-back look; the other roles keep theirs")
     func onlyThePrimaryIsDrawnHeldBack() throws {
         // The design draws one held-back button. A role it has not drawn is
         // not given a look nobody decided.
-        for style in [EchoButtonStyle(.secondary), .init(.quiet), .init(.destructive), .init(.control)] {
+        for style in [
+            EchoButtonStyle(.secondary), .init(.quiet), .init(.destructive), .init(.control), .init(.controlProminent),
+        ] {
             let on = try image(of: Button("Export") {}.buttonStyle(style).background(EchoColor.windowBackground))
             let off = try image(
                 of: Button("Export") {}.buttonStyle(style).disabled(true).background(EchoColor.windowBackground))

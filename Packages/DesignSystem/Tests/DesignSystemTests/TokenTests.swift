@@ -142,6 +142,9 @@ nonisolated let palette: [Token] = [
         "failureEdge", EchoColor.failureEdge, light: 0xD02B31, dark: 0x3A2426,
         lightOpacity: 0.28, darkOpacity: 1),
     .init("failureText", EchoColor.failureText, light: 0xD02B31, dark: 0xC77E7D),
+    // The welcome screen (`FirstRun.dc.html`). Light values borrowed until #120.
+    .init("stepPending", EchoColor.stepPending, light: 0xC4C7CB, dark: 0x3A3D41),
+    .init("stepRingTrack", EchoColor.stepRingTrack, light: 0xE8EAED, dark: 0x26282C),
 ]
 
 @Suite("The palette")
@@ -252,6 +255,37 @@ struct MetricTests {
         #expect(EchoControl.controlButtonHeight == 28)
         #expect(EchoControl.controlButtonInset == 12)
         #expect(EchoControl.controlButtonHeight < EchoControl.primaryButtonHeight)
+    }
+
+    /// The welcome screen's column and what is in it, as `FirstRun.dc.html`
+    /// draws them.
+    @Test("the welcome screen's measures are the artboard's")
+    func welcomeMatchesTheArtboard() {
+        #expect(EchoLayout.welcomeColumnWidth == 560)
+        #expect(EchoLayout.welcomeMarkGap == 26)
+        #expect(EchoLayout.welcomeTitleGap == 12)
+        #expect(EchoLayout.welcomeIntroGap == 34)
+        #expect(EchoLayout.welcomeSectionGap == 10)
+        #expect(EchoLayout.welcomeStepHeight == 52)
+        #expect(EchoLayout.welcomeStepGap == 14)
+        #expect(EchoLayout.welcomeModelsInset == 14)
+        #expect(EchoLayout.welcomeModelsGlyphDrop == 2)
+        #expect(EchoLayout.welcomeModelsGap == 10)
+        #expect(EchoLayout.welcomeModelLineGap == 9)
+        #expect(EchoLayout.welcomeModelItemGap == 10)
+        #expect(EchoLayout.welcomeStepsBottomGap == 4)
+        #expect(EchoLayout.welcomeActionsTopGap == 26)
+        #expect(EchoLayout.welcomeActionsGap == 12)
+        #expect(EchoLayout.welcomeFooterTopGap == 30)
+        #expect(EchoLayout.welcomeFooterGap == 7)
+        #expect(EchoControl.welcomeMarkSize == 38)
+        #expect(EchoControl.stepGlyphSize == 19)
+        #expect(EchoControl.welcomeModelNameWidth == 132)
+        #expect(EchoControl.welcomeModelValueWidth == 62)
+        #expect(EchoControl.welcomeShieldSize == 13)
+        #expect(EchoControl.prominentButtonHeight == 34)
+        #expect(EchoControl.prominentButtonInset == 18)
+        #expect(EchoLayout.welcomeColumnWidth <= EchoLayout.minimumWindow.width)
     }
 
     @Test("the minimum window fits the sidebar and a reading column")

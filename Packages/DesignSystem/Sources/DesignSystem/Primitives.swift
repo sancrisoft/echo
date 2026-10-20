@@ -24,6 +24,12 @@ public struct EchoButtonStyle: ButtonStyle {
         /// draw it — Pause, Resume, Retry: smaller than the title bar's
         /// button, on the raised fill with the inert edge.
         case control
+        /// The row action that is the step itself, at the control's size and
+        /// in the primary's inverted fill: the welcome screen's Allow and
+        /// Open System Settings.
+        case controlProminent
+        /// The welcome screen's Start using Echo: the primary, larger.
+        case prominent
     }
 
     private let role: Role
@@ -39,23 +45,24 @@ public struct EchoButtonStyle: ButtonStyle {
     /// The drawn button, a view of its own so it can read whether it is
     /// enabled: a style cannot.
     ///
-    /// The design draws one held-back button, and it is a primary — the
-    /// welcome screen's, greyed until the setup is done, with the reason
-    /// beside it. A held-back primary keeps its shape and size and trades the
-    /// inverted fill for a raised grey one with an inert edge, so a title bar
-    /// does not change its layout while it explains why. The other roles have
-    /// no drawn held-back look and keep the one they have.
+    /// The design draws one held-back button — the welcome screen's Start
+    /// using Echo, greyed until the setup is done, with the reason beside it —
+    /// and the title bar's New recording takes the same look. A held-back
+    /// primary or prominent keeps its shape and size and trades the inverted
+    /// fill for a raised grey one with an inert edge, so neither screen
+    /// changes its layout while it explains why. The other roles have no
+    /// drawn held-back look and keep the one they have.
     private struct Drawn: View {
         let configuration: Configuration
         let role: Role
 
         @Environment(\.isEnabled) private var isEnabled
 
-        private var isHeldBack: Bool { role == .primary && !isEnabled }
+        private var isHeldBack: Bool { (role == .primary || role == .prominent) && !isEnabled }
 
         var body: some View {
             configuration.label
-                .font(role == .primary ? EchoFont.primaryButton : EchoFont.control)
+                .font(font)
                 .lineLimit(1)
                 .frame(height: height)
                 .padding(.horizontal, inset)
@@ -74,10 +81,19 @@ public struct EchoButtonStyle: ButtonStyle {
         /// A quiet button is a toolbar button and takes that shape; everything
         /// with a fill takes the shape of the one filled button the design
         /// draws, so buttons on a screen line up whatever their role.
+        private var font: Font {
+            switch role {
+            case .primary, .controlProminent: return EchoFont.primaryButton
+            case .prominent: return EchoFont.prominentButton
+            case .secondary, .quiet, .destructive, .control: return EchoFont.control
+            }
+        }
+
         private var height: CGFloat {
             switch role {
             case .quiet: return EchoLayout.toolbarButtonHeight
-            case .control: return EchoControl.controlButtonHeight
+            case .control, .controlProminent: return EchoControl.controlButtonHeight
+            case .prominent: return EchoControl.prominentButtonHeight
             case .primary, .secondary, .destructive: return EchoControl.primaryButtonHeight
             }
         }
@@ -85,15 +101,16 @@ public struct EchoButtonStyle: ButtonStyle {
         private var inset: CGFloat {
             switch role {
             case .quiet: return EchoControl.toolbarButtonInset
-            case .control: return EchoControl.controlButtonInset
+            case .control, .controlProminent: return EchoControl.controlButtonInset
+            case .prominent: return EchoControl.prominentButtonInset
             case .primary, .secondary, .destructive: return EchoControl.primaryButtonInset
             }
         }
 
         private var radius: CGFloat {
             switch role {
-            case .quiet, .control: return EchoRadius.row
-            case .primary, .secondary, .destructive: return EchoRadius.control
+            case .quiet, .control, .controlProminent: return EchoRadius.row
+            case .primary, .secondary, .destructive, .prominent: return EchoRadius.control
             }
         }
 
@@ -102,7 +119,7 @@ public struct EchoButtonStyle: ButtonStyle {
             switch role {
             case .secondary: return EchoColor.border
             case .control: return EchoColor.inertBorder
-            case .primary, .quiet, .destructive: return nil
+            case .primary, .quiet, .destructive, .controlProminent, .prominent: return nil
             }
         }
 
@@ -112,7 +129,7 @@ public struct EchoButtonStyle: ButtonStyle {
             // The design's one filled button is the interface inverted: the
             // text takes the window's own background, whichever appearance
             // that is.
-            case .primary: return EchoColor.windowBackground
+            case .primary, .controlProminent, .prominent: return EchoColor.windowBackground
             case .secondary: return EchoColor.textPrimary
             case .quiet: return EchoColor.textSecondary
             case .destructive: return EchoColor.danger
@@ -125,7 +142,7 @@ public struct EchoButtonStyle: ButtonStyle {
             switch role {
             // Not the accent. The accent marks selection and links; a button
             // that wore it would be the loudest thing on a grey screen.
-            case .primary: return EchoColor.textPrimary.opacity(pressed ? 0.85 : 1)
+            case .primary, .controlProminent, .prominent: return EchoColor.textPrimary.opacity(pressed ? 0.85 : 1)
             case .secondary, .control: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
             case .quiet: return pressed ? EchoColor.hover : .clear
             case .destructive: return EchoColor.danger.opacity(pressed ? 0.16 : 0.1)
@@ -140,6 +157,8 @@ extension ButtonStyle where Self == EchoButtonStyle {
     public static var echoQuiet: EchoButtonStyle { EchoButtonStyle(.quiet) }
     public static var echoDestructive: EchoButtonStyle { EchoButtonStyle(.destructive) }
     public static var echoControl: EchoButtonStyle { EchoButtonStyle(.control) }
+    public static var echoControlProminent: EchoButtonStyle { EchoButtonStyle(.controlProminent) }
+    public static var echoProminent: EchoButtonStyle { EchoButtonStyle(.prominent) }
 }
 
 // MARK: - Status badge

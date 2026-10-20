@@ -153,6 +153,15 @@ public nonisolated enum EchoColor {
     /// until the light audit (#120).
     public static let failureText = Color(light: 0xD02B31, dark: 0xC77E7D)
 
+    /// A welcome-screen step not done yet: an empty ring, in the breadcrumb
+    /// slash's ink.
+    public static let stepPending = breadcrumbSlash
+
+    /// The track under a step's turning arc while it works. Light mode does
+    /// not draw it; it takes the raised surface's light value until the light
+    /// audit (#120).
+    public static let stepRingTrack = Color(light: 0xE8EAED, dark: 0x26282C)
+
     public static let success = Color(nsColor: .systemGreen)
     public static let warning = Color(nsColor: .systemOrange)
     public static let danger = Color(nsColor: .systemRed)
