@@ -139,6 +139,10 @@ public nonisolated enum EchoColor {
     /// draws, the breadcrumb slash's.
     public static let placeholderGlyph = breadcrumbSlash
 
+    /// The glyph above a screen that failed: the warning of a pass that did
+    /// not finish, in the red the empty-states artboard draws it.
+    public static let failureGlyph = recording
+
     /// Others' share of the transcript's speaker split, beside You's accent:
     /// the same ink as the breadcrumb slash, as the transcript artboard draws
     /// it.

@@ -107,6 +107,12 @@ public nonisolated enum EchoFont {
     /// Mono 12.5 — code inside a summary's prose, on its raised fill.
     public static var inlineCode: Font { mono(12.5) }
 
+    /// 14.5 / 600 — what an empty or broken screen says happened.
+    public static var emptyTitle: Font { onest(14.5, weight: 600) }
+
+    /// 12.5 — the sentence under it.
+    public static var emptyMessage: Font { onest(12.5, weight: 400) }
+
     /// 10 — the channel names beside the window's level meter: You, Others.
     public static var meterLabel: Font { onest(10, weight: 400) }
 
@@ -236,6 +242,9 @@ public nonisolated enum EchoFont {
 
     /// Extra leading for a transcript turn (1.7 line height).
     public static let transcriptLineSpacing: CGFloat = 14.5 * 0.70 - 3
+
+    /// Extra leading for `emptyMessage` (1.55 line height).
+    public static let emptyMessageLineSpacing: CGFloat = 12.5 * 0.55 - 3
 
     /// Tracking for `speaker`: −0.004em.
     public static let speakerTracking: CGFloat = 12.5 * -0.004

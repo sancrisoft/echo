@@ -51,18 +51,26 @@ public struct EchoButtonStyle: ButtonStyle {
     ///
     /// The design draws one held-back button — the welcome screen's Start
     /// using Echo, greyed until the setup is done, with the reason beside it —
-    /// and the title bar's New recording takes the same look. A held-back
-    /// primary or prominent keeps its shape and size and trades the inverted
-    /// fill for a raised grey one with an inert edge, so neither screen
-    /// changes its layout while it explains why. The other roles have no
-    /// drawn held-back look and keep the one they have.
+    /// and the title bar's New recording takes the same look, as does the
+    /// empty library's. A held-back button keeps its shape and size and is
+    /// drawn on a raised grey fill with an inert edge and the quaternary
+    /// label, so no screen changes its layout while it explains why. The
+    /// control button already wears that fill and edge, and held back — the
+    /// Re-transcribe of a meeting whose audio is gone, with its reason —
+    /// only its label greys. The other roles have no decided held-back look
+    /// and keep the one they have.
     private struct Drawn: View {
         let configuration: Configuration
         let role: Role
 
         @Environment(\.isEnabled) private var isEnabled
 
-        private var isHeldBack: Bool { (role == .primary || role == .prominent) && !isEnabled }
+        private var isHeldBack: Bool {
+            switch role {
+            case .primary, .prominent, .controlProminent, .control: return !isEnabled
+            case .secondary, .quiet, .quietIcon, .destructive: return false
+            }
+        }
 
         var body: some View {
             configuration.label
@@ -343,45 +351,61 @@ public struct TabStrip<Tab: Hashable>: View {
 
 // MARK: - Empty state
 
-/// The screen when there is nothing to show: an icon, a title, a line of copy,
-/// and optionally one action.
-public struct EmptyState<Action: View>: View {
-    private let symbol: String
+/// A screen with nothing to show, as the empty-states artboard draws it: the
+/// glyph for why, what happened, a sentence, and the one action that gets the
+/// user out of it — a dead end with no button is a bug, not a state. Only
+/// an empty Trash has nothing to offer, and it takes no actions.
+///
+/// Bare and centred in whatever holds it (product owner, 2026-10-20): the
+/// artboard's cards are the frames of its sheet, not part of the state.
+public struct EmptyState<Actions: View>: View {
+    private let glyph: EmptyGlyph
     private let title: String
     private let message: String
-    private let action: Action
+    private let actions: Actions
 
-    public init(symbol: String, title: String, message: String, @ViewBuilder action: () -> Action) {
-        self.symbol = symbol
+    public init(glyph: EmptyGlyph, title: String, message: String, @ViewBuilder actions: () -> Actions) {
+        self.glyph = glyph
         self.title = title
         self.message = message
-        self.action = action()
+        self.actions = actions()
     }
 
     public var body: some View {
-        VStack(spacing: EchoSpacing.m) {
-            Image(systemName: symbol)
-                .font(.system(size: 34, weight: .light))
-                .foregroundStyle(EchoColor.textTertiary)
+        VStack(spacing: EchoLayout.emptyStateGap) {
+            EmptyGlyphShape(glyph)
+                .stroke(
+                    glyph == .warning ? EchoColor.failureGlyph : EchoColor.placeholderGlyph,
+                    style: StrokeStyle(
+                        lineWidth: EmptyGlyph.lineWidth(at: EchoControl.emptyGlyphSize), lineCap: .round,
+                        lineJoin: .round)
+                )
+                .frame(width: EchoControl.emptyGlyphSize, height: EchoControl.emptyGlyphSize)
+                .accessibilityHidden(true)
             Text(title)
-                .font(EchoFont.sectionTitle)
-                .foregroundStyle(EchoColor.textPrimary)
-            Text(message)
-                .font(EchoFont.body)
-                .foregroundStyle(EchoColor.textSecondary)
+                .font(EchoFont.emptyTitle)
+                .foregroundStyle(EchoColor.textValue)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 360)
-            action
-                .padding(.top, EchoSpacing.xs)
+            Text(message)
+                .font(EchoFont.emptyMessage)
+                .lineSpacing(EchoFont.emptyMessageLineSpacing)
+                .foregroundStyle(EchoColor.textTertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: EchoLayout.emptyStateMessageWidth)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: EchoLayout.emptyStateActionGap) {
+                actions
+            }
         }
+        .padding(EchoLayout.emptyStateInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(EchoSpacing.xxl)
+        .accessibilityElement(children: .contain)
     }
 }
 
-extension EmptyState where Action == EmptyView {
-    public init(symbol: String, title: String, message: String) {
-        self.init(symbol: symbol, title: title, message: message) { EmptyView() }
+extension EmptyState where Actions == EmptyView {
+    public init(glyph: EmptyGlyph, title: String, message: String) {
+        self.init(glyph: glyph, title: title, message: message) { EmptyView() }
     }
 }
 

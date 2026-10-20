@@ -219,19 +219,20 @@ struct MeetingSidebar: View {
     @ViewBuilder
     private var list: some View {
         if library.metas.isEmpty {
-            Spacer()
-            Text("No meetings yet")
-                .font(EchoFont.row)
-                .foregroundStyle(EchoColor.textTertiary)
+            // The document says so, with the one action out of it; the list
+            // saying it too would be the same sentence twice.
             Spacer()
         } else if workspace.searchHidesEverything(in: library.metas) {
-            Spacer()
-            Text("No results for “\(workspace.searchText)”")
-                .font(EchoFont.row)
-                .foregroundStyle(EchoColor.textTertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, EchoLayout.sidebarRowInset)
-            Spacer()
+            // In the list's place, where the rows were (product owner,
+            // 2026-10-20); the document keeps the meeting being read. It says
+            // what search reads, because it does not read transcripts.
+            EmptyState(
+                glyph: .magnifier, title: "No meeting matches “\(workspace.searchText)”",
+                message: "Search reads titles, one-line descriptions and dates — not the body of the transcript."
+            ) {
+                Button("Clear search") { workspace.searchText = "" }
+                    .buttonStyle(.echoControl)
+            }
         } else {
             ScrollViewReader { proxy in
                 ScrollView {

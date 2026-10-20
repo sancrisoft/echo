@@ -157,7 +157,7 @@ public struct WorkspaceWindow: View {
             phase: session.phase)
         {
         case .meeting(let meta):
-            MeetingDocumentView(meta: meta)
+            MeetingDocumentView(meta: meta, dataRoot: dataRoot)
                 .id(meta.id)
         case .liveSession(let live):
             LiveSessionDocument(session: live)
@@ -167,16 +167,23 @@ public struct WorkspaceWindow: View {
             Color.clear
         case .noMeetings:
             EmptyState(
-                symbol: "waveform",
-                title: "No meetings yet",
-                message: "Record a call and it will show up here with its transcript and notes."
-            )
+                glyph: .waveform, title: "No meetings yet",
+                message:
+                    "Start one from the island in the notch, or right here. Echo also offers on its own when it notices a call."
+            ) {
+                // The title bar's own start, held back the same way and for
+                // the same reasons; the title bar says why beside its button.
+                Button("New recording") { recordFromTheWindow() }
+                    .buttonStyle(.echoControlProminent)
+                    .disabled(
+                        TitleBarState.resolve(phase: session.phase, readiness: session.readiness) != .newRecording)
+            }
         case .noSelection:
-            EmptyState(
-                symbol: "sidebar.left",
-                title: "Select a meeting",
-                message: "Pick a meeting from the sidebar to read its summary and transcript."
-            )
+            // Never shown for long: the window opens on the meeting last open,
+            // or the most recent (product owner, 2026-10-02), and settles on
+            // one the moment the library has any. A blank for that instant,
+            // as while a session is saved.
+            Color.clear
         case .trash:
             TrashView()
         case .settings:

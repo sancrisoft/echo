@@ -64,6 +64,15 @@ enum MeetingActions {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    /// Shows Echo's log folder in Finder: what a failed meeting's Show
+    /// details opens, since no reason is kept per meeting. Before anything
+    /// has been logged there is no such folder, and the data folder that
+    /// would hold it is shown instead.
+    static func revealLogs(of dataRoot: DataRoot) {
+        let logs = dataRoot.logs
+        revealInFinder(FileManager.default.fileExists(atPath: logs.path) ? logs : dataRoot.url)
+    }
+
     private static func contentType(for format: MeetingExportFormat) -> UTType {
         switch format {
         case .markdown: return UTType(filenameExtension: "md") ?? .plainText

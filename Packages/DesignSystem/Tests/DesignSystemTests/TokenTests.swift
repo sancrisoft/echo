@@ -139,6 +139,7 @@ nonisolated let palette: [Token] = [
         lightOpacity: 0.14, darkOpacity: 0.14),
     .init("placeholderGlyph", EchoColor.placeholderGlyph, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("speakerSplitOthers", EchoColor.speakerSplitOthers, light: 0xC4C7CB, dark: 0x3A3D41),
+    .init("failureGlyph", EchoColor.failureGlyph, light: 0xD02B31, dark: 0xED4A49),
     .init("levelOthers", EchoColor.levelOthers, light: 0x8A8D92, dark: 0x616469),
     .init("selection", EchoColor.selection, light: 0xE8EAED, dark: 0x1F2024),
     // The models panel (`Models.dc.html`). Light values borrowed until #120.
@@ -262,6 +263,16 @@ struct MetricTests {
         #expect(EchoControl.speakerSplitLabelGap == 12)
         #expect(EchoControl.provenanceGap == 8)
         #expect(EchoRadius.speakerSplit == 2)
+    }
+
+    /// An empty or broken screen, as the empty-states artboard draws it.
+    @Test("the empty states' measures are the artboard's")
+    func emptyStatesMatchTheArtboard() {
+        #expect(EchoControl.emptyGlyphSize == 30)
+        #expect(EchoLayout.emptyStateGap == 13)
+        #expect(EchoLayout.emptyStateMessageWidth == 280)
+        #expect(EchoLayout.emptyStateActionGap == 8)
+        #expect(EchoLayout.emptyStateInset == 24)
     }
 
     @Test("the radii are the artboard's, largest to smallest")

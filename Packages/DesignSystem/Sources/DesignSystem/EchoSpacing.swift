@@ -148,6 +148,9 @@ public nonisolated enum EchoControl {
     /// to read.
     public static let placeholderGlyphSize: CGFloat = 34
 
+    /// The glyph above an empty or broken screen.
+    public static let emptyGlyphSize: CGFloat = 30
+
     /// The window's level meter: a row of bars per channel, the newest at the
     /// right. A bar's width, the gap between two, how many a row holds, the
     /// height of a bar at rest, and the pitch between the two rows — which is
@@ -384,6 +387,13 @@ public nonisolated enum EchoLayout {
     public static let placeholderGap: CGFloat = 14
     public static let placeholderWidth: CGFloat = 380
     public static let placeholderBottomInset: CGFloat = 40
+    /// An empty or broken screen: the gap between its glyph, title, sentence
+    /// and buttons, how wide the sentence may run, the gap between two
+    /// buttons, and the room kept around it all.
+    public static let emptyStateGap: CGFloat = 13
+    public static let emptyStateMessageWidth: CGFloat = 280
+    public static let emptyStateActionGap: CGFloat = 8
+    public static let emptyStateInset: CGFloat = 24
     /// The footer under a live session's document — the meter, what is
     /// happening, where it happens — its height, its side insets and the gap
     /// between its parts.

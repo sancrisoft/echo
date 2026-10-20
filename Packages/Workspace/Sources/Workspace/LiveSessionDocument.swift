@@ -87,11 +87,11 @@ struct LiveSessionDocument: View {
 private struct CapturingPlaceholder: View {
     var body: some View {
         VStack(spacing: EchoLayout.placeholderGap) {
-            WaveGlyph()
+            EmptyGlyphShape(.waveform)
                 .stroke(
                     EchoColor.placeholderGlyph,
                     style: StrokeStyle(
-                        lineWidth: WaveGlyph.lineWidth(at: EchoControl.placeholderGlyphSize), lineCap: .round)
+                        lineWidth: EmptyGlyph.lineWidth(at: EchoControl.placeholderGlyphSize), lineCap: .round)
                 )
                 .frame(width: EchoControl.placeholderGlyphSize, height: EchoControl.placeholderGlyphSize)
                 .accessibilityHidden(true)
@@ -110,25 +110,5 @@ private struct CapturingPlaceholder: View {
         }
         .padding(.bottom, EchoLayout.placeholderBottomInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-/// Five strokes, tallest in the middle: the artboard's glyph for audio being
-/// taken in, on its 24 × 24 grid.
-private nonisolated struct WaveGlyph: Shape {
-
-    /// The stroke the artboard draws, scaled with the glyph.
-    static func lineWidth(at size: CGFloat) -> CGFloat { 1.4 * size / 24 }
-
-    func path(in rect: CGRect) -> Path {
-        let unit = min(rect.width, rect.height) / 24
-        let origin = CGPoint(x: rect.midX - 12 * unit, y: rect.midY - 12 * unit)
-        var path = Path()
-        // (x, top, bottom) on the grid.
-        for (x, top, bottom) in [(3.0, 11.0, 13.0), (7, 8, 16), (11, 4.5, 19.5), (15, 8, 16), (19, 11, 13)] {
-            path.move(to: CGPoint(x: origin.x + x * unit, y: origin.y + top * unit))
-            path.addLine(to: CGPoint(x: origin.x + x * unit, y: origin.y + bottom * unit))
-        }
-        return path
     }
 }

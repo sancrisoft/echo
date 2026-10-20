@@ -25,11 +25,12 @@ struct TrashView: View {
             header
             Divider()
             if library.trashedMetas.isEmpty {
+                // The one empty face with nothing to offer: there is truly
+                // nothing to do.
                 EmptyState(
-                    symbol: "trash",
-                    title: "Trash is empty",
+                    glyph: .trash, title: "Trash is empty",
                     message:
-                        "Meetings you move to Trash stay here for \(Int(MeetingLibrary.trashRetention / 86_400)) days before they are deleted."
+                        "Meetings you delete land here and are removed for good after \(Int(MeetingLibrary.trashRetention / 86_400)) days."
                 )
             } else {
                 list
