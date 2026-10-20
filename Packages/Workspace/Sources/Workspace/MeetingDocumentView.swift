@@ -171,26 +171,12 @@ struct MeetingDocumentView: View {
         }
     }
 
+    /// The two tabs and no more, Summary first: the summary is what a past
+    /// meeting is opened for, the transcript what is opened when the summary
+    /// raised a question.
     private var tabs: some View {
-        HStack(spacing: EchoSpacing.l) {
-            ForEach(WorkspaceModel.DocumentTab.allCases, id: \.self) { tab in
-                Button {
-                    workspace.documentTab = tab
-                } label: {
-                    Text(tab.title)
-                        .font(EchoFont.row)
-                        .foregroundStyle(workspace.documentTab == tab ? EchoColor.textPrimary : EchoColor.textSecondary)
-                        .padding(.vertical, EchoSpacing.s)
-                        .overlay(alignment: .bottom) {
-                            Rectangle()
-                                .fill(workspace.documentTab == tab ? EchoColor.accent : .clear)
-                                .frame(height: 2)
-                        }
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer()
-        }
+        @Bindable var workspace = workspace
+        return TabStrip(WorkspaceModel.DocumentTab.allCases, selection: $workspace.documentTab) { $0.title }
     }
 
     // MARK: Content
