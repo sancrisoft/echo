@@ -166,6 +166,14 @@ struct MeetingDocumentView: View {
 
     private var status: MeetingStatus { MeetingStatus.resolve(meta) }
 
+    /// Each tab has its own facts under the title.
+    private var properties: [MeetingProperty] {
+        switch workspace.documentTab {
+        case .summary: MeetingProperty.summaryRows(for: meta)
+        case .transcript: MeetingProperty.transcriptRows(for: meta, segments: record?.segments ?? [])
+        }
+    }
+
     private func column(_ matches: [TranscriptMatch]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(meta.title)
@@ -176,7 +184,7 @@ struct MeetingDocumentView: View {
                 .padding(.bottom, EchoLayout.titleBottomGap)
 
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(MeetingProperty.rows(for: meta).enumerated()), id: \.offset) { _, property in
+                ForEach(Array(properties.enumerated()), id: \.offset) { _, property in
                     PropertyView(property: property)
                 }
             }
@@ -374,7 +382,54 @@ private struct PropertyView: View {
             PropertyRow(symbol: "checkmark.circle", label: "Status") {
                 StatusBadge(status.label, tone: status.tone)
             }
+        case .speakers(let split):
+            PropertyRow(symbol: "waveform.path.ecg", label: "Speakers") {
+                HStack(spacing: EchoControl.speakerSplitLabelGap) {
+                    SpeakerSplitBar(youShare: split.youShare)
+                        .frame(width: EchoLayout.speakerSplitWidth, height: EchoControl.speakerSplitHeight)
+                        .accessibilityHidden(true)
+                    Text("You \(split.youPercent)%")
+                        .foregroundStyle(EchoColor.accent)
+                    Text("Others \(split.othersPercent)%")
+                        .foregroundStyle(EchoColor.textTertiary)
+                }
+                .font(EchoFont.control)
+            }
+        case .transcript(let transcript):
+            PropertyRow(symbol: "checkmark.circle", label: "Status") {
+                HStack(spacing: EchoControl.provenanceGap) {
+                    StatusBadge(transcript.label, tone: transcript.tone)
+                    if let model = transcript.model {
+                        Text(model)
+                            .font(EchoFont.provenance)
+                            .foregroundStyle(EchoColor.textQuaternary)
+                            .lineLimit(1)
+                    }
+                }
+            }
         }
+    }
+}
+
+/// You's share in the accent and Others' after it, a hairline gap between
+/// them. A share of nothing is no segment at all, and takes no gap with it.
+private struct SpeakerSplitBar: View {
+    let youShare: Double
+
+    var body: some View {
+        GeometryReader { proxy in
+            let both = youShare > 0 && youShare < 1
+            let room = proxy.size.width - (both ? EchoControl.speakerSplitGap : 0)
+            HStack(spacing: both ? EchoControl.speakerSplitGap : 0) {
+                if youShare > 0 {
+                    EchoColor.accent.frame(width: room * youShare)
+                }
+                if youShare < 1 {
+                    EchoColor.speakerSplitOthers.frame(width: room * (1 - youShare))
+                }
+            }
+        }
+        .clipShape(.rect(cornerRadius: EchoRadius.speakerSplit))
     }
 }
 
