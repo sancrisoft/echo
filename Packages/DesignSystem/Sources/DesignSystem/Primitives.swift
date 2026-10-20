@@ -20,6 +20,10 @@ public struct EchoButtonStyle: ButtonStyle {
         case secondary
         case quiet
         case destructive
+        /// A row's own action, as the models panel and the welcome screen
+        /// draw it — Pause, Resume, Retry: smaller than the title bar's
+        /// button, on the raised fill with the inert edge.
+        case control
     }
 
     private let role: Role
@@ -71,20 +75,35 @@ public struct EchoButtonStyle: ButtonStyle {
         /// with a fill takes the shape of the one filled button the design
         /// draws, so buttons on a screen line up whatever their role.
         private var height: CGFloat {
-            role == .quiet ? EchoLayout.toolbarButtonHeight : EchoControl.primaryButtonHeight
+            switch role {
+            case .quiet: return EchoLayout.toolbarButtonHeight
+            case .control: return EchoControl.controlButtonHeight
+            case .primary, .secondary, .destructive: return EchoControl.primaryButtonHeight
+            }
         }
 
         private var inset: CGFloat {
-            role == .quiet ? EchoControl.toolbarButtonInset : EchoControl.primaryButtonInset
+            switch role {
+            case .quiet: return EchoControl.toolbarButtonInset
+            case .control: return EchoControl.controlButtonInset
+            case .primary, .secondary, .destructive: return EchoControl.primaryButtonInset
+            }
         }
 
         private var radius: CGFloat {
-            role == .quiet ? EchoRadius.row : EchoRadius.control
+            switch role {
+            case .quiet, .control: return EchoRadius.row
+            case .primary, .secondary, .destructive: return EchoRadius.control
+            }
         }
 
         private var edge: Color? {
             if isHeldBack { return EchoColor.inertBorder }
-            return role == .secondary ? EchoColor.border : nil
+            switch role {
+            case .secondary: return EchoColor.border
+            case .control: return EchoColor.inertBorder
+            case .primary, .quiet, .destructive: return nil
+            }
         }
 
         private var foreground: Color {
@@ -97,6 +116,7 @@ public struct EchoButtonStyle: ButtonStyle {
             case .secondary: return EchoColor.textPrimary
             case .quiet: return EchoColor.textSecondary
             case .destructive: return EchoColor.danger
+            case .control: return EchoColor.textValue
             }
         }
 
@@ -106,7 +126,7 @@ public struct EchoButtonStyle: ButtonStyle {
             // Not the accent. The accent marks selection and links; a button
             // that wore it would be the loudest thing on a grey screen.
             case .primary: return EchoColor.textPrimary.opacity(pressed ? 0.85 : 1)
-            case .secondary: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
+            case .secondary, .control: return EchoColor.surfaceRaised.opacity(pressed ? 0.7 : 1)
             case .quiet: return pressed ? EchoColor.hover : .clear
             case .destructive: return EchoColor.danger.opacity(pressed ? 0.16 : 0.1)
             }
@@ -119,6 +139,7 @@ extension ButtonStyle where Self == EchoButtonStyle {
     public static var echoSecondary: EchoButtonStyle { EchoButtonStyle(.secondary) }
     public static var echoQuiet: EchoButtonStyle { EchoButtonStyle(.quiet) }
     public static var echoDestructive: EchoButtonStyle { EchoButtonStyle(.destructive) }
+    public static var echoControl: EchoButtonStyle { EchoButtonStyle(.control) }
 }
 
 // MARK: - Status badge
@@ -137,10 +158,14 @@ public struct StatusBadge: View {
 
     private let text: String
     private let tone: Tone
+    private let showsCheck: Bool
 
-    public init(_ text: String, tone: Tone = .neutral) {
+    /// - Parameter showsCheck: a check before the word, in the pill's own
+    ///   colour — the models panel's "Ready".
+    public init(_ text: String, tone: Tone = .neutral, showsCheck: Bool = false) {
         self.text = text
         self.tone = tone
+        self.showsCheck = showsCheck
     }
 
     public var body: some View {
@@ -149,6 +174,11 @@ public struct StatusBadge: View {
                 Circle()
                     .fill(EchoColor.recording)
                     .frame(width: EchoControl.pillDotSize, height: EchoControl.pillDotSize)
+                    .accessibilityHidden(true)
+            }
+            if showsCheck {
+                ReadyCheckGlyph()
+                    .frame(width: EchoControl.readyCheckSize, height: EchoControl.readyCheckSize)
                     .accessibilityHidden(true)
             }
             Text(text)

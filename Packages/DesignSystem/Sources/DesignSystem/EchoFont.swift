@@ -104,6 +104,20 @@ public nonisolated enum EchoFont {
     /// 13 — the note at the live footer's end: "Processed locally".
     public static var footerNote: Font { onest(13, weight: 400) }
 
+    /// 13.5 / 600 — a model's name in its row of the models panel:
+    /// "Summary · Qwen3.5 4B".
+    public static var modelName: Font { onest(13.5, weight: 600) }
+
+    /// 12.5 — the line under a row's title: what a model is for, what it is
+    /// doing, why it failed.
+    public static var rowDescription: Font { onest(12.5, weight: 400) }
+
+    /// 12.5 mono — a model's size beside its name: "3.3 GB".
+    public static var modelSize: Font { mono(12.5) }
+
+    /// 12 mono — a download's percentage: "41%".
+    public static var modelPercent: Font { mono(12) }
+
     // The island sets its own controls: a capsule, a value chip and the label
     // beside a level gauge. They are smaller and tighter than anything in the
     // window, because they hang off the bezel with the wallpaper behind them.
@@ -194,6 +208,9 @@ public nonisolated enum EchoFont {
 
     /// Extra leading for `placeholderMessage` (1.6 line height).
     public static let placeholderLineSpacing: CGFloat = 13.5 * 0.60 - 3
+
+    /// Extra leading for `rowDescription` (1.45 line height).
+    public static let rowDescriptionLineSpacing: CGFloat = 12.5 * 0.45 - 3
 
     /// −0.01em on `placeholderTitle`.
     public static let placeholderTitleTracking: CGFloat = 15 * -0.01

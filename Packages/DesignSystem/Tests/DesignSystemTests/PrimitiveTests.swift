@@ -204,6 +204,9 @@ struct PrimitiveTests {
         #expect(
             size(of: Button("Copy") {}.buttonStyle(.echoQuiet)).height
                 == EchoLayout.toolbarButtonHeight)
+        #expect(
+            size(of: Button("Retry") {}.buttonStyle(.echoControl)).height
+                == EchoControl.controlButtonHeight)
     }
 
     @Test("the live status pill carries its dot, and no other pill does")
@@ -212,6 +215,14 @@ struct PrimitiveTests {
         let accent = size(of: StatusBadge("Recording", tone: .accent))
         #expect(live.height == accent.height)
         #expect(live.width == accent.width + EchoControl.pillDotSize + EchoControl.pillGap)
+    }
+
+    @Test("the Ready pill carries its check before the word, and only when asked")
+    func theReadyPillHasItsCheck() {
+        let ready = size(of: StatusBadge("Ready", tone: .accent, showsCheck: true))
+        let plain = size(of: StatusBadge("Ready", tone: .accent))
+        #expect(ready.height == plain.height)
+        #expect(ready.width == plain.width + EchoControl.readyCheckSize + EchoControl.pillGap)
     }
 
     @Test("a primary held back keeps its shape and changes what it is drawn in")
@@ -232,7 +243,7 @@ struct PrimitiveTests {
     func onlyThePrimaryIsDrawnHeldBack() throws {
         // The design draws one held-back button. A role it has not drawn is
         // not given a look nobody decided.
-        for style in [EchoButtonStyle(.secondary), .init(.quiet), .init(.destructive)] {
+        for style in [EchoButtonStyle(.secondary), .init(.quiet), .init(.destructive), .init(.control)] {
             let on = try image(of: Button("Export") {}.buttonStyle(style).background(EchoColor.windowBackground))
             let off = try image(
                 of: Button("Export") {}.buttonStyle(style).disabled(true).background(EchoColor.windowBackground))

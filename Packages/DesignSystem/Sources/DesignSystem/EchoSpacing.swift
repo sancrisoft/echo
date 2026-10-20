@@ -36,6 +36,8 @@ public nonisolated enum EchoRadius {
     public static let chip: CGFloat = 12
     /// The window's own corner.
     public static let window: CGFloat = 11
+    /// A card in the models panel.
+    public static let card: CGFloat = 10
     /// A well a segmented control sits in.
     public static let well: CGFloat = 8
     /// Controls inside the window: buttons, input fields.
@@ -127,6 +129,27 @@ public nonisolated enum EchoControl {
     /// The glyph before the live footer's note, and the gap after it.
     public static let footerGlyphSize: CGFloat = 14
     public static let footerGlyphGap: CGFloat = 6
+
+    /// The control button the models panel and the welcome screen draw for a
+    /// row's action — Pause, Resume, Retry: a step smaller than the title
+    /// bar's button, with a tighter inset.
+    public static let controlButtonHeight: CGFloat = 28
+    public static let controlButtonInset: CGFloat = 12
+
+    /// A model's row in the models panel: its glyph and the gap after it.
+    public static let modelGlyphSize: CGFloat = 19
+    public static let modelGlyphGap: CGFloat = 13
+    /// A download's bar, its percentage's column, and the gap between the
+    /// parts on the row's right.
+    public static let modelBarWidth: CGFloat = 150
+    public static let modelBarHeight: CGFloat = 4
+    public static let modelPercentWidth: CGFloat = 34
+    public static let modelTrailingGap: CGFloat = 11
+    /// The loading spinner and the gap before its word.
+    public static let modelSpinnerSize: CGFloat = 14
+    public static let modelLoadingGap: CGFloat = 9
+    /// The check inside the Ready pill.
+    public static let readyCheckSize: CGFloat = 11
 
     // MARK: On the island
 
@@ -321,6 +344,9 @@ public nonisolated enum EchoLayout {
     public static let propertyLabelWidth: CGFloat = 104
     /// The fade to the background at the foot of a scrolling document.
     public static let documentFadeHeight: CGFloat = 76
+    /// A card's inset in the models panel, and the gap between two cards.
+    public static let modelCardInset = CGSize(width: 16, height: 14)
+    public static let modelPanelGap: CGFloat = 12
 }
 
 /// How wide one island face is, collapsed and expanded.
