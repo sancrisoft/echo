@@ -514,6 +514,7 @@ public final class RecordingSession {
             // so fetch the model's FILES during the session. Download only —
             // nothing is ever loaded into RAM while capture runs.
             prefetchSummaryModel()
+            checkSystemAudioForSession(generation: generation)
         } catch {
             ErrorTrace.record("Recording could not start", error: error, category: "RecordingSession")
             await teardown(persisting: false)
@@ -566,10 +567,28 @@ public final class RecordingSession {
 
     @ObservationIgnored private var systemAudioCheck: Task<SystemAudioAccess, Never>?
 
+    /// Whether this session can hear the Mac's audio at all, checked once its
+    /// own tap is up. A tap macOS refuses comes up as cleanly as a granted
+    /// one and delivers silence, and silence cannot tell "refused" from
+    /// "nothing is playing", so without this a meeting simply has no Others.
+    /// Off the start's path, so it delays nothing; all it adds to the Others
+    /// channel is its tone, at −80 dBFS, for about a tenth of a second.
+    /// Refused, it says so for the rest of the session: a tap that is running
+    /// never picks up a grant made meanwhile (measured, the #92 spike).
+    private func checkSystemAudioForSession(generation: Int) {
+        Task { [weak self] in
+            guard let self else { return }
+            let verdict = await self.checkSystemAudio()
+            guard self.isCapturing(generation), verdict == .denied else { return }
+            self.raise(.systemAudioOff, RecordingNotice.systemAudioOffMessage)
+        }
+    }
+
     /// One check at a time: a return to the front while Allow is still
     /// waiting on the dialog joins that check rather than raising a second
     /// tap. A check that could not tell leaves the last answer standing.
-    private func checkSystemAudio() async {
+    @discardableResult
+    private func checkSystemAudio() async -> SystemAudioAccess {
         let check: Task<SystemAudioAccess, Never>
         if let inFlight = systemAudioCheck {
             check = inFlight
@@ -580,8 +599,8 @@ public final class RecordingSession {
         }
         let verdict = await check.value
         if systemAudioCheck == check { systemAudioCheck = nil }
-        guard verdict != .unknown else { return }
-        systemAudioAccess = CaptureAccess(verdict)
+        if verdict != .unknown { systemAudioAccess = CaptureAccess(verdict) }
+        return verdict
     }
 
     // MARK: - Echo handling
