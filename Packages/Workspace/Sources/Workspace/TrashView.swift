@@ -5,11 +5,15 @@
 //  Meetings set aside, as the Trash artboard draws them in the document's
 //  place. A trashed meeting keeps every file, leaves the main list, and is
 //  deleted for good when Trash is emptied or after the thirty days, which
-//  each row counts down, the last few in red. Restore and Delete… show on the
-//  selected or hovered row only. The keyboard works the selected row: ↑↓
-//  move, Return opens its document to look at without taking it out, and
-//  Delete asks before removing it for good — the confirmation is the whole
+//  each row counts down, the last few in red. Restore and Delete show on the
+//  selected or hovered row only. A double click opens a row's document to
+//  look at without taking it out, and so does Return; ↑↓ move, and Delete
+//  asks before removing a meeting for good — the confirmation is the whole
 //  safety net, since from here a deletion cannot be undone.
+//
+//  The buttons drop the artboard's "…": what they do is plain from their
+//  words, and the question that follows is the safety, not the label
+//  (product owner, 2026-10-20).
 //
 
 import DesignSystem
@@ -89,7 +93,7 @@ struct TrashView: View {
                     .padding(.vertical, EchoControl.listCountInset.height)
                     .background(EchoColor.surfaceRaised, in: .capsule)
                 Spacer(minLength: 0)
-                Button("Empty Trash…") { confirmEmpty = true }
+                Button("Empty Trash") { confirmEmpty = true }
                     .buttonStyle(.echoControlDestructive)
             } else {
                 Spacer(minLength: 0)
@@ -189,9 +193,11 @@ struct TrashView: View {
             // whether or not a row shows its buttons.
             HStack(spacing: EchoControl.listRowActionGap) {
                 if isActive {
+                    // On the selected row the control's raised fill is the
+                    // row's own; it takes the window's background instead.
                     Button("Restore") { Task { await library.restore(meta.id) } }
-                        .buttonStyle(.echoControl)
-                    Button("Delete…") { confirmDelete = meta }
+                        .buttonStyle(isSelected ? .echoControlOnSelection : .echoControl)
+                    Button("Delete") { confirmDelete = meta }
                         .buttonStyle(.echoControlDestructive)
                 }
             }
@@ -204,10 +210,13 @@ struct TrashView: View {
             in: .rect(cornerRadius: EchoRadius.listRow)
         )
         .contentShape(.rect(cornerRadius: EchoRadius.listRow))
+        // The first click selects at once; the second of a double click
+        // opens, as Finder's do.
         .onTapGesture {
             workspace.selectedTrashedID = meta.id
             listFocused = true
         }
+        .simultaneousGesture(TapGesture(count: 2).onEnded { workspace.openTrashed(meta.id) })
         .onHover { hovering in hoveredID = hovering ? meta.id : (hoveredID == meta.id ? nil : hoveredID) }
         .contextMenu {
             Button("Open") { workspace.openTrashed(meta.id) }

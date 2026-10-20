@@ -15,8 +15,9 @@
 //  (`MeetingCondition`).
 //
 //  A trashed meeting, opened from Trash to look at, is the same document
-//  under "Trash": its bar offers Restore and Delete… instead, and Escape
-//  goes back to the list. Looking never takes it out of Trash.
+//  under "Trash": its bar says how long until it is removed for good and
+//  offers Restore and Delete instead, and Escape or the trail goes back to
+//  the list. Looking never takes it out of Trash.
 //
 
 import DesignSystem
@@ -66,7 +67,10 @@ struct MeetingDocumentView: View {
         // Find is the Transcript tab's: on Summary there is nothing to match.
         let matches = workspace.documentTab == .transcript ? TranscriptFind.matches(of: findQuery, in: turns) : []
         VStack(spacing: 0) {
-            Breadcrumb(trail: meta.isTrashed ? "Trash" : "Meetings", current: meta.title) {
+            Breadcrumb(
+                trail: meta.isTrashed ? "Trash" : "Meetings", current: meta.title,
+                back: meta.isTrashed ? { workspace.closeTrashed() } : nil
+            ) {
                 if meta.isTrashed { trashedActions } else { actions }
             }
             GeometryReader { viewport in
@@ -114,17 +118,17 @@ struct MeetingDocumentView: View {
                 id: meta.id, hasSummary: meta.hasSummary, segmentCount: meta.segmentCount, title: meta.title,
                 transcriptSource: meta.transcriptProvenance?.source)
         ) {
-            loadFailed = false
-            if let loaded = await library.loadRecord(meta.id) {
-                record = loaded
-                turns = TranscriptUtterance.derive(from: loaded.segments)
-            } else {
-                record = nil
-                turns = []
-                loadFailed = true
-            }
-            keepsRecording = await library.hasPreservedAudio(for: meta.id)
-            canRetry = await library.canRetryTranscription(meta.id)
+            // Every answer first, then the state, in one go: a record shown
+            // before its audio is known reads as a meeting whose recording
+            // was not kept, Re-transcribe held back, until the answer lands.
+            let loaded = await library.loadRecord(meta.id)
+            let keeps = await library.hasPreservedAudio(for: meta.id)
+            let retry = await library.canRetryTranscription(meta.id)
+            record = loaded
+            turns = loaded.map { TranscriptUtterance.derive(from: $0.segments) } ?? []
+            loadFailed = loaded == nil
+            keepsRecording = keeps
+            canRetry = retry
         }
     }
 
@@ -182,18 +186,27 @@ struct MeetingDocumentView: View {
     }
 
     /// What a trashed meeting's bar offers in place of Copy, Export and the
-    /// "…" (product owner, 2026-10-20). Escape goes back to Trash's list,
-    /// unless it is clearing a find first.
+    /// "…" (product owner, 2026-10-20): how long until it is removed for
+    /// good, in the list's words and red in its last days, then Restore, and
+    /// Delete in red because it cannot be undone. Escape goes back to
+    /// Trash's list, unless it is clearing a find first.
     private var trashedActions: some View {
         HStack(spacing: EchoControl.toolbarButtonGap) {
+            if let trashedAt = meta.trashedAt {
+                let days = TrashRow.daysLeft(trashedAt: trashedAt)
+                Text(TrashRow.daysLeftText(days))
+                    .font(EchoFont.rowCaption)
+                    .foregroundStyle(TrashRow.isExpiring(days) ? EchoColor.destructiveText : EchoColor.textQuaternary)
+                    .padding(.trailing, EchoControl.toolbarButtonInset)
+            }
             Button("Restore") {
                 let id = meta.id
                 workspace.closeTrashed()
                 Task { await library.restore(id) }
             }
             .buttonStyle(.echoQuiet)
-            Button("Delete…") { confirmDeleteForGood = true }
-                .buttonStyle(.echoQuiet)
+            Button("Delete") { confirmDeleteForGood = true }
+                .buttonStyle(.echoQuietDestructive)
         }
         .background {
             Button("") {
