@@ -66,6 +66,10 @@ public struct WorkspaceWindow: View {
                 TitleBarToolbar(startRecording: { recordFromTheWindow() })
             }
         }
+        .background { windowShortcuts }
+        // Going anywhere puts the palette away: a result opened, Settings
+        // reached from the menu, a stop that brings the saved meeting in.
+        .onChange(of: workspace.section) { _, _ in workspace.dismissSearch() }
         // Capture ended: if the window was showing the session, it follows
         // the meeting the stop saved into the library.
         .onChange(of: session.phase) { _, phase in
@@ -125,6 +129,35 @@ public struct WorkspaceWindow: View {
                 .background(EchoColor.windowBackground)
             }
         }
+        // Over the sidebar and the document, under the title bar: AppKit
+        // draws the bar above anything the content draws.
+        .overlay {
+            if workspace.isSearchPresented {
+                SearchPalette(startRecording: { recordFromTheWindow() })
+            }
+        }
+    }
+
+    /// ⌘K brings the palette up from anywhere in the window and puts it away
+    /// again; ⌘R is New recording, as the palette's action says, held back
+    /// exactly when the title bar's button is.
+    private var windowShortcuts: some View {
+        ZStack {
+            Button("") { workspace.toggleSearch() }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(workspace.showsWelcome)
+            Button("") {
+                workspace.dismissSearch()
+                recordFromTheWindow()
+            }
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(
+                workspace.showsWelcome
+                    || TitleBarState.resolve(phase: session.phase, readiness: session.readiness) != .newRecording)
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
     }
 
     private func settleSelection() {

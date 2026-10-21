@@ -8,6 +8,7 @@
 #   scripts/snapshot.sh summary transcript   # only these scenes
 #   ECHO_DATA_ROOT=/path scripts/snapshot.sh # a specific data root
 #   ECHO_APPEARANCE=light scripts/snapshot.sh
+#   ECHO_SNAPSHOT_QUERY=budget scripts/snapshot.sh search   # the ⌘K palette
 #
 # Output: build/snapshots/<scene>.png. Requires a Debug build (`make build`).
 # The island is a panel, not the window: it renders itself, and writes a second

@@ -3,10 +3,11 @@
 //  Workspace
 //
 //  The window's one navigation truth: which section is showing, which meeting
-//  is selected, which document tab is open, and how the list is filtered and
-//  sorted. Lists render from it and write to it; none of them owns a selection
-//  of its own (ADR-003). Every rule that decides where a selection goes is a
-//  method here, so it is testable without a window.
+//  is selected, which document tab is open, how the list is sorted, and the
+//  ⌘K palette — whether it is up, what is typed in it, and where a result it
+//  opened should land. Lists render from it and write to it; none of them owns
+//  a selection of its own (ADR-003). Every rule that decides where a selection
+//  goes is a method here, so it is testable without a window.
 //
 
 import EchoCore
@@ -56,8 +57,17 @@ public final class WorkspaceModel {
     /// Summary first: it is what the user opens a meeting for.
     public var documentTab: DocumentTab = .summary
 
-    /// The sidebar's filter text.
+    /// Whether the ⌘K palette is over the window.
+    public private(set) var isSearchPresented = false
+
+    /// What is typed in the palette, and the scope Tab chose. Both outlive
+    /// the palette, so ⌘K reopens on the last search.
     public var searchText = ""
+    public var searchScope: MeetingSearchScope = .all
+
+    /// Where the transcript's find should open, once the document of the
+    /// meeting a result opened has loaded its turns. Taken once.
+    public private(set) var findRequest: TranscriptFindRequest?
 
     public var sortOrder: MeetingSortOrder = .recent
 
@@ -81,24 +91,17 @@ public final class WorkspaceModel {
 
     // MARK: - Derived lists
 
-    /// The meetings the sidebar shows, filtered by `searchText` and ordered by
-    /// `sortOrder`.
+    /// The meetings the sidebar shows, in `sortOrder`. Every one of them:
+    /// search is the palette's, and it never hides a row.
     public func visibleMeetings(in metas: [MeetingMeta]) -> [MeetingMeta] {
-        MeetingFilter.apply(to: metas, search: searchText, sort: sortOrder)
-    }
-
-    /// Whether the sidebar shows no rows because the search matched nothing
-    /// (as opposed to an empty library).
-    public func searchHidesEverything(in metas: [MeetingMeta]) -> Bool {
-        !metas.isEmpty && visibleMeetings(in: metas).isEmpty && !searchText.isEmpty
+        MeetingSort.apply(to: metas, sort: sortOrder)
     }
 
     // MARK: - Selection rules
 
     /// Drops a library selection the library no longer contains — a trashed,
     /// deleted or purged meeting — so the document never shows a meeting that
-    /// is gone. A selection the *search* merely hides survives: the document
-    /// stays while the user types.
+    /// is gone.
     public func reconcileSelection(with metas: [MeetingMeta]) {
         selectedMeetingID = MeetingListSelection.reconcile(selectedMeetingID, with: metas.map(\.id))
     }
@@ -149,6 +152,53 @@ public final class WorkspaceModel {
     public func reconcileTrashSelection(with trashed: [MeetingMeta]) {
         selectedTrashedID = MeetingListSelection.reconcile(selectedTrashedID, with: trashed.map(\.id))
         openedTrashedID = MeetingListSelection.reconcile(openedTrashedID, with: trashed.map(\.id))
+    }
+
+    // MARK: - The ⌘K palette
+
+    public func presentSearch() {
+        isSearchPresented = true
+    }
+
+    public func dismissSearch() {
+        isSearchPresented = false
+    }
+
+    public func toggleSearch() {
+        isSearchPresented.toggle()
+    }
+
+    /// Opens a result where its line is — the transcript, landing find on
+    /// the turn shown, when the line is a turn; the summary otherwise — or,
+    /// with `otherTab`, on the tab its line is not. A trashed meeting opens
+    /// under Trash, as Trash opens it. The palette goes.
+    ///
+    /// - Parameter findText: what the transcript's find looks for. The
+    ///   transcript opens with it whichever way it was reached; the turn is
+    ///   only the landing when the line shown is that turn.
+    public func open(_ hit: MeetingSearchHit, otherTab: Bool = false, findText: String?) {
+        let tab: DocumentTab = hit.foundInTranscript != otherTab ? .transcript : .summary
+        findRequest =
+            if tab == .transcript, let findText {
+                TranscriptFindRequest(meetingID: hit.id, text: findText, turn: otherTab ? nil : hit.turn)
+            } else {
+                nil
+            }
+        if hit.meta.isTrashed {
+            openTrashed(hit.id)
+            documentTab = tab
+        } else {
+            open(hit.id, tab: tab)
+        }
+        isSearchPresented = false
+    }
+
+    /// The find request waiting for this meeting's document, handed over
+    /// once. A request for another meeting stays where it is.
+    public func takeFindRequest(for id: UUID) -> TranscriptFindRequest? {
+        guard let request = findRequest, request.meetingID == id else { return nil }
+        findRequest = nil
+        return request
     }
 
     // MARK: - Trash
@@ -203,5 +253,20 @@ public final class WorkspaceModel {
         } else {
             section = .meetings
         }
+    }
+}
+
+/// What a transcript's find opens on when a search result brought the user to
+/// it: the words, and the turn to land on among their matches — `nil` for the
+/// first match.
+public struct TranscriptFindRequest: Equatable, Sendable {
+    public let meetingID: UUID
+    public let text: String
+    public let turn: UUID?
+
+    public init(meetingID: UUID, text: String, turn: UUID?) {
+        self.meetingID = meetingID
+        self.text = text
+        self.turn = turn
     }
 }

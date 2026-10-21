@@ -71,16 +71,14 @@ struct MeetingSelectionTests {
         #expect(model.selectedMeetingID == nil)
     }
 
-    @Test("the search decides where an arrow lands, and a hidden selection starts from the end")
-    func arrowsFollowTheVisibleList() {
+    @Test("what is typed in the palette does not change where an arrow lands")
+    func arrowsWalkEveryRow() {
         let model = WorkspaceModel()
         let list = metas(4)
-        model.open(list[3].id)
+        model.open(list[1].id)
         model.searchText = "Meeting 1"
         #expect(model.moveSelection(.down, in: list))
-        #expect(model.selectedMeetingID == list[1].id, "the arrow lands in the filtered list, not the whole one")
-        #expect(model.moveSelection(.down, in: list))
-        #expect(model.selectedMeetingID == list[1].id, "the only visible row is both ends of the list")
+        #expect(model.selectedMeetingID == list[2].id)
     }
 
     @Test("the trash's selection is its own and is dropped with its row")

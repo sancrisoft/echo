@@ -27,7 +27,6 @@ struct MeetingSidebar: View {
     @Environment(WorkspaceModel.self) private var workspace
     @Environment(RecordingSession.self) private var session
 
-    @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
     @State private var hovered: SidebarHover?
     @State private var contextClicks = RowContextClickWatcher()
@@ -97,52 +96,28 @@ struct MeetingSidebar: View {
 
     // MARK: Search
 
-    /// The search row types in place: the design draws it as a row with its
-    /// shortcut, so it stays a row and becomes a field where it stands. What
-    /// ⌘K eventually opens is an open decision; today it puts the caret here,
-    /// where the filter already lives.
+    /// The row the design draws, with its shortcut: it opens the ⌘K palette,
+    /// as the shortcut does from anywhere in the window. The palette is the
+    /// one place search happens; the list below never hides a row.
     private var searchRow: some View {
-        @Bindable var workspace = workspace
-        return HStack(spacing: EchoSpacing.s) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: EchoControl.sidebarGlyphSize))
-                .frame(width: EchoControl.sidebarGlyphSize)
-                .foregroundStyle(EchoColor.textTertiary)
-            ZStack(alignment: .leading) {
-                if workspace.searchText.isEmpty {
-                    // The placeholder the design draws, in the design's own
-                    // colour. It is decoration: the field below carries the
-                    // name, and a reader that heard both would hear it twice.
-                    Text("Search")
-                        .font(EchoFont.row)
-                        .foregroundStyle(EchoColor.textSecondary)
-                        .accessibilityHidden(true)
-                }
-                TextField("", text: $workspace.searchText)
-                    .textFieldStyle(.plain)
-                    .font(EchoFont.row)
-                    .foregroundStyle(EchoColor.textPrimary)
-                    .accessibilityLabel("Search")
-                    .focused($searchFocused)
-                    .onExitCommand {
-                        workspace.searchText = ""
-                        searchFocused = false
-                    }
+        Button {
+            workspace.presentSearch()
+        } label: {
+            HStack(spacing: EchoSpacing.s) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: EchoControl.sidebarGlyphSize))
+                    .frame(width: EchoControl.sidebarGlyphSize)
+                    .foregroundStyle(EchoColor.textTertiary)
+                rowTitle("Search", isSelected: false)
+                Spacer(minLength: EchoSpacing.s)
+                Text("⌘K")
+                    .font(EchoFont.mono(11))
+                    .foregroundStyle(EchoColor.textQuaternary)
             }
-            Text("⌘K")
-                .font(EchoFont.mono(11))
-                .foregroundStyle(EchoColor.textQuaternary)
+            .sidebarRow(isSelected: false, isHovered: hovered == .search || workspace.isSearchPresented)
         }
-        .sidebarRow(isSelected: false, isHovered: hovered == .search || searchFocused)
+        .buttonStyle(.plain)
         .onHover { hovering in hover(.search, hovering) }
-        .onTapGesture { searchFocused = true }
-        .background {
-            // ⌘K focuses the search field from anywhere in the window.
-            Button("") { searchFocused = true }
-                .keyboardShortcut("k", modifiers: .command)
-                .frame(width: 0, height: 0)
-                .opacity(0)
-        }
     }
 
     // MARK: Settings
@@ -225,17 +200,6 @@ struct MeetingSidebar: View {
             // The document says so, with the one action out of it; the list
             // saying it too would be the same sentence twice.
             Spacer()
-        } else if workspace.searchHidesEverything(in: library.metas) {
-            // In the list's place, where the rows were (product owner,
-            // 2026-10-20); the document keeps the meeting being read. It says
-            // what search reads, because it does not read transcripts.
-            EmptyState(
-                glyph: .magnifier, title: "No meeting matches “\(workspace.searchText)”",
-                message: "Search reads titles, one-line descriptions and dates — not the body of the transcript."
-            ) {
-                Button("Clear search") { workspace.searchText = "" }
-                    .buttonStyle(.echoControl)
-            }
         } else {
             ScrollViewReader { proxy in
                 ScrollView {

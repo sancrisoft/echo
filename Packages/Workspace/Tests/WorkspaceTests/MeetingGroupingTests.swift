@@ -3,25 +3,14 @@ import Meetings
 import Testing
 import Workspace
 
-@Suite("Meeting filter and sort")
-struct MeetingFilterTests {
+@Suite("Meeting sort")
+struct MeetingSortTests {
 
-    private func meta(_ title: String, daysAgo: Double, minutes: Double = 30, caption: String? = nil) -> MeetingMeta {
+    private func meta(_ title: String, daysAgo: Double, minutes: Double = 30) -> MeetingMeta {
         let start = Date(timeIntervalSinceNow: -daysAgo * 86_400)
         return MeetingMeta(
             id: UUID(), title: title, startedAt: start, endedAt: start.addingTimeInterval(minutes * 60),
-            segmentCount: 1, hasSummary: false, oneLineDescription: caption)
-    }
-
-    @Test("an empty search keeps everything; a title or caption match filters, case-insensitively")
-    func filter() {
-        let metas = [
-            meta("Sprint planning", daysAgo: 0), meta("Design review", daysAgo: 1, caption: "Talked about ICONS"),
-        ]
-        #expect(MeetingFilter.apply(to: metas, search: "", sort: .recent).count == 2)
-        #expect(MeetingFilter.apply(to: metas, search: "sprint", sort: .recent).map(\.title) == ["Sprint planning"])
-        #expect(MeetingFilter.apply(to: metas, search: "icons", sort: .recent).map(\.title) == ["Design review"])
-        #expect(MeetingFilter.apply(to: metas, search: "nothing", sort: .recent).isEmpty)
+            segmentCount: 1, hasSummary: false)
     }
 
     @Test("each sort order orders")
@@ -29,10 +18,10 @@ struct MeetingFilterTests {
         let metas = [
             meta("B", daysAgo: 1, minutes: 10), meta("A", daysAgo: 0, minutes: 60), meta("C", daysAgo: 2, minutes: 30),
         ]
-        #expect(MeetingFilter.apply(to: metas, search: "", sort: .recent).map(\.title) == ["A", "B", "C"])
-        #expect(MeetingFilter.apply(to: metas, search: "", sort: .oldest).map(\.title) == ["C", "B", "A"])
-        #expect(MeetingFilter.apply(to: metas, search: "", sort: .name).map(\.title) == ["A", "B", "C"])
-        #expect(MeetingFilter.apply(to: metas, search: "", sort: .longest).map(\.title) == ["A", "C", "B"])
+        #expect(MeetingSort.apply(to: metas, sort: .recent).map(\.title) == ["A", "B", "C"])
+        #expect(MeetingSort.apply(to: metas, sort: .oldest).map(\.title) == ["C", "B", "A"])
+        #expect(MeetingSort.apply(to: metas, sort: .name).map(\.title) == ["A", "B", "C"])
+        #expect(MeetingSort.apply(to: metas, sort: .longest).map(\.title) == ["A", "C", "B"])
     }
 }
 
@@ -150,13 +139,13 @@ struct WorkspaceModelTests {
         #expect(!model.moveSelection(.down, in: []))
     }
 
-    @Test("the search filters what the arrows walk, but a filtered-away selection survives while the meeting exists")
-    func searchAndSelection() {
+    @Test("what is typed in the palette hides no row, and a selection lasts as long as its meeting")
+    func searchHidesNoRow() {
         let model = WorkspaceModel()
         let list = metas(3)
         model.open(list[2].id)
         model.searchText = "Meeting 0"
-        #expect(model.visibleMeetings(in: list).map(\.id) == [list[0].id])
+        #expect(model.visibleMeetings(in: list).count == 3)
         model.reconcileSelection(with: list)
         #expect(model.selectedMeetingID == list[2].id)
         model.reconcileSelection(with: Array(list.prefix(2)))
@@ -185,11 +174,4 @@ struct WorkspaceModelTests {
         #expect(model.documentTab == .transcript)
     }
 
-    @Test("an empty library never reads as 'no results'")
-    func emptyLibraryVersusSearch() {
-        let model = WorkspaceModel()
-        model.searchText = "x"
-        #expect(!model.searchHidesEverything(in: []))
-        #expect(model.searchHidesEverything(in: metas(2)))
-    }
 }

@@ -84,6 +84,10 @@ public nonisolated enum EchoFont {
     /// identifiers at this size go through `mono` instead.
     public static var micro: Font { onest(11.5, weight: 400) }
 
+    /// The ⌘K palette's query, and the label over each group of results.
+    public static var paletteQuery: Font { onest(15, weight: 400) }
+    public static var paletteGroupLabel: Font { onest(11, weight: 600) }
+
     /// 12 — the qualifier after a property's value, in a quieter ink: the
     /// "mic + system" after the capture.
     public static var propertyQualifier: Font { onest(12, weight: 400) }
@@ -259,6 +263,10 @@ public nonisolated enum EchoFont {
 
     /// Extra leading for `emptyMessage` (1.55 line height).
     public static let emptyMessageLineSpacing: CGFloat = 12.5 * 0.55 - 3
+
+    /// The palette's query (−0.008em) and its group labels (0.01em).
+    public static let paletteQueryTracking: CGFloat = 15 * -0.008
+    public static let paletteGroupLabelTracking: CGFloat = 11 * 0.01
 
     /// Tracking for `speaker`: −0.004em.
     public static let speakerTracking: CGFloat = 12.5 * -0.004

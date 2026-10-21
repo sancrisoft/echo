@@ -153,6 +153,19 @@ nonisolated let palette: [Token] = [
     // The welcome screen (`FirstRun.dc.html`). Light values borrowed until #120.
     .init("stepPending", EchoColor.stepPending, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("stepRingTrack", EchoColor.stepRingTrack, light: 0xE8EAED, dark: 0x26282C),
+    // The ⌘K palette (`Search.dc.html`). Light values borrowed until #120.
+    .init("paletteBackground", EchoColor.paletteBackground, light: 0xFFFFFF, dark: 0x17181C),
+    .init("paletteBorder", EchoColor.paletteBorder, light: 0xE1E3E6, dark: 0x34373C),
+    .init("paletteDivider", EchoColor.paletteDivider, light: 0xECEDF0, dark: 0x232529),
+    .init("paletteHighlight", EchoColor.paletteHighlight, light: 0xE8EAED, dark: 0x23252A),
+    .init("paletteFooter", EchoColor.paletteFooter, light: 0xF7F8FA, dark: 0x131418),
+    .init("paletteGroupLabel", EchoColor.paletteGroupLabel, light: 0x8A8D92, dark: 0x626569),
+    .init(
+        "paletteScrim", EchoColor.paletteScrim, light: 0x17191E, dark: 0x060709,
+        lightOpacity: 0.18, darkOpacity: 0.58),
+    .init(
+        "paletteShadow", EchoColor.paletteShadow, light: 0x17191E, dark: 0x000000,
+        lightOpacity: 0.18, darkOpacity: 0.72),
 ]
 
 @Suite("The palette")
@@ -301,6 +314,38 @@ struct MetricTests {
         #expect(EchoControl.listRowActionGap == 6)
         #expect(EchoRadius.listRow == 8)
         #expect(EchoRadius.keycap == 4)
+    }
+
+    @Test("the palette's measures are the artboard's")
+    func paletteMatchesTheArtboard() {
+        #expect(EchoLayout.paletteWidth == 620)
+        // 122 from the window's top on the artboard, less its 44-point title bar.
+        #expect(EchoLayout.paletteTopInset == 78)
+        #expect(EchoLayout.paletteFieldHeight == 52)
+        #expect(EchoLayout.paletteFieldInset == 16)
+        #expect(EchoLayout.paletteFieldGap == 11)
+        #expect(EchoLayout.paletteListInset == 8)
+        #expect(EchoLayout.paletteGroupLabelHeight == 26)
+        #expect(EchoLayout.paletteResultHeight == 44)
+        #expect(EchoLayout.paletteActionHeight == 38)
+        #expect(EchoLayout.paletteRowInset == 10)
+        #expect(EchoLayout.paletteRowGap == 11)
+        #expect(EchoLayout.paletteRuleInset == CGSize(width: 10, height: 8))
+        #expect(EchoLayout.paletteFooterHeight == 38)
+        #expect(EchoLayout.paletteFooterGap == 16)
+        // The artboard's 80-point blur, as SwiftUI's radius of half that.
+        #expect(EchoLayout.paletteShadowRadius == 40)
+        #expect(EchoLayout.paletteShadowOffset == 32)
+        // The actions panel is not drawn; half the palette's shadow.
+        #expect(EchoLayout.palettePanelShadowRadius == EchoLayout.paletteShadowRadius / 2)
+        #expect(EchoLayout.palettePanelShadowOffset == EchoLayout.paletteShadowOffset / 2)
+        #expect(EchoControl.paletteSearchGlyphSize == 17)
+        #expect(EchoControl.paletteRowGlyphSize == 15)
+        #expect(EchoControl.paletteGlyphStroke == 1.4)
+        #expect(EchoControl.paletteMatchInset == CGSize(width: 2, height: 0))
+        #expect(EchoControl.keycapInsetStandalone == CGSize(width: 6, height: 2))
+        #expect(EchoRadius.palette == 12)
+        #expect(EchoRadius.paletteRow == 7)
     }
 
     @Test("the radii are the artboard's, largest to smallest")

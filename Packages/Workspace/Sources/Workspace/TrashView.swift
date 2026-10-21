@@ -271,29 +271,6 @@ struct TrashView: View {
     }
 }
 
-/// A key and what it does, as the footer draws its hints.
-private struct KeyHint: View {
-    let key: String
-    let label: String
-
-    var body: some View {
-        HStack(spacing: EchoLayout.keyHintGap) {
-            Text(key)
-                .font(EchoFont.mono(10.5))
-                .padding(.horizontal, EchoControl.keycapInset.width)
-                .padding(.vertical, EchoControl.keycapInset.height)
-                .overlay {
-                    RoundedRectangle(cornerRadius: EchoRadius.keycap)
-                        .strokeBorder(EchoColor.inertBorder, lineWidth: EchoLayout.hairline)
-                }
-            Text(label)
-                .font(EchoFont.micro)
-        }
-        .foregroundStyle(EchoColor.textQuaternary)
-        .fixedSize()
-    }
-}
-
 /// A page with its corner folded, on the artboard's 16 × 16 grid: the
 /// glyph at the head of a Trash row.
 private nonisolated struct DocumentGlyph: Shape {

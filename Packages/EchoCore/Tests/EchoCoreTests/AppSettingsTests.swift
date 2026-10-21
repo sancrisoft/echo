@@ -444,3 +444,45 @@ struct AppSettingsFirstRunTests {
         }
     }
 }
+
+@Suite("AppSettings — recent searches")
+@MainActor
+struct AppSettingsRecentSearchesTests {
+
+    @Test("a search is kept newest first, once whatever its case, and at most five")
+    func keepsAFewNewestFirst() throws {
+        try withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            #expect(settings.recentSearches.isEmpty)
+            for text in ["alpha", "beta", "  gamma  ", "", "Alpha"] { settings.noteSearch(text) }
+            #expect(settings.recentSearches == ["Alpha", "gamma", "beta"])
+            for text in ["d", "e", "f"] { settings.noteSearch(text) }
+            #expect(settings.recentSearches == ["f", "e", "d", "Alpha", "gamma"])
+            #expect(settings.recentSearches.count == AppSettings.recentSearchLimit)
+        }
+    }
+
+    @Test("the list survives a relaunch, and one search or all of them can be taken off")
+    func roundTripsAndForgets() throws {
+        try withTempSettingsFile { url in
+            let settings = AppSettings(fileURL: url)
+            settings.noteSearch("budget")
+            settings.noteSearch("you: roadmap")
+            #expect(AppSettings(fileURL: url).recentSearches == ["you: roadmap", "budget"])
+            settings.forgetSearch("budget")
+            #expect(AppSettings(fileURL: url).recentSearches == ["you: roadmap"])
+            settings.clearRecentSearches()
+            #expect(AppSettings(fileURL: url).recentSearches.isEmpty)
+        }
+    }
+
+    @Test("a settings file written before the list existed keeps every other setting")
+    func olderFileDecodes() throws {
+        try withTempSettingsFile { url in
+            try Data(#"{"callDetectionEnabled": false}"#.utf8).write(to: url)
+            let settings = AppSettings(fileURL: url)
+            #expect(settings.recentSearches.isEmpty)
+            #expect(!settings.callDetectionEnabled)
+        }
+    }
+}
