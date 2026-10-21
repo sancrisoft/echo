@@ -114,6 +114,13 @@ public nonisolated enum MarkdownRendering {
     /// past the letters as the design pads them; the room it takes in the
     /// line comes from kerning the letter before the code and the code's own
     /// last letter, so the prose around it moves aside as a padded box would.
+    /// `text` with the writing cursor after its last words when `cursor` is
+    /// set: a thin bar in the accent, a hair's space after the last letter.
+    static func withCursor(_ text: Text, _ cursor: Bool) -> Text {
+        guard cursor else { return text }
+        return Text("\(text)\(Text(verbatim: "\u{200A}\u{258F}").foregroundStyle(EchoColor.accent))")
+    }
+
     static func text(for spans: [MarkdownSpan], baseFont: Font, boldFont: Font? = nil) -> Text {
         var pieces = spans.map { attributedString(for: [$0], baseFont: baseFont, boldFont: boldFont) }
         let pad = EchoControl.inlineCodeInset.width
@@ -153,9 +160,14 @@ nonisolated extension MarkdownBlock {
 /// streaming string simply re-renders with more blocks.
 public struct MarkdownView: View {
     private let markdown: String
+    private let showsCursor: Bool
 
-    public init(markdown: String) {
+    /// - Parameter showsCursor: the summary is still being written: its last
+    ///   words end in the accent's cursor, as `Processing.dc.html` draws the
+    ///   notes streaming in.
+    public init(markdown: String, showsCursor: Bool = false) {
         self.markdown = markdown
+        self.showsCursor = showsCursor
     }
 
     public var body: some View {
@@ -165,7 +177,7 @@ public struct MarkdownView: View {
             // parser's design goal), so block N stays block N as the document
             // grows and only the tail re-renders meaningfully.
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                MarkdownBlockView(block: block)
+                MarkdownBlockView(block: block, cursor: showsCursor && index == blocks.count - 1)
                     .padding(.top, MarkdownRendering.gap(above: block, after: index > 0 ? blocks[index - 1] : nil))
             }
         }
@@ -177,21 +189,26 @@ public struct MarkdownView: View {
 
 private struct MarkdownBlockView: View {
     let block: MarkdownBlock
+    /// The writing cursor goes after this block's last words. A rule, a
+    /// table or a code block has no words to end on, and draws none.
+    var cursor = false
 
     var body: some View {
         switch block {
         case .heading(let level, let spans):
-            MarkdownRendering.text(for: spans, baseFont: MarkdownRendering.headingFont(level: level))
-                .tracking(MarkdownRendering.headingTracking(level: level))
-                .foregroundStyle(EchoColor.textPrimary)
-                .textRenderer(InlineHighlightRenderer())
-                .textSelection(.enabled)
+            MarkdownRendering.withCursor(
+                MarkdownRendering.text(for: spans, baseFont: MarkdownRendering.headingFont(level: level)), cursor
+            )
+            .tracking(MarkdownRendering.headingTracking(level: level))
+            .foregroundStyle(EchoColor.textPrimary)
+            .textRenderer(InlineHighlightRenderer())
+            .textSelection(.enabled)
 
         case .paragraph(let spans):
-            ProseText(spans: spans, ink: EchoColor.textProse)
+            ProseText(spans: spans, ink: EchoColor.textProse, cursor: cursor)
 
         case .list(let items, let ordered):
-            MarkdownListView(items: items, ordered: ordered)
+            MarkdownListView(items: items, ordered: ordered, cursor: cursor)
 
         case .horizontalRule:
             EchoColor.divider
@@ -210,14 +227,17 @@ private struct MarkdownBlockView: View {
 private struct ProseText: View {
     let spans: [MarkdownSpan]
     let ink: Color
+    var cursor = false
 
     var body: some View {
-        MarkdownRendering.text(for: spans, baseFont: EchoFont.body, boldFont: EchoFont.bodyBold)
-            .lineSpacing(EchoFont.bodyLineSpacing)
-            .foregroundStyle(ink)
-            .textRenderer(InlineHighlightRenderer())
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
+        MarkdownRendering.withCursor(
+            MarkdownRendering.text(for: spans, baseFont: EchoFont.body, boldFont: EchoFont.bodyBold), cursor
+        )
+        .lineSpacing(EchoFont.bodyLineSpacing)
+        .foregroundStyle(ink)
+        .textRenderer(InlineHighlightRenderer())
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -226,11 +246,14 @@ private struct ProseText: View {
 private struct MarkdownListView: View {
     let items: [MarkdownListItem]
     let ordered: Bool
+    /// The cursor goes on the list's last item, deepest child first.
+    var cursor = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: MarkdownRendering.itemGap) {
             ForEach(Array(items.enumerated()), id: \.offset) { position, item in
-                MarkdownListItemView(item: item, ordered: ordered, position: position)
+                MarkdownListItemView(
+                    item: item, ordered: ordered, position: position, cursor: cursor && position == items.count - 1)
             }
         }
     }
@@ -240,6 +263,7 @@ private struct MarkdownListItemView: View {
     let item: MarkdownListItem
     let ordered: Bool
     let position: Int
+    var cursor = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: MarkdownRendering.itemGap) {
@@ -247,12 +271,13 @@ private struct MarkdownListItemView: View {
                 marker
                 // A done task recedes: same words, the tertiary ink.
                 ProseText(
-                    spans: item.spans, ink: item.checkbox == .checked ? EchoColor.textTertiary : EchoColor.textProse)
+                    spans: item.spans, ink: item.checkbox == .checked ? EchoColor.textTertiary : EchoColor.textProse,
+                    cursor: cursor && item.children.isEmpty)
             }
             if !item.children.isEmpty {
                 // One indent step per structural level — recursion accumulates
                 // the rest, so the constant is relative, not absolute depth.
-                MarkdownListView(items: item.children, ordered: item.childrenOrdered)
+                MarkdownListView(items: item.children, ordered: item.childrenOrdered, cursor: cursor)
                     .padding(.leading, MarkdownRendering.indent(level: 1))
             }
         }

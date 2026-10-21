@@ -50,6 +50,10 @@ struct MeetingDocumentView: View {
     /// The match a search result asked find to land on, held until the
     /// query it belongs to is in the field.
     @State private var landing: Int?
+    /// The last of the notes this meeting streamed, held from the moment the
+    /// generation ends until the written notes are read back, so the tab
+    /// never flashes "No summary yet" in between.
+    @State private var heldDraft: String?
     @FocusState private var findFocused: Bool
     /// The audio the meeting still holds, read with the record: whether its
     /// recording was kept, and whether a failed pass can run again.
@@ -117,6 +121,14 @@ struct MeetingDocumentView: View {
             Text("Its transcript, notes and any saved recording are removed from this Mac. This cannot be undone.")
         }
         .onChange(of: workspace.documentTab) { _, _ in copied = false }
+        .onChange(of: session.summaryDraft, initial: true) { _, draft in
+            if let draft, draft.meetingID == meta.id {
+                heldDraft = draft.markdown
+            } else if !meta.hasSummary {
+                // Abandoned or failed: there are no notes on their way.
+                heldDraft = nil
+            }
+        }
         // A search result for this meeting, opened while it was already the
         // one on screen: nothing reloads, so the request is taken here.
         .onChange(of: workspace.findRequest) { _, request in
@@ -138,6 +150,7 @@ struct MeetingDocumentView: View {
             loadFailed = loaded == nil
             keepsRecording = keeps
             canRetry = retry
+            if loaded?.summaryMarkdown != nil { heldDraft = nil }
             applyFindRequest()
         }
     }
@@ -308,6 +321,9 @@ struct MeetingDocumentView: View {
                 HStack(spacing: EchoSpacing.m) {
                     tabs
                     Spacer(minLength: 0)
+                    if workspace.documentTab == .summary, case .writing = summaryFace {
+                        StatusBadge(SummaryFace.writingBadge, tone: .accent)
+                    }
                     if workspace.documentTab == .transcript, !turns.isEmpty {
                         findField(matches)
                     }
@@ -481,28 +497,52 @@ struct MeetingDocumentView: View {
 
     @ViewBuilder
     private func summary(_ record: MeetingRecord) -> some View {
-        if let markdown = record.summaryMarkdown, !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if summaryFace == .summary, let markdown = record.summaryMarkdown {
             MarkdownView(markdown: markdown)
         } else {
-            EmptyState(
-                glyph: .lines,
-                title: "No summary yet",
-                message: status.isTranscriptReadable
-                    ? "The transcript is in. Notes are written once the summary model is available."
-                    : "Notes are written from the transcript, once there is one."
-            )
+            SummaryFaceView(
+                face: summaryFace, generate: { session.requestSummary(meta.id) },
+                copyTranscript: { MeetingActions.copyTranscript(record) })
         }
     }
 
     @ViewBuilder
     private func transcript(_ record: MeetingRecord, matches: [TranscriptMatch]) -> some View {
-        if record.segments.isEmpty {
+        if !record.segments.isEmpty {
+            TranscriptView(turns: turns, matches: matches, current: currentMatch)
+        } else if let pass = SummaryFace.passFace(
+            meetingID: meta.id, phase: session.phase, queued: session.queuedMeetingIDs, aheadTitle: aheadTitle)
+        {
+            SummaryFaceView(face: pass, generate: {}, copyTranscript: { false })
+        } else {
             EmptyState(
                 glyph: .lines, title: "No transcript yet",
                 message: "The transcript is written after the recording stops.")
-        } else {
-            TranscriptView(turns: turns, matches: matches, current: currentMatch)
         }
+    }
+
+    /// What the Summary tab says: the notes, or the work under way towards
+    /// them (`SummaryFace`).
+    private var summaryFace: SummaryFace {
+        let summary = record?.summaryMarkdown?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let live = session.summaryDraft.flatMap { $0.meetingID == meta.id ? $0.markdown : nil }
+        return SummaryFace.resolve(
+            meetingID: meta.id,
+            hasLoadedSummary: !summary.isEmpty,
+            metaHasSummary: meta.hasSummary,
+            phase: session.phase,
+            queued: session.queuedMeetingIDs,
+            aheadTitle: aheadTitle,
+            modelLoading: session.summaryReadiness == .loading,
+            draft: live ?? heldDraft,
+            failure: session.summaryFailures[meta.id],
+            transcriptReadable: status.isTranscriptReadable)
+    }
+
+    /// The meeting this one waits behind for its pass, by name.
+    private var aheadTitle: String? {
+        SummaryFace.meetingAhead(of: meta.id, phase: session.phase, queued: session.queuedMeetingIDs)
+            .flatMap { library.meta(for: $0)?.title }
     }
 }
 
