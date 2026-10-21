@@ -72,7 +72,9 @@ public nonisolated struct ReadyCheckGlyph: Shape {
 /// library with nothing recorded (and of a session still being captured), the
 /// magnifier of a search that found nothing, the trash, the lines of a
 /// transcript with no words, the warning of a pass that failed, and the
-/// folder of a meeting whose files are gone.
+/// folder of a meeting whose files are gone — and, from the processing
+/// artboard, the clock of a meeting waiting its turn and the sparkle of a
+/// summary being generated.
 public nonisolated enum EmptyGlyph: Sendable, CaseIterable {
     case waveform
     case magnifier
@@ -80,6 +82,8 @@ public nonisolated enum EmptyGlyph: Sendable, CaseIterable {
     case lines
     case warning
     case missingFolder
+    case clock
+    case sparkle
 
     /// The stroke the artboard draws, scaled with the glyph.
     public static func lineWidth(at size: CGFloat) -> CGFloat { 1.4 * size / 24 }
@@ -158,6 +162,29 @@ public nonisolated struct EmptyGlyphShape: Shape {
             path.closeSubpath()
             line(9.4, 11.4, 14.6, 16.6)
             line(14.6, 11.4, 9.4, 16.6)
+
+        case .clock:
+            let centre = grid.point(12, 12)
+            let radius = grid.length(9)
+            path.addEllipse(
+                in: CGRect(x: centre.x - radius, y: centre.y - radius, width: 2 * radius, height: 2 * radius))
+            path.move(to: grid.point(12, 7))
+            path.addLine(to: grid.point(12, 12))
+            path.addLine(to: grid.point(15.4, 14.2))
+
+        case .sparkle:
+            for star in [
+                [(12.0, 3.4), (13.6, 8), (18.2, 9.6), (13.6, 11.2), (12, 15.8), (10.4, 11.2), (5.8, 9.6), (10.4, 8)],
+                [
+                    (18.0, 15.4), (18.7, 17.4), (20.7, 18.1), (18.7, 18.8), (18, 20.8), (17.3, 18.8), (15.3, 18.1),
+                    (17.3, 17.4),
+                ],
+            ] {
+                guard let first = star.first else { continue }
+                path.move(to: grid.point(first.0, first.1))
+                for point in star.dropFirst() { path.addLine(to: grid.point(point.0, point.1)) }
+                path.closeSubpath()
+            }
         }
         return path
     }

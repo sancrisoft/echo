@@ -466,7 +466,7 @@ public struct EmptyState<Actions: View>: View {
         VStack(spacing: EchoLayout.emptyStateGap) {
             EmptyGlyphShape(glyph)
                 .stroke(
-                    glyph == .warning ? EchoColor.failureGlyph : EchoColor.placeholderGlyph,
+                    Self.ink(of: glyph),
                     style: StrokeStyle(
                         lineWidth: EmptyGlyph.lineWidth(at: EchoControl.emptyGlyphSize), lineCap: .round,
                         lineJoin: .round)
@@ -491,6 +491,19 @@ public struct EmptyState<Actions: View>: View {
         .padding(EchoLayout.emptyStateInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
+    }
+}
+
+extension EmptyState {
+    /// The faintest ink for a screen with nothing to show; the failure red
+    /// for one that failed; the accent for work under way, as the processing
+    /// artboard draws its sparkle.
+    static func ink(of glyph: EmptyGlyph) -> Color {
+        switch glyph {
+        case .warning: return EchoColor.failureGlyph
+        case .sparkle: return EchoColor.accent
+        case .waveform, .magnifier, .trash, .lines, .missingFolder, .clock: return EchoColor.placeholderGlyph
+        }
     }
 }
 

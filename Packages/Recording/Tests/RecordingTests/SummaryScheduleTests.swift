@@ -26,6 +26,7 @@ import EchoCore
 import EchoCoreTestSupport
 import Foundation
 import Meetings
+import Summarization
 import Testing
 import Transcription
 
@@ -315,6 +316,60 @@ struct SummaryScheduleTests {
             #expect(record.meta.summaryModelName == "Scripted 1B")
             #expect(summarizer.generations == 1)
             #expect(summarizer.captions == 1)
+        }
+    }
+
+    @Test func theDraftStreamsInAndIsGoneOnceTheSummaryIsWritten() async throws {
+        let first = summaryDocument("### Action Items", isFinal: false)
+        let second = summaryDocument("### Action Items\n- Ana to send the deck", isFinal: false)
+        let final = summaryDocument("### Action Items\n- Ana to send the deck.", isFinal: true)
+        let summarizer = ScriptedSummarizer([.documents([first, second, final])])
+        summarizer.holdAfterDocument(1)
+        try await withSession(summarizer: summarizer) { harness in
+            let meeting = try await plantTranscribedMeeting(
+                in: harness, minutesAgo: 5, text: "alpha")
+            #expect(harness.session.summaryDraft == nil)
+
+            harness.session.kickSummaryBackfill()
+            await waitUntil("the first draft to be published") {
+                harness.session.summaryDraft == SummaryDraft(meetingID: meeting, markdown: first.markdown)
+            }
+            #expect(harness.session.phase == .summarizing(meetingID: meeting))
+
+            summarizer.releaseAll()
+            await waitUntil("the summary to be persisted") {
+                harness.library.meta(for: meeting)?.hasSummary == true
+            }
+            // Written means finished: what streamed was only ever a view of
+            // the work, and nothing of it outlives the generation.
+            await waitUntil("the draft to be withdrawn") { harness.session.summaryDraft == nil }
+            #expect(harness.session.summaryFailures.isEmpty)
+        }
+    }
+
+    @Test func aFailedGenerationSaysWhyUntilTheSummaryIsAskedForAgain() async throws {
+        let summarizer = ScriptedSummarizer([
+            .failing([summaryDocument("# Notes", isFinal: false)], SummarizationError.emptyModelResponse),
+            .cutShort([]),
+        ])
+        try await withSession(summarizer: summarizer) { harness in
+            let meeting = try await plantTranscribedMeeting(
+                in: harness, minutesAgo: 5, text: "alpha")
+
+            harness.session.kickSummaryBackfill()
+            await waitUntil("the failure to be published") { harness.session.summaryFailures[meeting] != nil }
+            // The error's own words, when it has words a person can read.
+            #expect(
+                harness.session.summaryFailures[meeting] == SummarizationError.emptyModelResponse.errorDescription)
+            #expect(harness.session.summaryDraft == nil)
+
+            // Asking again is the way out, and the reason goes with it.
+            harness.session.requestSummary(meeting)
+            #expect(harness.session.summaryFailures[meeting] == nil)
+
+            // An error with no such words says so plainly.
+            await waitUntil("the second failure") { harness.session.summaryFailures[meeting] != nil }
+            #expect(harness.session.summaryFailures[meeting] == SummaryScheduler.unexplainedFailure)
         }
     }
 

@@ -283,6 +283,7 @@ struct MetricTests {
     /// An empty or broken screen, as the empty-states artboard draws it.
     @Test("the empty states' measures are the artboard's")
     func emptyStatesMatchTheArtboard() {
+        #expect(EchoLayout.processingBarWidth == 232)
         #expect(EchoControl.emptyGlyphSize == 30)
         #expect(EchoLayout.emptyStateGap == 13)
         #expect(EchoLayout.emptyStateMessageWidth == 280)

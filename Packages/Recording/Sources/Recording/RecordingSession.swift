@@ -76,6 +76,16 @@ public final class RecordingSession {
     /// relaunch offers them again.
     public var terminalFailureMeetingIDs: Set<UUID> { finalization.terminalFailures }
 
+    /// The summary being written, as far as the model has got: the window
+    /// shows it streaming in. Published by the summary scheduler and only
+    /// repeated here; `nil` whenever no generation is running.
+    public private(set) var summaryDraft: SummaryDraft?
+
+    /// Why a meeting's summary failed this run, by meeting. In-memory, like
+    /// the scheduler's own record of the failures: a relaunch tries them
+    /// again. Asking for the summary again clears its entry.
+    public private(set) var summaryFailures: [UUID: String] = [:]
+
     /// The meeting this session's post-stop work is about, if any. Derived
     /// from `phase`, never stored: a second field would be a second truth.
     public var currentMeetingID: UUID? { phase.meetingID }
@@ -302,6 +312,12 @@ public final class RecordingSession {
             isRecording: { [weak self] in self?.capturePhase.isRecording ?? false },
             onSummarizingChanged: { [weak self] meetingID in
                 self?.summarizingMeetingID = meetingID
+            },
+            onDraftChanged: { [weak self] draft in
+                self?.summaryDraft = draft
+            },
+            onFailuresChanged: { [weak self] failures in
+                self?.summaryFailures = failures
             }
         )
         summarySchedulerStorage = created
