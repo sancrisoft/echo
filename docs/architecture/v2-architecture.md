@@ -23,6 +23,7 @@ Echo/
 │   ├── MenuBarMenu.swift     the island's face as a menu, then the way back into the app
 │   ├── GlobalShortcut.swift  Control + Option + E: Record at rest, Stop while recording
 │   ├── ActivationPolicy.swift · WindowOpener.swift
+│   ├── LaunchOrigin.swift    who asked for a launch: the user, or loginwindow at login
 │   ├── WindowSnapshot.swift  DEBUG: render a scene to a PNG (design review)
 │   ├── Info.plist · Echo.entitlements · Assets.xcassets
 ├── AppTests/                 tests that need the real app as host (few)
@@ -90,7 +91,7 @@ Each package answers "who owns this?" for one product capability from
 | **DesignSystem** | Semantic color tokens for light and dark, the type scale over the two bundled typefaces, spacing, radii and control geometry, the durations and curves the design states (`EchoMotion`), and the primitives every surface repeats: buttons, chips, property rows, tab strips, list rows, status badges, level gauge, empty state. No product logic. | — | — |
 | **Workspace** | The main window: sidebar with meetings grouped by date, the document (summary and transcript), trash, the settings screen, first-run banners, search, the Markdown renderer, `WorkspaceModel` (selection, section, search, sort — the window's single navigation truth), display-state resolution. | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem | — |
 | **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, or drawn on a screen without one), the shell itself (its outline with the two concave flares, the ears either side of the cutout, the one-row expansion), `IslandController` (the non-activating `NSPanel`, which face the shell wears, where the window goes, and the one report detection needs about the session), the faces, and the capture choice the idle face offers (`ScopeSelection`, ported from the PoC). | EchoCore, Audio, CallDetection, Recording, DesignSystem | — |
-| **App** (target) | Composition root, scenes, activation policy and the reopen that answers a request for an already running app, the menu bar item — an `NSStatusItem` managed by hand, not a `MenuBarExtra` scene, because only that tells a left click from a right one — the update prompt (the one alert Echo raises, and the app menu's answer), launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
+| **App** (target) | Composition root, scenes, activation policy and the reopen that answers a request for an already running app, the launch the user asked for (read from its open-application event, which marks a login item's, so a cold launch opens the window and a login launch stays silent), the menu bar item — an `NSStatusItem` managed by hand, not a `MenuBarExtra` scene, because only that tells a left click from a right one — the update prompt (the one alert Echo raises, and the app menu's answer), launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
 
 The UI packages are built towards an internal design that is not in the
 repository (see `CLAUDE.md`, "Design"); its written spec is the reference for

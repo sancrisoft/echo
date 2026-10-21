@@ -28,6 +28,7 @@ App/                 composition root + scenes. Nothing else.
   EchoApp.swift        scenes: the main window, ⌘, and the app menu's commands
   AppComposition.swift builds every long-lived object; start() runs all launch side effects
   ActivationPolicy.swift · WindowOpener.swift · UpdatePrompt.swift
+  LaunchOrigin.swift   who asked for a launch: a user's opens the window, a login item's does not
   WindowSnapshot.swift (DEBUG)
   MenuBarItem.swift    the NSStatusItem: left click opens the window, right click
                        the menu; with the island off it says what the island's

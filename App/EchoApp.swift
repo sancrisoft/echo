@@ -39,9 +39,11 @@ struct EchoApp: App {
         // tell a left click from a right one and the two mean different things.
         //
         // The main window opens on demand — from the menu bar, ⌘, a reopen,
-        // or a debug flag — and at launch only on the first launch this Mac
-        // ever gives Echo, which is the one that would otherwise leave a new
-        // user with nothing on screen to find.
+        // or a debug flag — and at launch when the user asked for the launch,
+        // never when loginwindow did (`LaunchOrigin`). The first launch this
+        // Mac ever gives Echo presents it here, as the scene is built, which
+        // is the one that would otherwise leave a new user with nothing on
+        // screen to find.
         Window("Echo", id: EchoWindow.main) {
             WorkspaceWindow(dataRoot: composition.dataRoot, startRecording: composition.startRecording)
                 .environment(composition.library)

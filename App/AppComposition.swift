@@ -85,7 +85,8 @@ final class AppComposition {
     /// Whether the main window is on screen as soon as the scene is built.
     /// True for `ECHO_OPEN_WINDOW`, and for the one launch that finds this Mac
     /// has never run Echo before. Read by the scene, which SwiftUI builds only
-    /// after `start()` has had its say.
+    /// after `start()` has had its say. Any other launch the user asked for
+    /// opens the window later, once it can say so.
     private(set) var opensWindowAtLaunch: Bool
 
     private let errorLog: ErrorTraceLog
@@ -336,9 +337,21 @@ final class AppComposition {
         // moment there is an app to install it into — and claims the global
         // shortcut then too, whose presses arrive through the event loop that
         // app runs.
-        EchoAppDelegate.whenLaunched { [menuBarItem, globalShortcut] in
+        //
+        // That is also the first moment a launch says who asked for it, so it
+        // is where a launch the user asked for opens the window: Spotlight or
+        // Finder aimed at an Echo that is not running should land where the
+        // same gesture lands on one that is. A login launch stays as silent as
+        // every launch was before (#208): Echo can be a login item, and a
+        // window at every startup would sit in front of whatever the user
+        // logged in to do.
+        EchoAppDelegate.whenLaunched {
+            [menuBarItem, globalShortcut, windowOpener, presented = opensWindowAtLaunch] origin in
             menuBarItem.install()
             globalShortcut.register()
+            if origin == .user && !presented {
+                windowOpener.openMainWindow()
+            }
         }
 
         // A failed Update Now reopened the Echo that was there and left a

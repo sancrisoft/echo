@@ -40,8 +40,9 @@ public struct LaunchEnvironment: Sendable, Equatable {
     /// the real one.
     public let dataRootOverride: URL?
 
-    /// `ECHO_OPEN_WINDOW=1`: open the main window at launch (the app never
-    /// does on its own).
+    /// `ECHO_OPEN_WINDOW=1`: present the main window as the scene is built,
+    /// before the launch can say who asked for it (the app does so on its own
+    /// only on the first launch).
     public let opensWindowAtLaunch: Bool
 
     /// `ECHO_APPEARANCE=light|dark`: force the appearance, for design review.
