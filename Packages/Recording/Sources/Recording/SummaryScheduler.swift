@@ -54,6 +54,8 @@ final class SummaryScheduler {
     private let caption: CaptionGenerating
     private let isRecording: @MainActor () -> Bool
     private let onSummarizingChanged: @MainActor (UUID?) -> Void
+    private let onDraftChanged: @MainActor (SummaryDraft?) -> Void
+    private let onFailuresChanged: @MainActor ([UUID: String]) -> Void
 
     /// The tail of the work chain. Every entry point links onto it, so one
     /// meeting is summarized at a time however many triggers fire — and a
@@ -74,6 +76,16 @@ final class SummaryScheduler {
     /// the process.
     private var failedIDs: Set<UUID> = []
 
+    /// Why each blamed meeting's generation failed, for the window to say.
+    /// Only generations that ran and threw: a meeting with no transcript to
+    /// ground a summary in is skipped, not failed, and says so itself.
+    private var failureReasons: [UUID: String] = [:] {
+        didSet { onFailuresChanged(failureReasons) }
+    }
+
+    /// What a failure says when the error has no words a person can read.
+    static let unexplainedFailure = "The summary could not be written."
+
     init(
         library: MeetingLibrary,
         settings: AppSettings,
@@ -82,7 +94,9 @@ final class SummaryScheduler {
         generate: @escaping SummaryGenerating,
         caption: @escaping CaptionGenerating,
         isRecording: @escaping @MainActor () -> Bool,
-        onSummarizingChanged: @escaping @MainActor (UUID?) -> Void
+        onSummarizingChanged: @escaping @MainActor (UUID?) -> Void,
+        onDraftChanged: @escaping @MainActor (SummaryDraft?) -> Void = { _ in },
+        onFailuresChanged: @escaping @MainActor ([UUID: String]) -> Void = { _ in }
     ) {
         self.library = library
         self.settings = settings
@@ -92,6 +106,8 @@ final class SummaryScheduler {
         self.caption = caption
         self.isRecording = isRecording
         self.onSummarizingChanged = onSummarizingChanged
+        self.onDraftChanged = onDraftChanged
+        self.onFailuresChanged = onFailuresChanged
     }
 
     /// The user asked for this meeting's summary. It front-runs the scan and
@@ -100,6 +116,7 @@ final class SummaryScheduler {
     func request(_ meetingID: UUID) {
         requestedID = meetingID
         failedIDs.remove(meetingID)
+        failureReasons[meetingID] = nil
         kick()
     }
 
@@ -231,7 +248,10 @@ final class SummaryScheduler {
         }
 
         onSummarizingChanged(meta.id)
-        defer { onSummarizingChanged(nil) }
+        defer {
+            onDraftChanged(nil)
+            onSummarizingChanged(nil)
+        }
 
         do {
             try await withSummaryEngine { engine in
@@ -242,6 +262,11 @@ final class SummaryScheduler {
                     // half-written document from being persisted.
                     guard !self.isRecording() else { throw SummaryAbandoned() }
                     if document.isFinal { final = document }
+                    // What the model has written so far, to watch arrive.
+                    // Shown, never persisted: only the final document is.
+                    if !document.markdown.isEmpty {
+                        self.onDraftChanged(SummaryDraft(meetingID: meta.id, markdown: document.markdown))
+                    }
                 }
                 // A clean finish yields exactly one final document, and it is
                 // always the last element; a cancelled or failed generation
@@ -273,6 +298,7 @@ final class SummaryScheduler {
             return .modelUnavailable
         } catch {
             failedIDs.insert(meta.id)
+            failureReasons[meta.id] = (error as? LocalizedError)?.errorDescription ?? Self.unexplainedFailure
             ErrorTrace.record(
                 "Summary generation failed", error: error, category: "SummaryScheduler",
                 metadata: ["meeting": meta.id.uuidString])

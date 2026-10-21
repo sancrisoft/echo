@@ -911,6 +911,9 @@ final class ScriptedSummarizer: Sendable {
         /// Yields each document and then throws: the model died mid-stream,
         /// which must leave nothing behind.
         case cutShort([SummaryDocument])
+        /// Yields each document and then throws this error, for what the
+        /// failure says to the user.
+        case failing([SummaryDocument], any Error)
     }
 
     private struct State {
@@ -973,14 +976,17 @@ final class ScriptedSummarizer: Sendable {
 
     private func makeStream(_ script: Script) -> AsyncThrowingStream<SummaryDocument, Error> {
         let documents: [SummaryDocument]
-        let endsInFailure: Bool
+        let failure: (any Error)?
         switch script {
         case .documents(let scripted):
             documents = scripted
-            endsInFailure = false
+            failure = nil
         case .cutShort(let scripted):
             documents = scripted
-            endsInFailure = true
+            failure = ScriptedCaptureFailure(reason: "the generation was cut short")
+        case .failing(let scripted, let error):
+            documents = scripted
+            failure = error
         }
 
         let (stream, continuation) = AsyncThrowingStream<SummaryDocument, Error>.makeStream()
@@ -990,9 +996,8 @@ final class ScriptedSummarizer: Sendable {
                 continuation.yield(document)
                 state.withLock { $0.yielded += 1 }
             }
-            if endsInFailure {
-                continuation.finish(
-                    throwing: ScriptedCaptureFailure(reason: "the generation was cut short"))
+            if let failure {
+                continuation.finish(throwing: failure)
             } else {
                 continuation.finish()
             }
