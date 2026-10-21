@@ -422,6 +422,9 @@ public nonisolated enum EchoLayout {
     public static let emptyStateMessageWidth: CGFloat = 280
     public static let emptyStateActionGap: CGFloat = 8
     public static let emptyStateInset: CGFloat = 24
+    /// The final pass's bar on the Summary tab while a meeting is finalized
+    /// (`Processing.dc.html`).
+    public static let processingBarWidth: CGFloat = 232
     /// A list that takes the document's place, as Trash does: its header's
     /// height, insets and gap; the note under it; the list's inset and the
     /// gap between rows; a row's height, inset and the gap between its parts;

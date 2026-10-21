@@ -125,6 +125,10 @@ public nonisolated enum EchoFont {
     /// 14.5 / 600 — what an empty or broken screen says happened.
     public static var emptyTitle: Font { onest(14.5, weight: 600) }
 
+    /// A number set in an empty state's title — the final pass's percentage —
+    /// in the monospaced face, as numbers are everywhere.
+    public static var emptyTitleFigure: Font { mono(14.5, weight: .medium) }
+
     /// 12.5 — the sentence under it.
     public static var emptyMessage: Font { onest(12.5, weight: 400) }
 
