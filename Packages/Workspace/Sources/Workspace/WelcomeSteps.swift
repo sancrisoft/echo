@@ -9,11 +9,16 @@
 //
 //  Decisions the artboard does not draw are the product owner's (2026-10-19):
 //  a permission never asked offers Allow, which raises macOS's dialog; a
-//  denied one offers Open System Settings; a granted one reads Allowed. Start
-//  using Echo waits for both permissions and both models; Record without notes
-//  for both permissions and the transcription model only, because without the
-//  summary model there is still a transcript. The reason beside a held-back
-//  Start names the first step missing, in the rows' order.
+//  denied one offers Open System Settings; a granted one reads Allowed. Record
+//  without notes waits for both permissions and the transcription model only,
+//  because without the summary model there is still a transcript.
+//
+//  Start using Echo waits for nothing (product owner, 2026-10-22): the welcome
+//  can always be left, set up or not, because nothing here is the only place
+//  to do it. A recording asks for both permissions when it starts, the models
+//  come down at launch on their own, and the window says what Record waits
+//  for. Before, a permission that read wrong — or a user who will not grant
+//  System Audio Recording — left no way out but quitting.
 //
 
 import Recording
@@ -89,18 +94,7 @@ struct WelcomeSteps: Equatable {
 
     private var permissionsGranted: Bool { microphone.isGranted && systemAudio.isGranted }
 
-    var canStart: Bool { permissionsGranted && transcription.isReady && summary.isReady }
-
     var canRecordWithoutNotes: Bool { permissionsGranted && transcription.isReady }
-
-    /// Why Start using Echo is held back: the first step missing, in the
-    /// rows' order. `nil` once nothing is.
-    var waitingOn: String? {
-        if !microphone.isGranted { return "Waiting on the microphone." }
-        if !systemAudio.isGranted { return "Waiting on System Audio Recording." }
-        if !(transcription.isReady && summary.isReady) { return "Waiting on the models." }
-        return nil
-    }
 }
 
 /// Whether the window opens on the welcome screen at launch: the first time

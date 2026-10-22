@@ -312,16 +312,10 @@ struct WelcomeColumn: View {
 
     private var actions: some View {
         HStack(spacing: EchoLayout.welcomeActionsGap) {
+            // Never held back: the welcome can always be left (`WelcomeSteps`).
             Button("Start using Echo") { perform(.start) }
                 .buttonStyle(.echoProminent)
-                .disabled(!steps.canStart)
                 .fixedSize()
-            if let waitingOn = steps.waitingOn {
-                Text(verbatim: waitingOn)
-                    .font(EchoFont.control)
-                    .foregroundStyle(EchoColor.textQuaternary)
-                    .lineLimit(1)
-            }
             Spacer(minLength: 0)
             Button {
                 perform(.recordWithoutNotes)

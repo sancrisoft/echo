@@ -62,32 +62,16 @@ struct WelcomeTests {
         #expect(WelcomeSteps.control(for: .granted) == .allowed)
     }
 
-    @Test("Start waits for everything; Record without notes for all but the summary model")
-    func theWayOn() {
-        #expect(steps().canStart)
+    @Test("Record without notes waits for both permissions and the transcription model, not the summary model")
+    func recordWithoutNotes() {
         #expect(steps().canRecordWithoutNotes)
-        #expect(steps().waitingOn == nil)
-
-        let noNotesYet = steps(summary: .downloading(0.41))
-        #expect(!noNotesYet.canStart)
-        #expect(noNotesYet.canRecordWithoutNotes)
+        #expect(steps(summary: .downloading(0.41)).canRecordWithoutNotes)
 
         for blocked in [
             steps(microphone: .undecided), steps(systemAudio: .denied), steps(transcription: .downloading(0.2)),
         ] {
-            #expect(!blocked.canStart)
             #expect(!blocked.canRecordWithoutNotes)
         }
-    }
-
-    @Test("the reason names the first step missing, in the rows' order")
-    func waitingOn() {
-        #expect(
-            steps(microphone: .undecided, systemAudio: .undecided, summary: .waitingToDownload).waitingOn
-                == "Waiting on the microphone.")
-        #expect(steps(systemAudio: .denied, summary: .paused).waitingOn == "Waiting on System Audio Recording.")
-        #expect(steps(transcription: .downloading(0.4)).waitingOn == "Waiting on the models.")
-        #expect(steps(summary: .failed("x")).waitingOn == "Waiting on the models.")
     }
 
     @Test("each step's glyph: done, pending, or working while a model comes down or into memory")
