@@ -536,7 +536,8 @@ struct MeetingDocumentView: View {
             modelLoading: session.summaryReadiness == .loading,
             draft: live ?? heldDraft,
             failure: session.summaryFailures[meta.id],
-            transcriptReadable: status.isTranscriptReadable)
+            transcriptReadable: status.isTranscriptReadable,
+            summaryModelOnDisk: session.summaryReadiness == .ready || session.summaryReadiness == .loading)
     }
 
     /// The meeting this one waits behind for its pass, by name.

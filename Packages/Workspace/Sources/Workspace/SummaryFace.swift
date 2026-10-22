@@ -42,6 +42,11 @@ enum SummaryFace: Equatable, Sendable {
     case failed(reason: String)
     /// No work under way, and no notes yet.
     case notYet(transcriptReadable: Bool)
+    /// No work under way and no notes yet, with nothing in the way of
+    /// writing them: the transcript is in and the summary model is on disk.
+    /// The way out is the user's own Generate summary — with automatic
+    /// summaries off, the only one there is.
+    case canGenerate
 
     /// - Parameters:
     ///   - hasLoadedSummary: the loaded record carries notes.
@@ -51,6 +56,9 @@ enum SummaryFace: Equatable, Sendable {
     ///   - draft: what the model has written so far for this meeting — or
     ///     wrote last, held until the notes are read back.
     ///   - failure: why this meeting's generation failed this run.
+    ///   - summaryModelOnDisk: the summary model is on disk. Without it a
+    ///     request would start a download of several gigabytes that this tab
+    ///     has no face for; the models panel is where that one is fetched.
     static func resolve(
         meetingID: UUID,
         hasLoadedSummary: Bool,
@@ -61,7 +69,8 @@ enum SummaryFace: Equatable, Sendable {
         modelLoading: Bool,
         draft: String?,
         failure: String?,
-        transcriptReadable: Bool
+        transcriptReadable: Bool,
+        summaryModelOnDisk: Bool
     ) -> SummaryFace {
         if hasLoadedSummary { return .summary }
         if let pass = passFace(meetingID: meetingID, phase: phase, queued: queued, aheadTitle: aheadTitle) {
@@ -74,6 +83,7 @@ enum SummaryFace: Equatable, Sendable {
         }
         if metaHasSummary { return .settling(markdown: written) }
         if let failure { return .failed(reason: failure) }
+        if transcriptReadable && summaryModelOnDisk { return .canGenerate }
         return .notYet(transcriptReadable: transcriptReadable)
     }
 
@@ -112,6 +122,9 @@ enum SummaryFace: Equatable, Sendable {
     static let generatingMessage = "Echo is reading the final transcript locally."
     static let writingBadge = "Writing"
     static let failedTitle = "Summary failed"
+    static let notYetTitle = "No summary yet"
+    /// The PoC's sentence for the same state.
+    static let canGenerateMessage = "The transcript is saved, so you can generate one now."
 
     static func waitingMessage(behind: String?) -> String {
         let one = "One meeting is finalized at a time."
