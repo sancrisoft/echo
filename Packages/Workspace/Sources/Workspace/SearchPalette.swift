@@ -136,16 +136,7 @@ struct SearchPalette: View {
                 .frame(height: EchoLayout.hairline)
             footer(list)
         }
-        .frame(width: EchoLayout.paletteWidth)
-        .background(EchoColor.paletteBackground)
-        .clipShape(.rect(cornerRadius: EchoRadius.palette))
-        .overlay {
-            RoundedRectangle(cornerRadius: EchoRadius.palette)
-                .strokeBorder(EchoColor.paletteBorder, lineWidth: EchoLayout.hairline)
-        }
-        .shadow(
-            color: EchoColor.paletteShadow, radius: EchoLayout.paletteShadowRadius, y: EchoLayout.paletteShadowOffset
-        )
+        .paletteSurface()
         // Over the lists, at their foot above the hints, and not clipped by
         // the palette's corners: a long panel may rise over the field.
         .overlay(alignment: .bottomTrailing) {
@@ -213,25 +204,25 @@ struct SearchPalette: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     if !list.recents.isEmpty {
-                        groupLabel("Recent", count: nil)
+                        PaletteGroupLabel(title: "Recent")
                         ForEach(Array(list.recents.enumerated()), id: \.element) { index, text in
                             recentRow(text, index: index)
                         }
-                        rule
+                        PaletteRule()
                     }
                     if !query.isEmpty {
                         if list.total > 0 {
-                            groupLabel("Meetings", count: list.total)
+                            PaletteGroupLabel(title: "Meetings", count: list.total)
                             ForEach(Array(list.hits.enumerated()), id: \.element.id) { position, hit in
                                 resultRow(hit, index: list.indexOfResult(at: position), list: list)
                             }
-                            rule
+                            PaletteRule()
                         } else if answered == query && !library.isReadingForSearch {
                             noMatch
-                            rule
+                            PaletteRule()
                         }
                     }
-                    groupLabel("Actions", count: nil)
+                    PaletteGroupLabel(title: "Actions")
                     ForEach(Array(PaletteAction.allCases.enumerated()), id: \.element) { position, action in
                         actionRow(action, index: list.indexOfAction(at: position))
                     }
@@ -247,30 +238,6 @@ struct SearchPalette: View {
             .scrollIndicators(contentHeight > maxHeight ? .automatic : .never)
             .onChange(of: highlighted) { _, index in proxy.scrollTo(index) }
         }
-    }
-
-    private func groupLabel(_ title: String, count: Int?) -> some View {
-        HStack(spacing: EchoSpacing.s) {
-            Text(title)
-                .font(EchoFont.paletteGroupLabel)
-                .tracking(EchoFont.paletteGroupLabelTracking)
-                .foregroundStyle(EchoColor.paletteGroupLabel)
-            Spacer(minLength: EchoSpacing.s)
-            if let count {
-                Text("\(count)")
-                    .font(EchoFont.mono(10.5))
-                    .foregroundStyle(EchoColor.textFaint)
-            }
-        }
-        .padding(.horizontal, EchoLayout.paletteRowInset)
-        .frame(height: EchoLayout.paletteGroupLabelHeight)
-    }
-
-    private var rule: some View {
-        EchoColor.paletteDivider
-            .frame(height: EchoLayout.hairline)
-            .padding(.horizontal, EchoLayout.paletteRuleInset.width)
-            .padding(.vertical, EchoLayout.paletteRuleInset.height)
     }
 
     /// In the results' place, with the one action out of it; the actions
@@ -464,6 +431,9 @@ struct SearchPalette: View {
         case .openTrash:
             PaletteGlyph(.trash)
                 .stroke(EchoColor.textTertiary, style: PaletteGlyph.stroke(at: EchoControl.paletteRowGlyphSize))
+        case .showShortcuts:
+            PaletteGlyph(.keyboard)
+                .stroke(EchoColor.textTertiary, style: PaletteGlyph.stroke(at: EchoControl.paletteRowGlyphSize))
         }
     }
 
@@ -482,7 +452,7 @@ struct SearchPalette: View {
     private func actionsPanel(for item: SearchPaletteList.Item, on row: Int) -> some View {
         let actions = PaletteItemAction.actions(for: item)
         return VStack(alignment: .leading, spacing: 0) {
-            groupLabel(panelTitle(of: item), count: nil)
+            PaletteGroupLabel(title: panelTitle(of: item))
             ForEach(Array(actions.enumerated()), id: \.element) { position, action in
                 let isOn = position == row
                 HStack(spacing: EchoSpacing.s) {
@@ -667,6 +637,8 @@ struct SearchPalette: View {
         case .openTrash:
             workspace.dismissSearch()
             workspace.showTrash()
+        case .showShortcuts:
+            workspace.presentShortcuts()
         }
     }
 
@@ -680,8 +652,10 @@ struct SearchPalette: View {
 
 /// The palette's glyphs, on the artboard's 16-point grid: the magnifier in
 /// the query's row, the waveform before a meeting (the trash before a
-/// trashed one), and the actions' dot, gear and trash. Drawn, not SF Symbols:
-/// the artboard draws its own, and only the palette draws these.
+/// trashed one), and the actions' dot, gear, trash and keyboard — the last
+/// not drawn by the artboard, which has no keyboard shortcuts action, and
+/// drawn here in its stroke. Drawn, not SF Symbols: the artboard draws its
+/// own, and only the palette draws these.
 private nonisolated struct PaletteGlyph: Shape {
     enum Kind {
         case magnifier
@@ -689,6 +663,7 @@ private nonisolated struct PaletteGlyph: Shape {
         case gear
         case trash
         case dot
+        case keyboard
     }
 
     let kind: Kind
@@ -748,6 +723,13 @@ private nonisolated struct PaletteGlyph: Shape {
             path.addLine(to: grid.point(11.3, 4.4))
         case .dot:
             circle(8, 8, 5.2)
+        case .keyboard:
+            path.addRoundedRect(
+                in: CGRect(
+                    origin: grid.point(1.8, 3.6), size: CGSize(width: grid.length(12.4), height: grid.length(8.8))),
+                cornerSize: CGSize(width: grid.length(1.6), height: grid.length(1.6)))
+            for x in [4.6, 7, 9.4, 11.8] { line(x, 6.4, x + 0.01, 6.4) }
+            line(5.2, 9.6, 10.8, 9.6)
         }
         return path
     }

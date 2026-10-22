@@ -61,6 +61,9 @@ import Workspace
                 workspace.section = .meetings
                 workspace.searchText = composition.environment.snapshotQuery ?? ""
                 workspace.presentSearch()
+            case .shortcuts:
+                workspace.section = .meetings
+                workspace.presentShortcuts()
             }
         }
 

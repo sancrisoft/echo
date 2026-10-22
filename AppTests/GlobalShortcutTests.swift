@@ -21,6 +21,11 @@ import Testing
 @MainActor
 struct GlobalShortcutTests {
 
+    @Test("it is written the way menus write it, for the keyboard shortcuts panel")
+    func display() {
+        #expect(GlobalShortcut.display == "⌃⌥E")
+    }
+
     @Test("at rest a press records, and while recording it stops")
     func pressesToggle() {
         #expect(GlobalShortcut.Press.of(.idle) == .start)

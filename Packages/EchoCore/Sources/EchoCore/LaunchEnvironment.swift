@@ -33,6 +33,8 @@ public struct LaunchEnvironment: Sendable, Equatable {
         case island
         /// The ⌘K palette over the library, with `snapshotQuery` typed in it.
         case search
+        /// The keyboard shortcuts panel over the library.
+        case shortcuts
     }
 
     /// `ECHO_DATA_ROOT`: run the app against another data folder. The way to

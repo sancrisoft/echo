@@ -45,14 +45,17 @@ struct EchoApp: App {
         // is the one that would otherwise leave a new user with nothing on
         // screen to find.
         Window("Echo", id: EchoWindow.main) {
-            WorkspaceWindow(dataRoot: composition.dataRoot, startRecording: composition.startRecording)
-                .environment(composition.library)
-                .environment(composition.settings)
-                .environment(composition.workspace)
-                .environment(composition.session)
-                .environment(composition.updates)
-                .preferredColorScheme(colorSchemeOverride)
-                .snapshotIfRequested(composition)
+            WorkspaceWindow(
+                dataRoot: composition.dataRoot, globalShortcut: GlobalShortcut.display,
+                startRecording: composition.startRecording
+            )
+            .environment(composition.library)
+            .environment(composition.settings)
+            .environment(composition.workspace)
+            .environment(composition.session)
+            .environment(composition.updates)
+            .preferredColorScheme(colorSchemeOverride)
+            .snapshotIfRequested(composition)
         }
         .defaultLaunchBehavior(composition.opensWindowAtLaunch ? .presented : .suppressed)
         // No state restoration: the window opens on demand, and restoring it
@@ -80,6 +83,14 @@ struct EchoApp: App {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings") { composition.openSettings() }
                     .keyboardShortcut(",", modifiers: .command)
+            }
+            // Where a Mac user looks for help, in place of the system's
+            // "Help isn't available" item: every shortcut, over the window
+            // (product owner, 2026-10-22). ⌘/ is bound here and nowhere
+            // else; the window only writes it.
+            CommandGroup(replacing: .help) {
+                Button("Keyboard Shortcuts") { composition.toggleShortcuts() }
+                    .keyboardShortcut("/", modifiers: .command)
             }
         }
     }

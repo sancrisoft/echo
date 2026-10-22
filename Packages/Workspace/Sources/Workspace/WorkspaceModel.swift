@@ -60,6 +60,10 @@ public final class WorkspaceModel {
     /// Whether the ⌘K palette is over the window.
     public private(set) var isSearchPresented = false
 
+    /// Whether the keyboard shortcuts panel is over the window. One panel at
+    /// a time: it and the palette put each other away.
+    public private(set) var isShortcutsPresented = false
+
     /// What is typed in the palette, and the scope Tab chose. Both outlive
     /// the palette, so ⌘K reopens on the last search.
     public var searchText = ""
@@ -157,6 +161,7 @@ public final class WorkspaceModel {
     // MARK: - The ⌘K palette
 
     public func presentSearch() {
+        isShortcutsPresented = false
         isSearchPresented = true
     }
 
@@ -165,7 +170,22 @@ public final class WorkspaceModel {
     }
 
     public func toggleSearch() {
-        isSearchPresented.toggle()
+        if isSearchPresented { dismissSearch() } else { presentSearch() }
+    }
+
+    // MARK: - Keyboard shortcuts
+
+    public func presentShortcuts() {
+        isSearchPresented = false
+        isShortcutsPresented = true
+    }
+
+    public func dismissShortcuts() {
+        isShortcutsPresented = false
+    }
+
+    public func toggleShortcuts() {
+        if isShortcutsPresented { dismissShortcuts() } else { presentShortcuts() }
     }
 
     /// Opens a result where its line is — the transcript, landing find on

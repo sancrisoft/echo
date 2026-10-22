@@ -39,7 +39,7 @@ struct WorkspaceShellTests {
         _ library: MeetingLibrary, _ dataRoot: DataRoot, workspace: WorkspaceModel = WorkspaceModel()
     ) -> some View {
         let settings = AppSettings(dataRoot: dataRoot)
-        return WorkspaceWindow(dataRoot: dataRoot, startRecording: {})
+        return WorkspaceWindow(dataRoot: dataRoot, globalShortcut: "⌃⌥E", startRecording: {})
             .environment(library)
             .environment(workspace)
             .environment(settings)

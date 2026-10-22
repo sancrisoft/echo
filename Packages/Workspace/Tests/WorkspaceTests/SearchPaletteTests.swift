@@ -112,7 +112,8 @@ struct SearchPaletteTests {
         #expect(PaletteAction.startRecording.state(titleBar: .recording(startedAt: base)) == .heldBack(reason: nil))
         #expect(PaletteAction.startRecording.state(titleBar: .stopping) == .heldBack(reason: nil))
         #expect(PaletteAction.openTrash.state(titleBar: .stopping) == .available)
-        #expect(PaletteAction.allCases.map(\.shortcut) == ["⌘R", "⌘,", nil])
+        #expect(PaletteAction.showShortcuts.state(titleBar: .stopping) == .available)
+        #expect(PaletteAction.allCases.map(\.shortcut) == ["⌘R", "⌘,", nil, "⌘/"])
     }
 
     // MARK: - What it says

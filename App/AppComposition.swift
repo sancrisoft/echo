@@ -408,4 +408,13 @@ final class AppComposition {
     func openSettings() {
         showSettings()
     }
+
+    /// Help › Keyboard Shortcuts (⌘/): the panel over the main window, put
+    /// up or away. The window comes forward with it.
+    func toggleShortcuts() {
+        workspace.toggleShortcuts()
+        if workspace.isShortcutsPresented {
+            windowOpener.openMainWindow()
+        }
+    }
 }
