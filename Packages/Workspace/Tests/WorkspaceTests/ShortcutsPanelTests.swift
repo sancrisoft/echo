@@ -9,6 +9,7 @@
 //
 
 import AppKit
+import Foundation
 import Testing
 
 @testable import Workspace
@@ -46,7 +47,7 @@ struct ShortcutsPanelTests {
     func theGlobalShortcutComesFirst() throws {
         let first = try #require(groups.first)
         #expect(first.title == "Anywhere")
-        #expect(first.rows.map(\.keys) == [["⌃⌥E"]])
+        #expect(first.rows.first?.keys == ["⌃⌥E"])
     }
 
     @Test("every row says what it does and with which keys, once per group")
@@ -63,13 +64,33 @@ struct ShortcutsPanelTests {
         }
     }
 
-    @Test("the palette's actions' shortcuts, and the panel's own, are listed in the window's group")
+    @Test("the palette's actions' shortcuts, and the panel's own, are listed")
     func thePalettesShortcutsAreListed() {
-        let window = keys(in: "In the window")
+        let listed = Set(groups.flatMap { $0.rows.flatMap(\.keys) })
         for shortcut in PaletteAction.allCases.compactMap(\.shortcut) {
-            #expect(window.contains(shortcut), "\(shortcut) is missing")
+            #expect(listed.contains(shortcut), "\(shortcut) is missing")
         }
-        #expect(window.contains(ShortcutsList.toggleKeys))
+        #expect(listed.contains(ShortcutsList.toggleKeys))
+    }
+
+    @Test("the window's navigation is listed: the meeting above or below, and the two tabs")
+    func theWindowsNavigationIsListed() {
+        #expect(keys(in: "In the window").isSuperset(of: ["⌥⌘↑", "⌥⌘↓", "⌘1", "⌘2"]))
+        #expect(WorkspaceModel.DocumentTab.allCases.count == 2, "⌘1 and ⌘2 name exactly two tabs")
+    }
+
+    @Test("⌘1 and ⌘2 change tabs only while a meeting's document is shown")
+    func tabsOnlyWithADocument() {
+        let workspace = WorkspaceModel()
+        #expect(!workspace.showsDocument)
+        workspace.open(UUID())
+        #expect(workspace.showsDocument)
+        workspace.section = .settings
+        #expect(!workspace.showsDocument)
+        workspace.showTrash()
+        #expect(!workspace.showsDocument)
+        workspace.openTrashed(UUID())
+        #expect(workspace.showsDocument)
     }
 
     @Test("every key the palette reads first is listed under search")

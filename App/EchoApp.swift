@@ -7,6 +7,7 @@
 //  `AppComposition.start()`, once, from here.
 //
 
+import AppKit
 import DesignSystem
 import EchoCore
 import Recording
@@ -77,6 +78,13 @@ struct EchoApp: App {
             // Settings. The menu bar item's menu has it too, under the
             // version, where it names an update once one is found (product
             // owner, 2026-10-22).
+            // SwiftUI gives a lone `Window` scene no File menu, and with it no
+            // Close: ⌘W had nothing to run (read from the app's own menu,
+            // 2026-10-22). Closing the window never quits Echo.
+            CommandGroup(replacing: .newItem) {
+                Button("Close") { NSApp.keyWindow?.performClose(nil) }
+                    .keyboardShortcut("w", modifiers: .command)
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates") { composition.checkForUpdates() }
             }

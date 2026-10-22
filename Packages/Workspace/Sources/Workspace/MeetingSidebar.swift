@@ -219,10 +219,24 @@ struct MeetingSidebar: View {
                 .focusable()
                 .focusEffectDisabled()
                 .focused($listFocused)
-                .onKeyPress(.upArrow) { move(.up, proxy) }
-                .onKeyPress(.downArrow) { move(.down, proxy) }
-                .onKeyPress(.home) { move(.first, proxy) }
-                .onKeyPress(.end) { move(.last, proxy) }
+                // The list has the keyboard whenever the meetings are what
+                // the window shows — as it opens, and back from Trash or
+                // Settings — so ↑ ↓ work without a click first, as Trash's
+                // do (product owner, 2026-10-22).
+                .onAppear { listFocused = true }
+                .onChange(of: workspace.section) { _, section in
+                    if section == .meetings { listFocused = true }
+                }
+                // Wherever the selection moved from — these keys, ⌥⌘↑ ↓ in
+                // the window, a search result — its row is brought into view.
+                .onChange(of: workspace.selectedMeetingID) { _, id in
+                    guard let id else { return }
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id, anchor: nil) }
+                }
+                .onKeyPress(.upArrow) { move(.up) }
+                .onKeyPress(.downArrow) { move(.down) }
+                .onKeyPress(.home) { move(.first) }
+                .onKeyPress(.end) { move(.last) }
                 .onKeyPress(.return) {
                     guard workspace.selectedMeetingID != nil else { return .ignored }
                     workspace.section = .meetings
@@ -291,14 +305,11 @@ struct MeetingSidebar: View {
         Button("Move to Trash", role: .destructive) { trash(meta.id) }
     }
 
-    private func move(_ move: MeetingListSelection.Move, _ proxy: ScrollViewProxy) -> KeyPress.Result {
+    private func move(_ move: MeetingListSelection.Move) -> KeyPress.Result {
         // `.ignored` when there is nowhere to go, so the key falls through to
         // whatever would normally handle it instead of being silently eaten.
         guard workspace.moveSelection(move, in: library.metas) else { return .ignored }
         workspace.section = .meetings
-        if let id = workspace.selectedMeetingID {
-            withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(id, anchor: nil) }
-        }
         return .handled
     }
 

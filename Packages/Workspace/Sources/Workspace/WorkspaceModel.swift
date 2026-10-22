@@ -110,6 +110,17 @@ public final class WorkspaceModel {
         selectedMeetingID = MeetingListSelection.reconcile(selectedMeetingID, with: metas.map(\.id))
     }
 
+    /// Whether a meeting's document, with its Summary and Transcript tabs,
+    /// is what the window shows: a library meeting, or one opened from
+    /// Trash. ⌘1 and ⌘2 change tabs only then.
+    public var showsDocument: Bool {
+        switch section {
+        case .meetings: return selectedMeetingID != nil
+        case .trash: return openedTrashedID != nil
+        case .recording, .settings: return false
+        }
+    }
+
     /// Moves the library selection with the keyboard. Returns `false` when
     /// there was nowhere to go, so the key can fall through.
     @discardableResult

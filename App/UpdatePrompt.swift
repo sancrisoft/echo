@@ -172,7 +172,9 @@ final class UpdatePrompt {
             version and reopens it. Your meetings are untouched.
             """
         alert.addButton(withTitle: "Update")
-        alert.addButton(withTitle: "Later")
+        // Esc is Later: NSAlert gives Esc only to a button called Cancel, and
+        // every other dialog in Echo answers Esc.
+        alert.addButton(withTitle: "Later").keyEquivalent = "\u{1b}"
         guard run(alert) == .alertFirstButtonReturn else { return }
         update()
     }

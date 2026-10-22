@@ -169,10 +169,30 @@ public struct WorkspaceWindow: View {
             .disabled(
                 workspace.showsWelcome
                     || TitleBarState.resolve(phase: session.phase, readiness: session.readiness) != .newRecording)
+            // The meeting above or below, from anywhere in the window, in the
+            // sidebar's order — the list's own ↑ ↓ without its focus.
+            Button("") { moveMeeting(.up) }
+                .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+                .disabled(workspace.showsWelcome)
+            Button("") { moveMeeting(.down) }
+                .keyboardShortcut(.downArrow, modifiers: [.option, .command])
+                .disabled(workspace.showsWelcome)
+            // ⌘1 Summary, ⌘2 Transcript, while a document is shown. The
+            // palette reads its own ⌘1–⌘9 first while it is up.
+            ForEach(Array(WorkspaceModel.DocumentTab.allCases.enumerated()), id: \.element) { index, tab in
+                Button("") { workspace.documentTab = tab }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                    .disabled(workspace.showsWelcome || !workspace.showsDocument)
+            }
         }
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
+    }
+
+    private func moveMeeting(_ move: MeetingListSelection.Move) {
+        guard workspace.moveSelection(move, in: library.metas) else { return }
+        workspace.section = .meetings
     }
 
     private func settleSelection() {
