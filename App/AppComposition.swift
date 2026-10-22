@@ -177,12 +177,17 @@ final class AppComposition {
         updatePrompt = UpdatePrompt(checker: updates, installer: updateInstaller, session: session)
 
         let settings = settings
+        let updates = updates
+        let updatePrompt = updatePrompt
         menuBarItem = MenuBarItem(
             contents: MenuBarMenu(
                 island: { now in islandMenu.entries(now: now) },
+                availableUpdate: { updates.availableRelease.map { "\($0.version)" } },
                 requests: MenuBarMenu.Requests(
                     openEcho: { windowOpener.openMainWindow() },
-                    openSettings: showSettings
+                    openSettings: showSettings,
+                    checkForUpdates: { Task { await updatePrompt.checkAndReport() } },
+                    update: { updatePrompt.updateNow() }
                 )
             ),
             windowOpener: windowOpener,
@@ -381,6 +386,15 @@ final class AppComposition {
                 initialDelay: .seconds(24 * 60 * 60),
                 isEnabled: { settings.checkForUpdatesAutomatically }
             )
+        }
+
+        // The window opening is the other moment an offer is worth making: an
+        // Echo running as a login item finds its update days after the launch
+        // that would have offered it (product owner, 2026-10-22). Once per
+        // version, so the launch's own offer is not made twice.
+        EchoAppDelegate.whenMainWindowOpens { [updatePrompt, environment] in
+            guard environment.snapshotPath == nil else { return }
+            updatePrompt.offerIfAvailable()
         }
     }
 

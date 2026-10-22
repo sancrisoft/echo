@@ -13,6 +13,7 @@
 //
 
 import AppKit
+import EchoCore
 import Foundation
 import Island
 import Testing
@@ -26,7 +27,7 @@ struct MenuBarMenuTests {
     private func contents(_ entries: @escaping () -> [IslandMenuEntry]) -> MenuBarMenu {
         MenuBarMenu(
             island: { _ in entries() },
-            requests: MenuBarMenu.Requests(openEcho: {}, openSettings: {})
+            requests: MenuBarMenu.Requests(openEcho: {}, openSettings: {}, checkForUpdates: {}, update: {})
         )
     }
 
@@ -124,5 +125,44 @@ struct MenuBarMenuTests {
         entries = []
         contents.refresh(menu)
         #expect(titles(menu) == tail)
+    }
+
+    /// The menu with nothing from the island, an update found or not, and
+    /// what each update command was asked to do. The contents come back too:
+    /// a menu item's target is weak, and in the app the menu bar item is what
+    /// keeps them.
+    private func updateMenu(available: String?) -> (contents: MenuBarMenu, menu: NSMenu, asked: () -> [String]) {
+        var asked: [String] = []
+        let contents = MenuBarMenu(
+            island: { _ in [] },
+            availableUpdate: { available },
+            requests: MenuBarMenu.Requests(
+                openEcho: {}, openSettings: {},
+                checkForUpdates: { asked.append("check") },
+                update: { asked.append("update") }
+            )
+        )
+        return (contents, contents.build(), { asked })
+    }
+
+    @Test("Check for Updates sits under the version and runs a check")
+    func checkForUpdates() throws {
+        let (contents, menu, asked) = updateMenu(available: nil)
+        let titles = titles(menu)
+        let index = try #require(titles.firstIndex(of: "Check for Updates"))
+        #expect(titles[index - 1] == AppIdentity.version.display)
+        withExtendedLifetime(contents) { menu.performActionForItem(at: index) }
+        #expect(asked() == ["check"])
+    }
+
+    @Test("once a check has found a newer version, the same place names it and updates")
+    func updateToTheVersionFound() throws {
+        let (contents, menu, asked) = updateMenu(available: "0.1.1")
+        let titles = titles(menu)
+        #expect(!titles.contains("Check for Updates"))
+        let index = try #require(titles.firstIndex(of: "Update to Echo 0.1.1"))
+        #expect(titles[index - 1] == AppIdentity.version.display)
+        withExtendedLifetime(contents) { menu.performActionForItem(at: index) }
+        #expect(asked() == ["update"])
     }
 }

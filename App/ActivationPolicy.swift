@@ -31,6 +31,13 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
     /// runs it the moment the app is up, with who asked for the launch.
     private static var launchWork: ((LaunchOrigin) -> Void)?
 
+    /// Run each time the main window comes up on an app that had none.
+    private static var mainWindowOpened: (() -> Void)?
+
+    /// Whether the main window was up when the policy last settled — the
+    /// edge `mainWindowOpened` fires on.
+    private static var mainWindowIsUp = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // First: the launch's open-application event is the current one only
         // for the length of this call.
@@ -89,6 +96,14 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
         launchWork = work
     }
 
+    /// Runs `work` each time the main window comes up on an app that had
+    /// none, however it was opened. Read off the window itself rather than
+    /// the activation policy: `WindowOpener` promotes the app before the
+    /// window exists, so the policy's change would be missed.
+    static func whenMainWindowOpens(run work: @escaping () -> Void) {
+        mainWindowOpened = work
+    }
+
     /// The main window, while the app still has one. Minimized counts, and has
     /// to be asked for separately: `isVisible` is false for the whole time a
     /// window is miniaturized (measured 2026-09-14). Missing that demotes the
@@ -104,6 +119,13 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
     /// Promotes to `.regular` iff the app has a main window; demotes otherwise.
     private static func sync() {
         let mainWindow = Self.mainWindow
+        let opened = mainWindow != nil && !mainWindowIsUp
+        mainWindowIsUp = mainWindow != nil
+        if opened {
+            // A tick later, so the window is up before anything is put in
+            // front of it.
+            DispatchQueue.main.async { Self.mainWindowOpened?() }
+        }
         let wanted: NSApplication.ActivationPolicy = mainWindow == nil ? .accessory : .regular
         guard NSApp.activationPolicy() != wanted else { return }
         NSApp.setActivationPolicy(wanted)

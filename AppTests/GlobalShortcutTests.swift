@@ -48,7 +48,7 @@ struct GlobalShortcutTests {
                     IslandMenuEntry(title: "Dismiss", kind: .action({})),
                 ]
             },
-            requests: MenuBarMenu.Requests(openEcho: {}, openSettings: {})
+            requests: MenuBarMenu.Requests(openEcho: {}, openSettings: {}, checkForUpdates: {}, update: {})
         ).build()
         let record = try #require(menu.items.first { $0.title == "Record" })
         #expect(record.keyEquivalent == "e")

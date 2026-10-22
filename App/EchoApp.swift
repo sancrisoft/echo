@@ -71,8 +71,9 @@ struct EchoApp: App {
         // was the worse of two hosts for the same screen.
         .commands {
             // Where every Mac app puts it: under the app menu, beside
-            // Settings. Not the menu bar item — the design draws that menu
-            // with four items and this is not one of them.
+            // Settings. The menu bar item's menu has it too, under the
+            // version, where it names an update once one is found (product
+            // owner, 2026-10-22).
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates") { composition.checkForUpdates() }
             }

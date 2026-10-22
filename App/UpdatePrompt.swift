@@ -2,8 +2,9 @@
 //  UpdatePrompt.swift
 //  Echo
 //
-//  The one place Echo interrupts: an alert at launch when a newer release
-//  exists, and the answer to the app menu's Check for Updates.
+//  The one place Echo interrupts: an alert when a newer release exists — at
+//  launch, and when the window opens on an Echo that found one since — and
+//  the answer to Check for Updates, in the app menu and the menu bar item's.
 //
 //  It lives in the app target rather than in `Workspace`, which would need a
 //  window that may not be open, or in `Updates`, whose AppKit allowlist entry
@@ -15,9 +16,12 @@
 //    1. It has to be seen. Echo is an LSUIElement agent sitting at
 //       `.accessory` with no window open, so an alert it raises appears behind
 //       whatever is frontmost.
-//    2. At most one per launch, and Later means later — the next launch asks
-//       again. Nothing is persisted: a "skip this version" is one more piece
-//       of state to own and one more way to get stuck silent.
+//    2. At most once per version for each launch, and Later means later —
+//       the next launch asks again. A newer version found since is offered
+//       too: an Echo that runs as a login item can go weeks between launches
+//       (product owner, 2026-10-22). Nothing is persisted: a "skip this
+//       version" is one more piece of state to own and one more way to get
+//       stuck silent.
 //    3. Never while recording. Updating quits Echo, and mid-meeting that is a
 //       lost meeting.
 //    4. A check you asked for always answers. The automatic one is silent when
@@ -53,8 +57,9 @@ final class UpdatePrompt {
     private let installer: UpdateInstaller
     private let session: RecordingSession
 
-    /// Rule 2. Not persisted and not reset: the process is the scope.
-    private var offeredThisLaunch = false
+    /// Rule 2: the newest version offered so far. Not persisted and not reset:
+    /// the process is the scope.
+    private var offeredVersion: ReleaseVersion?
 
     init(checker: UpdateChecker, installer: UpdateInstaller, session: RecordingSession) {
         self.checker = checker
@@ -62,9 +67,22 @@ final class UpdatePrompt {
         self.session = session
     }
 
-    /// The launch check's answer: silent unless there is something to offer.
+    /// The automatic check's answer, at launch and again whenever the window
+    /// opens: silent unless there is something it has not offered yet.
     func offerIfAvailable() {
         act(on: decision(asked: false))
+    }
+
+    /// The menu bar item's Update to Echo X.Y.Z: the alert's Update, asked
+    /// for by name, so it asks nothing more — except during a recording
+    /// (rule 3), where it says why it waits.
+    func updateNow() {
+        guard let release = checker.availableRelease else { return }
+        guard !session.phase.isRecording else {
+            report(Self.availableTitle(release), Self.waitsForRecording)
+            return
+        }
+        update()
     }
 
     /// The app menu's Check for Updates. Rule 4: it reports whatever it finds,
@@ -78,30 +96,27 @@ final class UpdatePrompt {
 
     /// Rules 2, 3 and 4, as one function of the answer and the moment.
     ///
-    /// `asked` is what separates the app menu's check from the automatic one:
-    /// a check the user asked for always answers, and it is not the launch's
-    /// one interruption, so the latch neither blocks it nor is checked for it.
+    /// `asked` is what separates Check for Updates from the automatic check:
+    /// a check the user asked for always answers, and it is not one of the
+    /// automatic offers, so the latch neither blocks it nor is checked for it.
     nonisolated static func decide(
         status: UpdateChecker.Status,
         installedVersion: ReleaseVersion?,
         isRecording: Bool,
-        alreadyOffered: Bool,
+        offeredVersion: ReleaseVersion?,
         asked: Bool
     ) -> UpdatePromptDecision {
         switch status {
         case .available(let release):
             // Rule 3. An offer that arrives mid-meeting waits for the next
-            // launch; a check the user asked for still says what it found,
-            // and says why it is not offering.
+            // one; a check the user asked for still says what it found, and
+            // says why it is not offering.
             if isRecording {
                 guard asked else { return .sayNothing }
-                return .report(
-                    title: "Echo \(release.version) is available",
-                    message: "Updating quits Echo — it can update once this recording stops."
-                )
+                return .report(title: availableTitle(release), message: waitsForRecording)
             }
             // Rule 2. Nothing is persisted, so the next launch asks again.
-            if alreadyOffered, !asked { return .sayNothing }
+            if let offeredVersion, release.version <= offeredVersion, !asked { return .sayNothing }
             return .offer(release)
         case .upToDate:
             guard asked else { return .sayNothing }
@@ -124,7 +139,7 @@ final class UpdatePrompt {
             status: checker.status,
             installedVersion: checker.installedVersion,
             isRecording: session.phase.isRecording,
-            alreadyOffered: offeredThisLaunch,
+            offeredVersion: offeredVersion,
             asked: asked
         )
     }
@@ -134,7 +149,7 @@ final class UpdatePrompt {
         case .sayNothing:
             break
         case .offer(let release):
-            offeredThisLaunch = true
+            offeredVersion = release.version
             offer(release)
         case .report(let title, let message):
             report(title, message)
@@ -143,9 +158,15 @@ final class UpdatePrompt {
 
     // MARK: The alerts
 
+    nonisolated static func availableTitle(_ release: LatestRelease) -> String {
+        "Echo \(release.version) is available"
+    }
+
+    nonisolated static let waitsForRecording = "Updating quits Echo — it can update once this recording stops."
+
     private func offer(_ release: LatestRelease) {
         let alert = NSAlert()
-        alert.messageText = "Echo \(release.version) is available"
+        alert.messageText = Self.availableTitle(release)
         alert.informativeText = """
             You're on \(Self.installedText(checker.installedVersion)). Updating quits Echo, installs the new \
             version and reopens it. Your meetings are untouched.
