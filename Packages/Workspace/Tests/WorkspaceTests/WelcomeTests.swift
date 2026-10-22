@@ -62,15 +62,22 @@ struct WelcomeTests {
         #expect(WelcomeSteps.control(for: .granted) == .allowed)
     }
 
-    @Test("Record without notes waits for both permissions and the transcription model, not the summary model")
+    @Test("Record without notes waits for the transcription model only: a recording asks for the permissions")
     func recordWithoutNotes() {
         #expect(steps().canRecordWithoutNotes)
         #expect(steps(summary: .downloading(0.41)).canRecordWithoutNotes)
+        #expect(steps(microphone: .undecided, systemAudio: .denied).canRecordWithoutNotes)
+        #expect(!steps(transcription: .downloading(0.2)).canRecordWithoutNotes)
+    }
 
-        for blocked in [
-            steps(microphone: .undecided), steps(systemAudio: .denied), steps(transcription: .downloading(0.2)),
-        ] {
-            #expect(!blocked.canRecordWithoutNotes)
+    @Test("asked in this run, System Audio Recording reads Requested with Quit & Reopen, whatever the record said")
+    func requestedAwaitsARelaunch() {
+        for record in [CaptureAccess.undecided, .denied, .granted] {
+            #expect(steps(systemAudio: record).systemAudioControl == WelcomeSteps.control(for: record))
+            var asked = steps(systemAudio: record)
+            asked.systemAudioAwaitsRelaunch = true
+            #expect(asked.systemAudioControl == .requested)
+            #expect(asked.systemAudioProgress == .done)
         }
     }
 

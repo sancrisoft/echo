@@ -48,7 +48,8 @@ struct EchoApp: App {
         Window("Echo", id: EchoWindow.main) {
             WorkspaceWindow(
                 dataRoot: composition.dataRoot, globalShortcut: GlobalShortcut.display,
-                startRecording: composition.startRecording
+                startRecording: composition.startRecording,
+                relaunch: { composition.relaunch() }
             )
             .environment(composition.library)
             .environment(composition.settings)

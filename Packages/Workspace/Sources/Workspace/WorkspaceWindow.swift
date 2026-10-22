@@ -36,6 +36,7 @@ public struct WorkspaceWindow: View {
     private let dataRoot: DataRoot
     private let globalShortcut: String
     private let startRecording: () async -> Void
+    private let relaunch: () -> Void
 
     /// - Parameters:
     ///   - globalShortcut: Record and Stop from anywhere, as the menus write
@@ -44,10 +45,17 @@ public struct WorkspaceWindow: View {
     ///     window starts the same gated recording, with the same capture, as
     ///     every other surface (`TitleBar`). It returns once the start has
     ///     landed, so the window knows whether there is a session to show.
-    public init(dataRoot: DataRoot, globalShortcut: String, startRecording: @escaping () async -> Void) {
+    ///   - relaunch: quits Echo and reopens it on the welcome screen — the
+    ///     welcome's Quit & Reopen. The app's, since only the app can end
+    ///     its own process.
+    public init(
+        dataRoot: DataRoot, globalShortcut: String, startRecording: @escaping () async -> Void,
+        relaunch: @escaping () -> Void
+    ) {
         self.dataRoot = dataRoot
         self.globalShortcut = globalShortcut
         self.startRecording = startRecording
+        self.relaunch = relaunch
     }
 
     public var body: some View {
@@ -56,10 +64,13 @@ public struct WorkspaceWindow: View {
                 // The welcome screen takes the whole window, title bar
                 // included, as the design draws it: no sidebar, no
                 // hairline, nothing in the toolbar.
-                WelcomeScreen(dataRoot: dataRoot) {
-                    settings.noteLeftWelcome()
-                    workspace.leaveWelcome()
-                }
+                WelcomeScreen(
+                    dataRoot: dataRoot,
+                    leave: {
+                        settings.noteLeftWelcome()
+                        workspace.leaveWelcome()
+                    },
+                    relaunch: relaunch)
             } else {
                 workspaceLayout
             }

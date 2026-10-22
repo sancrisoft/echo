@@ -9,6 +9,7 @@
 //  stay inert scaffolding that touches no data folder (ADR-004).
 //
 
+import AppKit
 import CallDetection
 import DesignSystem
 import EchoCore
@@ -93,8 +94,16 @@ final class AppComposition {
     private let showSettings: () -> Void
     private var started = false
 
-    init(environment: LaunchEnvironment = .current) {
+    /// The argument the welcome's Quit & Reopen relaunches Echo with, so the
+    /// new run opens on the welcome screen and shows what macOS answered.
+    static let welcomeArgument = "--welcome"
+
+    /// Whether this run was opened by the welcome's Quit & Reopen.
+    private let reopensWelcome: Bool
+
+    init(environment: LaunchEnvironment = .current, arguments: [String] = CommandLine.arguments) {
         self.environment = environment
+        reopensWelcome = arguments.contains(Self.welcomeArgument)
         dataRoot = environment.dataRootOverride.map(DataRoot.init(url:)) ?? .standard
         settings = AppSettings(dataRoot: dataRoot)
         library = MeetingLibrary(dataRoot: dataRoot)
@@ -257,8 +266,10 @@ final class AppComposition {
         // opens anyway; and on a later one while the user has not left it and
         // the models are not both on disk, which only the models can say, so
         // that window is opened once they have answered (product owner,
-        // 2026-10-19).
-        if firstLaunch && !settings.hasLeftWelcome {
+        // 2026-10-19). A run the welcome's Quit & Reopen opened shows it too:
+        // it is where the answer macOS gave is read (2026-10-22). Its window
+        // opens as any launch the user asked for does (`LaunchOrigin`).
+        if (firstLaunch || reopensWelcome) && !settings.hasLeftWelcome {
             // Whatever the models say: the first launch shows it.
             workspace.presentWelcome()
         } else if !settings.hasLeftWelcome {
@@ -402,6 +413,32 @@ final class AppComposition {
     /// always answers.
     func checkForUpdates() {
         Task { [updatePrompt] in await updatePrompt.checkAndReport() }
+    }
+
+    /// Quits Echo and opens it again on the welcome screen: the welcome's
+    /// Quit & Reopen, after Allow on System Audio Recording, whose answer a
+    /// run reads only when it starts (`RecordingSession.refreshCaptureAccess`).
+    ///
+    /// The updater's way back (`UpdateInstaller`): a shell that outlives
+    /// Echo waits for this process to end, so two Echos never overlap, and
+    /// then opens the same bundle through LaunchServices. That makes the new
+    /// Echo responsible for itself in TCC's eyes and a launch the user asked
+    /// for (`LaunchOrigin`), so its window opens.
+    func relaunch() {
+        let waiter = Process()
+        waiter.executableURL = URL(filePath: "/bin/sh")
+        waiter.arguments = [
+            "-c",
+            #"trap '' HUP; while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open "$2" --args "$3""#,
+            "echo-relaunch", String(getpid()), Bundle.main.bundleURL.path, Self.welcomeArgument,
+        ]
+        do {
+            try waiter.run()
+        } catch {
+            ErrorTrace.record("Echo could not arrange its own relaunch", error: error, category: "Relaunch")
+            return
+        }
+        NSApp.terminate(nil)
     }
 
     /// Shows the settings section in the main window.
