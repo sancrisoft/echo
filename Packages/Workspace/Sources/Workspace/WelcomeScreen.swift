@@ -7,11 +7,12 @@
 //  — the microphone, System Audio Recording and the two models — each with
 //  its reason beside it, and the way on.
 //
-//  Permissions are asked here, each when its row's Allow is pressed, and read
-//  again whenever Echo comes back to the front: that is how a change made in
-//  System Settings shows without a relaunch. The Mac's audio is read by a
-//  tone of Echo's own, which is also the request, so it is checked on its own
-//  only once Echo has asked (see `RecordingSession.refreshCaptureAccess`).
+//  Permissions are asked here, each when its row's Allow is pressed. The
+//  microphone is read again whenever Echo comes back to the front, so a
+//  change in System Settings shows at once. System Audio Recording is read
+//  from TCC's record once a run, and its answer to Allow shows after Quit &
+//  Reopen, which reopens Echo on this screen (see
+//  `RecordingSession.refreshCaptureAccess`).
 //
 
 import AppKit
@@ -28,6 +29,9 @@ struct WelcomeScreen: View {
     /// Start using Echo and Record without notes: the window's, which
     /// records that the user left and shows the workspace.
     let leave: () -> Void
+    /// Quit & Reopen: the app's, since only the app can end its own process.
+    /// It reopens Echo on this screen.
+    let relaunch: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -37,7 +41,8 @@ struct WelcomeScreen: View {
                         microphone: session.microphoneAccess,
                         systemAudio: session.systemAudioAccess,
                         transcription: session.readiness,
-                        summary: session.summaryReadiness),
+                        summary: session.summaryReadiness,
+                        systemAudioAwaitsRelaunch: session.systemAudioAwaitsRelaunch),
                     dataFolder: Self.abbreviated(dataRoot.url),
                     perform: perform
                 )
@@ -69,6 +74,8 @@ struct WelcomeScreen: View {
             case .resumeSummary: session.resumeSummaryModelDownload()
             case nil: break
             }
+        case .relaunch:
+            relaunch()
         case .start, .recordWithoutNotes:
             leave()
         }
@@ -97,6 +104,7 @@ enum WelcomeAction: Equatable {
     case allowSystemAudio
     case openMicrophoneSettings
     case openSystemAudioSettings
+    case relaunch
     case model(ModelRow.Action, ModelRow.Model)
     case start
     case recordWithoutNotes
@@ -158,7 +166,7 @@ struct WelcomeColumn: View {
                 title: "System Audio Recording",
                 reason:
                     "macOS files system audio under this permission. Echo captures the sound only — never the picture.",
-                progress: steps.systemAudioProgress, control: WelcomeSteps.control(for: steps.systemAudio),
+                progress: steps.systemAudioProgress, control: steps.systemAudioControl,
                 allow: .allowSystemAudio, openSettings: .openSystemAudioSettings)
             modelsStep
             EchoColor.divider
@@ -203,6 +211,15 @@ struct WelcomeColumn: View {
                 Button("Open System Settings") { perform(openSettings) }
                     .buttonStyle(.echoControlProminent)
                     .fixedSize()
+            case .requested:
+                HStack(spacing: EchoLayout.welcomeActionsGap) {
+                    Text(verbatim: "Requested")
+                        .font(EchoFont.controlSelected)
+                        .foregroundStyle(EchoColor.textTertiary)
+                    Button("Quit & Reopen") { perform(.relaunch) }
+                        .buttonStyle(.echoControlProminent)
+                }
+                .fixedSize()
             }
         }
         .frame(minHeight: EchoLayout.welcomeStepHeight)
@@ -312,16 +329,10 @@ struct WelcomeColumn: View {
 
     private var actions: some View {
         HStack(spacing: EchoLayout.welcomeActionsGap) {
+            // Never held back: the welcome can always be left (`WelcomeSteps`).
             Button("Start using Echo") { perform(.start) }
                 .buttonStyle(.echoProminent)
-                .disabled(!steps.canStart)
                 .fixedSize()
-            if let waitingOn = steps.waitingOn {
-                Text(verbatim: waitingOn)
-                    .font(EchoFont.control)
-                    .foregroundStyle(EchoColor.textQuaternary)
-                    .lineLimit(1)
-            }
             Spacer(minLength: 0)
             Button {
                 perform(.recordWithoutNotes)

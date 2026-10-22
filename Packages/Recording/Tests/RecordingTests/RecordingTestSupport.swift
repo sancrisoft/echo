@@ -282,6 +282,10 @@ final class CaptureRig: Sendable {
         var microphoneRequests = 0
         var systemAudioVerdicts: [SystemAudioAccess]
         var systemAudioProbes = 0
+        /// What TCC has on record, in order (the last one repeats).
+        var systemAudioRecords: [SystemAudioAccess]
+        var systemAudioRecordReads = 0
+        var systemAudioRequests = 0
     }
 
     private let access: Mutex<Access>
@@ -292,6 +296,12 @@ final class CaptureRig: Sendable {
 
     var microphoneRequestCount: Int { access.withLock { $0.microphoneRequests } }
     var systemAudioProbeCount: Int { access.withLock { $0.systemAudioProbes } }
+    var systemAudioRecordReadCount: Int { access.withLock { $0.systemAudioRecordReads } }
+    var systemAudioRequestCount: Int { access.withLock { $0.systemAudioRequests } }
+
+    /// Holds every System Audio Recording request, as the dialog does, when a
+    /// test needs one in flight.
+    let systemAudioRequestGate: PassGate?
 
     /// How many times the session raised the permission dialogs. Once per app
     /// run, on the first record gesture — never at launch.
@@ -315,11 +325,16 @@ final class CaptureRig: Sendable {
         microphone: MicrophoneAuthorization = .granted,
         microphoneAnswer: Bool = true,
         systemAudio: [SystemAudioAccess] = [.granted],
-        systemAudioGate: PassGate? = nil
+        systemAudioGate: PassGate? = nil,
+        systemAudioRecord: [SystemAudioAccess] = [.unknown],
+        systemAudioRequestGate: PassGate? = nil
     ) {
         self.access = Mutex(
-            Access(microphone: microphone, microphoneAnswer: microphoneAnswer, systemAudioVerdicts: systemAudio))
+            Access(
+                microphone: microphone, microphoneAnswer: microphoneAnswer, systemAudioVerdicts: systemAudio,
+                systemAudioRecords: systemAudioRecord))
         self.systemAudioGate = systemAudioGate
+        self.systemAudioRequestGate = systemAudioRequestGate
         self.inputDevice = inputDevice
         self.route = route
         self.echoStage = CountingAECStage(healthy: engineHealthy)
@@ -364,6 +379,17 @@ final class CaptureRig: Sendable {
                     access.systemAudioProbes += 1
                     return access.systemAudioVerdicts.count > 1
                         ? access.systemAudioVerdicts.removeFirst() : access.systemAudioVerdicts[0]
+                }
+            },
+            requestSystemAudio: {
+                await self.systemAudioRequestGate?.enter()
+                self.access.withLock { $0.systemAudioRequests += 1 }
+            },
+            systemAudioRecord: {
+                self.access.withLock { access in
+                    access.systemAudioRecordReads += 1
+                    return access.systemAudioRecords.count > 1
+                        ? access.systemAudioRecords.removeFirst() : access.systemAudioRecords[0]
                 }
             },
             makeInputDeviceWatcher: { _ in

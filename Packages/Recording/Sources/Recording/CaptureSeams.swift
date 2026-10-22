@@ -171,6 +171,15 @@ struct CaptureFactories: Sendable {
     /// dialog when Echo has never asked — so a test never runs the real one.
     var probeSystemAudio: @Sendable () async -> SystemAudioAccess
 
+    /// Raises macOS's System Audio Recording dialog, the one way macOS offers:
+    /// a throwaway tap, which returns once the dialog is answered. Says
+    /// nothing about the answer.
+    var requestSystemAudio: @Sendable () async -> Void
+
+    /// What TCC has on record for System Audio Recording, read without asking
+    /// (`SystemAudioAccessProbe.recordedDecision`).
+    var systemAudioRecord: @Sendable () async -> SystemAudioAccess
+
     var makeInputDeviceWatcher:
         @Sendable (
             _ onDefaultInputChange:
@@ -203,6 +212,8 @@ struct CaptureFactories: Sendable {
         microphoneAuthorization: { MicrophoneCapture.authorization },
         requestMicrophone: { await MicrophoneCapture.requestPermission() },
         probeSystemAudio: { await SystemAudioAccessProbe.check() },
+        requestSystemAudio: { await SystemAudioCapture.primePermission() },
+        systemAudioRecord: { await SystemAudioAccessProbe.recordedDecision() },
         makeInputDeviceWatcher: { onChange in
             InputDeviceMonitor(onDefaultInputChange: onChange)
         },

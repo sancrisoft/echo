@@ -130,9 +130,15 @@ public final class RecordingSession {
     /// says it. Read from macOS by `refreshCaptureAccess()`.
     public private(set) var microphoneAccess: CaptureAccess = .undecided
 
-    /// Whether Echo may record the Mac's audio. Undecided until a check has
-    /// run, and a check runs only once Echo has asked (see `CaptureAccess`).
+    /// Whether Echo may record the Mac's audio, as TCC had it when this run
+    /// first looked (`refreshCaptureAccess()`). Undecided until then, and
+    /// when Echo has never been asked.
     public private(set) var systemAudioAccess: CaptureAccess = .undecided
+
+    /// Echo asked for System Audio Recording in this run. macOS's answer only
+    /// takes effect, and can only be read, once Echo is reopened — the
+    /// welcome's row says Requested and offers Quit & Reopen.
+    public private(set) var systemAudioAwaitsRelaunch = false
 
     /// Active notices, in a stable render order (see `RecordingNotice.Kind`).
     public var notices: [RecordingNotice] {
@@ -556,16 +562,21 @@ public final class RecordingSession {
 
     // MARK: - Capture permissions
 
-    /// Reads both permissions again: the microphone's from macOS, the Mac's
-    /// audio by the probe — and that only once Echo has asked for it, so a
-    /// look at the welcome screen never puts a dialog in front of anyone.
-    /// The welcome screen calls this when it appears and whenever Echo comes
-    /// back to the front, which is how a change made in System Settings shows.
+    /// Reads both permissions, never asking for either. The microphone's
+    /// is read from macOS every time, so a change in System Settings shows
+    /// at once. The Mac's audio is read from TCC's record once a run: that
+    /// read is right only the first time in a process, so a change after it
+    /// shows when Echo reopens — macOS's own way with this permission (the
+    /// standard behaviour, product owner 2026-10-22). The welcome screen calls
+    /// this when it appears and whenever Echo comes back to the front.
     public func refreshCaptureAccess() async {
         microphoneAccess = CaptureAccess(factories.microphoneAuthorization())
-        guard settings.hasRequestedSystemAudio else { return }
-        await checkSystemAudio()
+        guard !systemAudioRecordRead else { return }
+        systemAudioRecordRead = true
+        systemAudioAccess = CaptureAccess(await factories.systemAudioRecord())
     }
+
+    @ObservationIgnored private var systemAudioRecordRead = false
 
     /// Allow, on the microphone's row: raises macOS's dialog when it has
     /// never been asked, and reads the answer.
@@ -574,12 +585,19 @@ public final class RecordingSession {
         microphoneAccess = CaptureAccess(factories.microphoneAuthorization())
     }
 
-    /// Allow, on the Mac's audio's row: the probe, which raises macOS's
-    /// dialog when Echo has never asked and returns once it is answered.
+    /// Allow, on the Mac's audio's row: raises macOS's dialog and returns
+    /// once it is answered. What was answered is read after Echo reopens.
+    /// Once a run: a second press while the dialog is up raises nothing.
     public func requestSystemAudioAccess() async {
+        guard !systemAudioRequesting, !systemAudioAwaitsRelaunch else { return }
+        systemAudioRequesting = true
         settings.noteRequestedSystemAudio()
-        await checkSystemAudio()
+        await factories.requestSystemAudio()
+        systemAudioRequesting = false
+        systemAudioAwaitsRelaunch = true
     }
+
+    @ObservationIgnored private var systemAudioRequesting = false
 
     @ObservationIgnored private var systemAudioCheck: Task<SystemAudioAccess, Never>?
 
@@ -600,9 +618,9 @@ public final class RecordingSession {
         }
     }
 
-    /// One check at a time: a return to the front while Allow is still
-    /// waiting on the dialog joins that check rather than raising a second
-    /// tap. A check that could not tell leaves the last answer standing.
+    /// One check at a time: a second session check while one is in flight
+    /// joins it rather than raising a second tap. It answers the session's
+    /// notice only; the welcome's row is TCC's record.
     @discardableResult
     private func checkSystemAudio() async -> SystemAudioAccess {
         let check: Task<SystemAudioAccess, Never>
@@ -615,7 +633,6 @@ public final class RecordingSession {
         }
         let verdict = await check.value
         if systemAudioCheck == check { systemAudioCheck = nil }
-        if verdict != .unknown { systemAudioAccess = CaptureAccess(verdict) }
         return verdict
     }
 

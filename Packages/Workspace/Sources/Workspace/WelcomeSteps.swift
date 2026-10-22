@@ -7,13 +7,21 @@
 //  and why not yet. Resolved from the session's four readings and nothing
 //  else, so every state is checkable without a window.
 //
-//  Decisions the artboard does not draw are the product owner's (2026-10-19):
-//  a permission never asked offers Allow, which raises macOS's dialog; a
-//  denied one offers Open System Settings; a granted one reads Allowed. Start
-//  using Echo waits for both permissions and both models; Record without notes
-//  for both permissions and the transcription model only, because without the
-//  summary model there is still a transcript. The reason beside a held-back
-//  Start names the first step missing, in the rows' order.
+//  Decisions the artboard does not draw are the product owner's (2026-10-19,
+//  2026-10-22): a permission never asked offers Allow, which raises macOS's
+//  dialog; a denied one offers Open System Settings; a granted one reads
+//  Allowed. System Audio Recording has no public way to be read, so its row
+//  reads TCC's record once a run, and after Allow says Requested and offers
+//  Quit & Reopen: macOS's own way with this permission, whose answer shows
+//  once Echo reopens. Record without notes waits for the transcription model
+//  only: a recording asks for both permissions when it starts.
+//
+//  Start using Echo waits for nothing (product owner, 2026-10-22): the welcome
+//  can always be left, set up or not, because nothing here is the only place
+//  to do it. A recording asks for both permissions when it starts, the models
+//  come down at launch on their own, and the window says what Record waits
+//  for. Before, a permission that read wrong — or a user who will not grant
+//  System Audio Recording — left no way out but quitting.
 //
 
 import Recording
@@ -24,6 +32,9 @@ struct WelcomeSteps: Equatable {
     let systemAudio: CaptureAccess
     let transcription: RecordingReadiness
     let summary: SummaryReadiness
+    /// Echo asked for System Audio Recording in this run, and the answer is
+    /// read once it reopens (`RecordingSession.systemAudioAwaitsRelaunch`).
+    var systemAudioAwaitsRelaunch = false
 
     /// Where a step stands, for its glyph.
     enum Progress: Equatable {
@@ -38,6 +49,8 @@ struct WelcomeSteps: Equatable {
     enum PermissionControl: Equatable {
         case allow
         case openSettings
+        /// Asked in this run: Requested, and Quit & Reopen to read the answer.
+        case requested
         case allowed
     }
 
@@ -59,8 +72,12 @@ struct WelcomeSteps: Equatable {
         }
     }
 
+    var systemAudioControl: PermissionControl {
+        systemAudioAwaitsRelaunch ? .requested : Self.control(for: systemAudio)
+    }
+
     var microphoneProgress: Progress { microphone.isGranted ? .done : .pending }
-    var systemAudioProgress: Progress { systemAudio.isGranted ? .done : .pending }
+    var systemAudioProgress: Progress { systemAudio.isGranted || systemAudioAwaitsRelaunch ? .done : .pending }
 
     var modelsProgress: Progress {
         if transcription.isReady && summary.isReady { return .done }
@@ -87,20 +104,7 @@ struct WelcomeSteps: Equatable {
         }
     }
 
-    private var permissionsGranted: Bool { microphone.isGranted && systemAudio.isGranted }
-
-    var canStart: Bool { permissionsGranted && transcription.isReady && summary.isReady }
-
-    var canRecordWithoutNotes: Bool { permissionsGranted && transcription.isReady }
-
-    /// Why Start using Echo is held back: the first step missing, in the
-    /// rows' order. `nil` once nothing is.
-    var waitingOn: String? {
-        if !microphone.isGranted { return "Waiting on the microphone." }
-        if !systemAudio.isGranted { return "Waiting on System Audio Recording." }
-        if !(transcription.isReady && summary.isReady) { return "Waiting on the models." }
-        return nil
-    }
+    var canRecordWithoutNotes: Bool { transcription.isReady }
 }
 
 /// Whether the window opens on the welcome screen at launch: the first time

@@ -31,7 +31,6 @@ struct SystemAudioOffNoticeTests {
             await waitUntil("the check to land") { notice(in: harness.session) != nil }
             #expect(notice(in: harness.session)?.message == "System audio is off · only you are recorded")
             #expect(harness.session.phase.isRecording)
-            #expect(harness.session.systemAudioAccess == .denied)
             #expect(rig.systemAudioProbeCount == 1)
             await harness.session.stop()
         }
@@ -79,7 +78,6 @@ struct SystemAudioOffNoticeTests {
             await waitUntil("the second check to run") { rig.systemAudioProbeCount == 2 }
             for _ in 0..<1_000 { await Task.yield() }
             #expect(notice(in: harness.session) == nil)
-            #expect(harness.session.systemAudioAccess == .granted)
             await harness.session.stop()
         }
     }

@@ -82,6 +82,38 @@ public enum SystemAudioAccessProbe {
         }
     }
 
+    /// What TCC has on record for Echo's System Audio Recording, read without
+    /// a tone, a tap or a dialog: what the welcome's row says.
+    ///
+    /// macOS has no public way to ask (Apple's forums say as much, and the
+    /// #92 spike found none), so this is the private preflight, as other apps
+    /// that tap system audio outside the App Store read it. It is right only
+    /// on its first call in a process — the TCC client keeps that answer for
+    /// the process's life (the #92 spike) — so it is read once a run, and a
+    /// change made after that is seen by reopening Echo, which is how macOS
+    /// treats this permission anyway. Measured 2026-10-22: asked first after
+    /// Allow it answered granted, in the same process and after a relaunch.
+    /// `unknown` when the call is unavailable or Echo has never been asked.
+    public static func recordedDecision() async -> SystemAudioAccess {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: preflight()) }
+        }
+    }
+
+    private static func preflight() -> SystemAudioAccess {
+        guard let handle = dlopen("/System/Library/PrivateFrameworks/TCC.framework/TCC", RTLD_NOW),
+            let symbol = dlsym(handle, "TCCAccessPreflight")
+        else { return .unknown }
+        typealias Preflight = @convention(c) (CFString, CFDictionary?) -> Int32
+        let answer = unsafeBitCast(symbol, to: Preflight.self)("kTCCServiceAudioCapture" as CFString, nil)
+        log.notice("System audio TCC record: \(answer, privacy: .public)")
+        switch answer {
+        case 0: return .granted
+        case 1: return .denied
+        default: return .unknown
+        }
+    }
+
     // MARK: - One check
 
     /// What the IO proc counted. A class around the lock so the block can

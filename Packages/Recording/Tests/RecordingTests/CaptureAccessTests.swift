@@ -2,10 +2,10 @@
 //  CaptureAccessTests.swift
 //  RecordingTests
 //
-//  The welcome screen's two permission rows read the session. The
-//  microphone's permission is read from macOS without asking; the Mac's
-//  audio is read by the probe, which is also the request, so it runs only
-//  once Echo has asked — a look never raises a dialog on its own.
+//  The welcome screen's two permission rows read the session. Neither read
+//  asks: the microphone's permission is read from macOS every time, the Mac's
+//  audio from TCC's record once a run. Allow on the Mac's audio raises the
+//  dialog and leaves the answer to be read once Echo reopens.
 //
 //  Driven with the rig's fakes: no TCC prompt, no tone, no process tap.
 //
@@ -42,16 +42,28 @@ struct CaptureAccessTests {
         #expect(CaptureAccess(verdict) == expected)
     }
 
-    @Test func aLookBeforeEchoHasAskedRaisesNothing() async throws {
-        let rig = CaptureRig(microphone: .notDetermined, systemAudio: [.granted])
+    @Test func aLookReadsBothAndAsksForNeither() async throws {
+        let rig = CaptureRig(microphone: .notDetermined, systemAudioRecord: [.granted])
         try await withSession(rig: rig) { harness in
             await harness.session.refreshCaptureAccess()
             #expect(harness.session.microphoneAccess == .undecided)
-            #expect(harness.session.systemAudioAccess == .undecided)
-            // Neither dialog: the microphone was read, not asked, and the
-            // probe that would have asked never ran.
+            #expect(harness.session.systemAudioAccess == .granted)
+            // Neither dialog, and no tone: both were read, not asked.
             #expect(rig.microphoneRequestCount == 0)
+            #expect(rig.systemAudioRequestCount == 0)
             #expect(rig.systemAudioProbeCount == 0)
+        }
+    }
+
+    @Test func theMacsAudioIsReadFromTheRecordOnceARun() async throws {
+        // The record read is right only the first time in a process; a
+        // change after it shows when Echo reopens.
+        let rig = CaptureRig(systemAudioRecord: [.denied, .granted])
+        try await withSession(rig: rig) { harness in
+            await harness.session.refreshCaptureAccess()
+            await harness.session.refreshCaptureAccess()
+            #expect(harness.session.systemAudioAccess == .denied)
+            #expect(rig.systemAudioRecordReadCount == 1)
         }
     }
 
@@ -64,55 +76,33 @@ struct CaptureAccessTests {
         }
     }
 
-    @Test func allowOnTheMacsAudioAsksOnceAndRemembersThatItAsked() async throws {
-        let rig = CaptureRig(systemAudio: [.denied])
+    @Test func allowOnTheMacsAudioAsksAndAwaitsARelaunch() async throws {
+        let rig = CaptureRig(systemAudioRecord: [.unknown])
         try await withSession(rig: rig) { harness in
+            await harness.session.refreshCaptureAccess()
             #expect(!harness.settings.hasRequestedSystemAudio)
             await harness.session.requestSystemAudioAccess()
-            #expect(rig.systemAudioProbeCount == 1)
-            #expect(harness.session.systemAudioAccess == .denied)
+            #expect(rig.systemAudioRequestCount == 1)
             #expect(harness.settings.hasRequestedSystemAudio)
+            #expect(harness.session.systemAudioAwaitsRelaunch)
+            // The answer is not guessed: it is read after Echo reopens.
+            #expect(harness.session.systemAudioAccess == .undecided)
+            #expect(rig.systemAudioProbeCount == 0)
         }
     }
 
-    @Test func onceAskedALookChecksAgain() async throws {
-        // Denied, then allowed in System Settings: the next look says so,
-        // with no relaunch.
-        let rig = CaptureRig(systemAudio: [.denied, .granted])
-        try await withSession(rig: rig) { harness in
-            await harness.session.requestSystemAudioAccess()
-            #expect(harness.session.systemAudioAccess == .denied)
-            await harness.session.refreshCaptureAccess()
-            #expect(harness.session.systemAudioAccess == .granted)
-            #expect(rig.systemAudioProbeCount == 2)
-        }
-    }
-
-    @Test func aCheckThatCannotTellLeavesTheLastAnswerStanding() async throws {
-        let rig = CaptureRig(systemAudio: [.granted, .unknown])
-        try await withSession(rig: rig) { harness in
-            await harness.session.requestSystemAudioAccess()
-            await harness.session.refreshCaptureAccess()
-            #expect(harness.session.systemAudioAccess == .granted)
-        }
-    }
-
-    @Test func aLookWhileAllowWaitsOnTheDialogJoinsIt() async throws {
+    @Test func aSecondAllowWhileTheDialogIsUpAsksNothing() async throws {
         let dialog = PassGate()
-        let rig = CaptureRig(systemAudio: [.granted], systemAudioGate: dialog)
+        let rig = CaptureRig(systemAudioRequestGate: dialog)
         try await withSession(rig: rig) { harness in
-            let allow = Task { await harness.session.requestSystemAudioAccess() }
-            await waitUntil("the probe to wait on the dialog") { dialog.entered == 1 }
-            let look = Task { await harness.session.refreshCaptureAccess() }
-            // The look joins the check in flight rather than raising a second
-            // tap; give it every chance to start one of its own.
-            for _ in 0..<1_000 { await Task.yield() }
-            #expect(dialog.entered == 1)
+            let first = Task { await harness.session.requestSystemAudioAccess() }
+            await waitUntil("the request to wait on the dialog") { dialog.entered == 1 }
+            await harness.session.requestSystemAudioAccess()
             dialog.releaseAll()
-            await allow.value
-            await look.value
-            #expect(rig.systemAudioProbeCount == 1)
-            #expect(harness.session.systemAudioAccess == .granted)
+            await first.value
+            await harness.session.requestSystemAudioAccess()
+            #expect(dialog.entered == 1)
+            #expect(rig.systemAudioRequestCount == 1)
         }
     }
 
