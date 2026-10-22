@@ -1,0 +1,463 @@
+//
+//  AppComposition.swift
+//  Echo
+//
+//  The composition root: builds every long-lived object the app needs, wires
+//  them together, and starts their side effects — once, from `start()`, and
+//  never from an initializer. That single door is where the test-host guard
+//  lives: under `xcodebuild test` the real app is the host process, and it must
+//  stay inert scaffolding that touches no data folder (ADR-004).
+//
+
+import AppKit
+import CallDetection
+import DesignSystem
+import EchoCore
+import Foundation
+import Island
+import Meetings
+import ModelDelivery
+import Recording
+import Updates
+import Workspace
+
+@MainActor
+final class AppComposition {
+
+    /// The debug flags this launch was given.
+    let environment: LaunchEnvironment
+
+    /// Where everything on disk lives. `ECHO_DATA_ROOT` (DEBUG) points it at a
+    /// scratch folder; otherwise it is the folder v1 and v2 share (ADR-005).
+    let dataRoot: DataRoot
+
+    /// Persisted preferences.
+    let settings: AppSettings
+
+    /// The meeting library: disk is the truth, this is the main-actor cache.
+    let library: MeetingLibrary
+
+    /// The one truth about a recording: phase, live levels, notices, the
+    /// meeting being worked on, and the actions.
+    let session: RecordingSession
+
+    /// Notices a call and asks for the three things it cannot do itself. It
+    /// exists only now that there is a panel to show what it decides:
+    /// detection without one could stop a recording with nothing on screen to
+    /// explain why.
+    let detector: CallDetector
+
+    /// The island: the panel, the face it wears, and the only place detection
+    /// and the session meet.
+    let island: IslandController
+
+    /// Whether a newer Echo exists. The one instance; Settings, the app menu
+    /// and the launch prompt all read it and none keeps a copy.
+    let updates: UpdateChecker
+
+    /// Starts an update and reads what a failed one left behind. A value over
+    /// the data root, not state.
+    let updateInstaller: UpdateInstaller
+
+    /// The only place Echo interrupts: the alert at launch, and the answer the
+    /// app menu's Check for Updates owes whoever clicked it.
+    let updatePrompt: UpdatePrompt
+
+    /// The main window's navigation state.
+    let workspace: WorkspaceModel
+
+    /// Opens the main window from places that have no `openWindow` of their
+    /// own (the app menu, the menu bar item).
+    let windowOpener: WindowOpener
+
+    /// The menu bar item: Echo's permanent presence, the click that opens the
+    /// dashboard and the menu behind the other button.
+    let menuBarItem: MenuBarItem
+
+    /// Control + Option + E, from anywhere: Record at rest, Stop while
+    /// recording (#119).
+    let globalShortcut: GlobalShortcut
+
+    /// The window's New recording: the same gated start the shortcut and the
+    /// menu run, with the capture they share. It returns once the start has
+    /// landed.
+    let startRecording: () async -> Void
+
+    /// Whether the main window is on screen as soon as the scene is built.
+    /// True for `ECHO_OPEN_WINDOW`, and for the one launch that finds this Mac
+    /// has never run Echo before. Read by the scene, which SwiftUI builds only
+    /// after `start()` has had its say. Any other launch the user asked for
+    /// opens the window later, once it can say so.
+    private(set) var opensWindowAtLaunch: Bool
+
+    private let errorLog: ErrorTraceLog
+    private let showSettings: () -> Void
+    private var started = false
+
+    /// The argument the welcome's Quit & Reopen relaunches Echo with, so the
+    /// new run opens on the welcome screen and shows what macOS answered.
+    static let welcomeArgument = "--welcome"
+
+    /// Whether this run was opened by the welcome's Quit & Reopen.
+    private let reopensWelcome: Bool
+
+    init(environment: LaunchEnvironment = .current, arguments: [String] = CommandLine.arguments) {
+        self.environment = environment
+        reopensWelcome = arguments.contains(Self.welcomeArgument)
+        dataRoot = environment.dataRootOverride.map(DataRoot.init(url:)) ?? .standard
+        settings = AppSettings(dataRoot: dataRoot)
+        library = MeetingLibrary(dataRoot: dataRoot)
+        session = RecordingSession(library: library, settings: settings, dataRoot: dataRoot)
+        workspace = WorkspaceModel()
+        windowOpener = WindowOpener()
+        errorLog = ErrorTraceLog(directory: dataRoot.logs)
+        opensWindowAtLaunch = environment.opensWindowAtLaunch
+
+        // Detection's three verbs, served here because this is the only place
+        // that holds all of the session, the window's navigation and the
+        // opener at once. Each is the same call every other surface makes:
+        // the island's reach is exactly "the start and stop the rest of the
+        // app runs", and nothing wider is representable.
+        // Bound locally so the three closures capture the three objects and
+        // not the composition root: capturing `self` here would put every
+        // long-lived object in the app behind a detection request, and leave
+        // the root retained by something it owns.
+        let session = session
+        let workspace = workspace
+        let windowOpener = windowOpener
+        let library = library
+
+        // One definition of what opening Settings means, for the two surfaces
+        // that ask for it: the app menu's ⌘, and the menu bar item's Settings.
+        let showSettings = {
+            workspace.section = .settings
+            windowOpener.openMainWindow()
+        }
+        self.showSettings = showSettings
+        let detector = CallDetector(
+            settings: settings,
+            requests: CallDetectionRequests(
+                startRecording: { scope in Task { await session.start(scope: scope) } },
+                stopRecording: { await session.stop() },
+                openSavedMeeting: {
+                    // The meeting the stop just persisted: the session is
+                    // transcribing or summarising it, and that is the one it
+                    // is carrying. With none, the window still opens —
+                    // landing somewhere is better than a tap that does
+                    // nothing.
+                    if let meetingID = session.currentMeetingID {
+                        workspace.open(meetingID)
+                    }
+                    windowOpener.openMainWindow()
+                }
+            )
+        )
+        self.detector = detector
+
+        // What Record captures, one choice for the island's chip and the
+        // menu's submenu alike.
+        let capture = CaptureChoice(detector: detector)
+        // The two questions the island's faces ask, answered from the
+        // library. Read inside the island's body, so its faces follow the
+        // library through observation rather than through a copy.
+        let meetings = IslandMeetings(
+            latest: { library.metas.max { $0.startedAt < $1.startedAt }.map(Self.islandMeeting) },
+            meeting: { id in library.metas.first { $0.id == id }.map(Self.islandMeeting) }
+        )
+        let openMeeting: (UUID) -> Void = { id in
+            workspace.open(id)
+            windowOpener.openMainWindow()
+        }
+        island = IslandController(
+            detector: detector,
+            session: session,
+            settings: settings,
+            capture: capture,
+            meetings: meetings,
+            openMeeting: openMeeting
+        )
+        // The island in words, for the menu bar item and its menu: the same
+        // sources and the same calls the faces make.
+        let islandMenu = IslandMenu(
+            detector: detector, session: session, meetings: meetings, capture: capture, openMeeting: openMeeting)
+
+        updates = UpdateChecker()
+        updateInstaller = UpdateInstaller(dataRoot: dataRoot)
+        updatePrompt = UpdatePrompt(checker: updates, installer: updateInstaller, session: session)
+
+        let settings = settings
+        let updates = updates
+        let updatePrompt = updatePrompt
+        menuBarItem = MenuBarItem(
+            contents: MenuBarMenu(
+                island: { now in islandMenu.entries(now: now) },
+                availableUpdate: { updates.availableRelease.map { "\($0.version)" } },
+                requests: MenuBarMenu.Requests(
+                    openEcho: { windowOpener.openMainWindow() },
+                    openSettings: showSettings,
+                    checkForUpdates: { Task { await updatePrompt.checkAndReport() } },
+                    update: { updatePrompt.updateNow() }
+                )
+            ),
+            windowOpener: windowOpener,
+            phase: { session.phase },
+            ears: { islandMenu.ears },
+            showsIsland: { settings.showsIsland }
+        )
+
+        // The same gated start every surface runs, with the capture the chip
+        // and the menu share. The capture is read at the press, not when the
+        // start lands.
+        let record = { () -> Task<RecordingRefusal?, Never> in
+            let scope = capture.current
+            return Task { await session.start(scope: scope) }
+        }
+
+        // The shortcut's start and the same stop. A refused start opens the
+        // menu, which says why: the shortcut has no face of its own to say it
+        // on.
+        let menuBarItem = menuBarItem
+        globalShortcut = GlobalShortcut(pressed: {
+            switch GlobalShortcut.Press.of(session.phase) {
+            case .start:
+                let start = record()
+                Task {
+                    if await start.value != nil {
+                        menuBarItem.showMenu()
+                    }
+                }
+            case .stop:
+                Task { await session.stop() }
+            case .nothing:
+                break
+            }
+        })
+
+        // The window's. A refusal needs no answer here: the title bar holds
+        // the button back and says why for as long as the model is missing,
+        // so a refused click can only be one that raced the model's state.
+        startRecording = { _ = await record().value }
+    }
+
+    /// A meeting, as the island speaks of it.
+    private static func islandMeeting(_ meta: MeetingMeta) -> IslandMeeting {
+        IslandMeeting(title: meta.title, duration: meta.duration, words: meta.wordCount)
+    }
+
+    /// Starts every launch side effect. Idempotent; a no-op under a test host.
+    func start() {
+        guard !started else { return }
+        started = true
+        guard !TestHost.isActive else { return }
+
+        ErrorTrace.configure(log: errorLog)
+
+        // The one launch that shows itself. A fresh install is otherwise a
+        // menu bar icon and an island hiding in the cutout: nothing that says
+        // where the app went. Marked as taken here, before the scene reads the
+        // answer, so every launch after this one is silent again.
+        let firstLaunch = !settings.hasLaunchedBefore
+        if firstLaunch {
+            settings.noteLaunched()
+            opensWindowAtLaunch = true
+        }
+
+        // The welcome screen: on the first launch, in the window that launch
+        // opens anyway; and on a later one while the user has not left it and
+        // the models are not both on disk, which only the models can say, so
+        // that window is opened once they have answered (product owner,
+        // 2026-10-19). A run the welcome's Quit & Reopen opened shows it too:
+        // it is where the answer macOS gave is read (2026-10-22). Its window
+        // opens as any launch the user asked for does (`LaunchOrigin`).
+        if (firstLaunch || reopensWelcome) && !settings.hasLeftWelcome {
+            // Whatever the models say: the first launch shows it.
+            workspace.presentWelcome()
+        } else if !settings.hasLeftWelcome {
+            Task { [session, settings, workspace, windowOpener] in
+                let onDisk = await session.modelsOnDisk()
+                guard
+                    WelcomeGate.showsAtLaunch(
+                        firstLaunch: false, hasLeftWelcome: settings.hasLeftWelcome, modelsOnDisk: onDisk)
+                else { return }
+                workspace.presentWelcome()
+                windowOpener.openMainWindow()
+            }
+        }
+
+        // The design's typefaces, registered with the process before anything
+        // draws. Registration is a launch effect, not something a font token
+        // does on first use, so it happens exactly once and here. A failure is
+        // survivable — `EchoFont` falls back to the system faces the design
+        // names as its fallback — but it is never silent.
+        for failure in EchoFont.registerBundledTypefaces().failures {
+            ErrorTrace.record(
+                "A bundled typeface did not register; the interface falls back to the system face",
+                category: "EchoFont",
+                metadata: ["file": failure.file, "reason": failure.reason]
+            )
+        }
+
+        // Bound the error trace log's disk footprint. Detached at utility
+        // priority so it never competes with startup on the main thread.
+        Task.detached(priority: .utility) { [errorLog] in
+            await errorLog.prune()
+        }
+
+        // The library: fold any legacy summary.json into summary.md (every
+        // launch, idempotent, non-fatal per meeting), load the headers, drop
+        // trash past its retention, then fill in word counts older meetings
+        // never had. Reads first so the window has rows as soon as it opens;
+        // the housekeeping that writes follows.
+        Task { [library] in
+            await library.refresh()
+            await library.foldLegacySummaries()
+            await library.purgeExpiredTrash()
+            await library.backfillWordCounts()
+        }
+
+        // Models this build no longer uses, deleted by name. Detached at
+        // utility priority beside the log prune: it is pure reclamation, it
+        // must never delay a launch, and nothing waits on its result.
+        Task.detached(priority: .utility) { [dataRoot] in
+            RetiredModelCleanup.run(modelsRoot: dataRoot.models)
+        }
+
+        // The models, fetched at launch: the transcription model first, which
+        // a recording now waits for, then the summary model's eager download.
+        // Before, a fresh install fetched nothing until a recording's own
+        // prefetch ran, and a recording that waits for the model could then
+        // never start (product owner, 2026-10-02).
+        Task { [session] in await session.prepareModels() }
+
+        // Pick up where a quit or a crash left off. The two staging sweeps
+        // run inside this call, before the enqueue, because the order matters
+        // and keeping it inside the session is what makes it impossible to
+        // get wrong from out here. Then the first summary scan — one of its
+        // four triggers, the other three being each Stop, the window opening,
+        // and a model download finishing.
+        Task { [session] in
+            await session.resumePendingFinalizations()
+            session.kickSummaryBackfill()
+        }
+
+        // The island goes up before detection starts watching: a call noticed
+        // with no panel on screen would be a decision nobody could see being
+        // made. It is also the app's permanent presence — the design has it
+        // on screen with nothing happening, which is where a recording is
+        // started from.
+        island.start()
+        detector.start()
+
+        // The menu bar item is AppKit's, and AppKit is not up yet: SwiftUI runs
+        // this before it creates `NSApplication`. The delegate installs it the
+        // moment there is an app to install it into — and claims the global
+        // shortcut then too, whose presses arrive through the event loop that
+        // app runs.
+        //
+        // That is also the first moment a launch says who asked for it, so it
+        // is where a launch the user asked for opens the window: Spotlight or
+        // Finder aimed at an Echo that is not running should land where the
+        // same gesture lands on one that is. A login launch stays as silent as
+        // every launch was before (#208): Echo can be a login item, and a
+        // window at every startup would sit in front of whatever the user
+        // logged in to do.
+        EchoAppDelegate.whenLaunched {
+            [menuBarItem, globalShortcut, windowOpener, presented = opensWindowAtLaunch] origin in
+            menuBarItem.install()
+            globalShortcut.register()
+            if origin == .user && !presented {
+                windowOpener.openMainWindow()
+            }
+        }
+
+        // A failed Update Now reopened the Echo that was there and left a
+        // report behind; Settings shows it once, and reading it consumes it.
+        if let failure = updateInstaller.takeFailureReport() {
+            updates.noteInstallFailure(failure)
+        }
+
+        // The launch check, and then the daily one. The first check is made
+        // here rather than by the timer's initial tick because its answer is
+        // the prompt's: an offer is worth more at launch than 30 seconds of
+        // quiet, and letting the timer also open with one would mean two
+        // requests inside the same minute against GitHub's 60-an-hour limit.
+        // The timer's own first tick is therefore a day away, and the
+        // preference is still read at every tick after it.
+        Task { [updates, settings, updatePrompt, environment] in
+            if settings.checkForUpdatesAutomatically {
+                await updates.check()
+                // A snapshot run renders one surface and quits, and a modal
+                // alert blocks it before it can — while `ECHO_INSTALLED_VERSION`
+                // is exactly how that surface is given an update to draw.
+                if environment.snapshotPath == nil {
+                    updatePrompt.offerIfAvailable()
+                }
+            }
+            updates.startAutomaticChecks(
+                initialDelay: .seconds(24 * 60 * 60),
+                isEnabled: { settings.checkForUpdatesAutomatically }
+            )
+        }
+
+        // The window opening is the other moment an offer is worth making: an
+        // Echo running as a login item finds its update days after the launch
+        // that would have offered it (product owner, 2026-10-22). Once per
+        // version, so the launch's own offer is not made twice.
+        EchoAppDelegate.whenMainWindowOpens { [updatePrompt, environment] in
+            guard environment.snapshotPath == nil else { return }
+            updatePrompt.offerIfAvailable()
+        }
+    }
+
+    /// The app menu's Check for Updates: a check the user asked for, which
+    /// always answers.
+    func checkForUpdates() {
+        Task { [updatePrompt] in await updatePrompt.checkAndReport() }
+    }
+
+    /// Quits Echo and opens it again on the welcome screen: the welcome's
+    /// Quit & Reopen, after Allow on System Audio Recording, whose answer a
+    /// run reads only when it starts (`RecordingSession.refreshCaptureAccess`).
+    ///
+    /// The updater's way back (`UpdateInstaller`): a shell that outlives
+    /// Echo waits for this process to end, so two Echos never overlap, and
+    /// then opens the same bundle through LaunchServices. That makes the new
+    /// Echo responsible for itself in TCC's eyes and a launch the user asked
+    /// for (`LaunchOrigin`), so its window opens.
+    ///
+    /// `open -n`, because LaunchServices outlives the process by a moment:
+    /// in the QA of 2026-10-22 the old Echo exited at .335 s and launchd
+    /// removed it at .382 s, and a plain `open` at .350 s found it still
+    /// listed, asked it to reopen and launched nothing. `-n` cannot make two
+    /// Echos here — the old one is already gone.
+    func relaunch() {
+        let waiter = Process()
+        waiter.executableURL = URL(filePath: "/bin/sh")
+        waiter.arguments = [
+            "-c",
+            #"trap '' HUP; while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open -n "$2" --args "$3""#,
+            "echo-relaunch", String(getpid()), Bundle.main.bundleURL.path, Self.welcomeArgument,
+        ]
+        do {
+            try waiter.run()
+        } catch {
+            ErrorTrace.record("Echo could not arrange its own relaunch", error: error, category: "Relaunch")
+            return
+        }
+        NSApp.terminate(nil)
+    }
+
+    /// Shows the settings section in the main window.
+    func openSettings() {
+        showSettings()
+    }
+
+    /// Help › Keyboard Shortcuts (⌘/): the panel over the main window, put
+    /// up or away. The window comes forward with it.
+    func toggleShortcuts() {
+        workspace.toggleShortcuts()
+        if workspace.isShortcutsPresented {
+            windowOpener.openMainWindow()
+        }
+    }
+}

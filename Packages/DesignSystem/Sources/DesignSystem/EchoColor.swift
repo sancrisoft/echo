@@ -1,0 +1,337 @@
+//
+//  EchoColor.swift
+//  DesignSystem
+//
+//  The palette, as semantic tokens. Views name a role (`textSecondary`,
+//  `surfaceRaised`, `accent`), never a value, so the two appearances are one
+//  decision made here.
+//
+//  Values come from the internal design: a grey interface where the accent
+//  (cobalt) marks only selection and links, and the recording red is the one
+//  saturated thing on screen. Every pair below was read off the workspace
+//  artboards in both appearances; where the brand sheet's ramp and a workspace
+//  artboard disagreed the artboard won, because that is the surface being
+//  built.
+//
+//  Platform trap, measured on macOS 26: the window background, List backgrounds
+//  and the title bar are materials tinted by the user's wallpaper, not flat
+//  colors. A flat color painted over *part* of such a window reads as a
+//  mismatched band in dark mode — the painted pane against the material beside
+//  and above it. So the surfaces split in two kinds:
+//
+//  * `windowBackground` and `sidebarBackground` are *backdrops*, and the
+//    artboards draw them flat. A window that wants them takes the window
+//    background too, title bar included, so nothing translucent is left for a
+//    pane to mismatch against; that, and not a wash, is how the band is
+//    avoided.
+//  * `surface`, `surfaceRaised` and `surfaceSelected` are genuinely opaque and
+//    are drawn as shapes on top: wells, rows, cards, the selected segment.
+//
+
+import AppKit
+import SwiftUI
+
+public nonisolated enum EchoColor {
+
+    // MARK: Surfaces
+
+    /// The window and the document behind it. A backdrop: see the note above
+    /// before painting it over a material.
+    public static let windowBackground = Color(light: 0xFFFFFF, dark: 0x0D0E11)
+
+    /// The sidebar, a step darker than the window in dark and a step warmer in
+    /// light. A backdrop, like `windowBackground`.
+    public static let sidebarBackground = Color(light: 0xF7F8FA, dark: 0x0B0C0E)
+
+    /// A quiet, opaque well: the tab strip's track, inset groups.
+    public static let surface = Color(light: 0xF0F1F4, dark: 0x16171A)
+
+    /// A raised, opaque surface: a selected row, inline code, a card.
+    public static let surfaceRaised = Color(light: 0xE8EAED, dark: 0x1F2024)
+
+    /// One step above raised: the selected segment of a tab strip. In light it
+    /// is white and the design lifts it with a shadow the strip draws.
+    public static let surfaceSelected = Color(light: 0xFFFFFF, dark: 0x292B2F)
+
+    // MARK: Hairlines
+    //
+    // The design draws two, and they are not interchangeable: the quieter one
+    // separates areas inside the window, the stronger one draws its outer edge
+    // and the border of anything a pointer can type into.
+
+    /// The hairline between areas: under the title bar, down the sidebar's
+    /// edge, across the document above the tabs.
+    public static let divider = Color(light: 0xECEDF0, dark: 0x1D1E21)
+
+    /// The window's own border, and the border of an input or a bordered
+    /// control.
+    public static let border = Color(light: 0xE1E3E6, dark: 0x292B2F)
+
+    /// The edge of something that cannot be pressed: a held-back button, a
+    /// key hint. A step lighter than `border` in dark, so an inert control
+    /// still has an outline once its fill has gone grey. Light mode does not
+    /// draw it; it takes `border`'s light value until the light audit (#120).
+    public static let inertBorder = Color(light: 0xE1E3E6, dark: 0x2F3237)
+
+    // MARK: Text
+    //
+    // Seven steps, from the title down to the storage line in the sidebar's
+    // footer. Prose sits one step under primary so a long summary does not
+    // glare; a property value sits between the two.
+
+    public static let textPrimary = Color(light: 0x18191C, dark: 0xF2F3F5)
+    public static let textProse = Color(light: 0x35383D, dark: 0xD2D4D8)
+    public static let textValue = Color(light: 0x2B2D31, dark: 0xE4E5E8)
+    public static let textSecondary = Color(light: 0x626569, dark: 0xA7A9AE)
+    public static let textTertiary = Color(light: 0x8A8D92, dark: 0x74767B)
+    public static let textQuaternary = Color(light: 0xA2A5AA, dark: 0x54575B)
+    public static let textFaint = Color(light: 0xB2B5BA, dark: 0x45484C)
+
+    /// The "/" between the parts of a breadcrumb. Fainter than any word on
+    /// screen: it separates rather than says anything, so it sits a step past
+    /// the last of the text steps rather than among them.
+    public static let breadcrumbSlash = Color(light: 0xC4C7CB, dark: 0x3A3D41)
+
+    // MARK: Roles
+
+    /// Cobalt: selection, links, the one primary action. Darker in light mode
+    /// so it keeps contrast on white.
+    public static let accent = Color(light: 0x1673C0, dark: 0x3B9CF6)
+
+    /// The accent at a whisper, behind a status pill or a find match. The two
+    /// appearances draw it at different opacities — light needs less of it to
+    /// read on white.
+    public static let accentWash = Color(
+        light: 0x1673C0, dark: 0x3B9CF6, lightOpacity: 0.13, darkOpacity: 0.15)
+
+    /// The find match the user is on, among the others on the accent wash.
+    /// Not drawn: the artboard shows a single match. The product owner asked
+    /// for the current one on a stronger accent (2026-10-20), as Safari and
+    /// Xcode tell it from the rest; the text over it stays the primary ink.
+    public static let findCurrentMatch = Color(
+        light: 0x1673C0, dark: 0x3B9CF6, lightOpacity: 0.32, darkOpacity: 0.40)
+
+    /// The recording red — the only saturated color while a session runs. It
+    /// lifts in dark mode: the brand sheet's red is too heavy on near-black.
+    public static let recording = Color(light: 0xD02B31, dark: 0xED4A49)
+
+    /// The recording red at a whisper, and its edge: the pill the title bar's
+    /// running clock sits in. Light mode does not draw the pill; it takes the
+    /// light red at the dark side's percentages until the light audit (#120).
+    public static let recordingWash = Color(
+        light: 0xD02B31, dark: 0xED4A49, lightOpacity: 0.12, darkOpacity: 0.12)
+    public static let recordingWashEdge = Color(
+        light: 0xD02B31, dark: 0xED4A49, lightOpacity: 0.28, darkOpacity: 0.28)
+
+    /// The running clock's digits on that wash: the red, lifted, so the
+    /// numbers read on their own tint. Light mode does not draw it; a lifted
+    /// red on white would wash out, so it takes the light red itself. The
+    /// live status pill and the sidebar's live row write in it too.
+    public static let recordingTimer = Color(light: 0xD02B31, dark: 0xF0908F)
+
+    /// Behind the live status pill: a touch more red than the clock's pill.
+    /// Light mode does not draw it; it takes the light red at the dark
+    /// side's percentage until the light audit (#120).
+    public static let recordingPillWash = Color(
+        light: 0xD02B31, dark: 0xED4A49, lightOpacity: 0.14, darkOpacity: 0.14)
+
+    /// The glyph above a document's placeholder: the faintest ink the window
+    /// draws, the breadcrumb slash's.
+    public static let placeholderGlyph = breadcrumbSlash
+
+    /// The edge of a control button inside a list row whose own fill is the
+    /// button's: a step darker than the inert edge, so the button still reads
+    /// as one on a selected row (product owner, 2026-10-20). The breadcrumb
+    /// slash's ink, not a new value.
+    public static let controlEdgeInRow = breadcrumbSlash
+
+    /// The words of an action that removes something for good — Delete,
+    /// Empty Trash — and of a trashed meeting's last days: the red the Trash
+    /// artboard writes them in.
+    public static let destructiveText = recording
+
+    /// The glyph above a screen that failed: the warning of a pass that did
+    /// not finish, in the red the empty-states artboard draws it.
+    public static let failureGlyph = recording
+
+    /// Others' share of the transcript's speaker split, beside You's accent:
+    /// the same ink as the breadcrumb slash, as the transcript artboard draws
+    /// it.
+    public static let speakerSplitOthers = breadcrumbSlash
+
+    /// The Others channel in the window's level meter, beside You in the
+    /// accent. Light mode does not draw it; it takes the tertiary text's light
+    /// value until the light audit (#120).
+    public static let levelOthers = Color(light: 0x8A8D92, dark: 0x616469)
+
+    /// The card a model's row sits on in the models panel: a step above the
+    /// window's background, edged by the divider. Light mode does not draw
+    /// it; it takes the sidebar's light value until the light audit (#120).
+    public static let card = Color(light: 0xF7F8FA, dark: 0x101114)
+
+    /// The edge of a card whose model failed: the hairline warmed to red.
+    /// Light mode does not draw it; it takes the recording wash's edge until
+    /// the light audit (#120).
+    public static let failureEdge = Color(
+        light: 0xD02B31, dark: 0x3A2426, lightOpacity: 0.28, darkOpacity: 1)
+
+    /// Why a model failed, in its row's description line: the red, softened
+    /// for a sentence. Light mode does not draw it; it takes the light red
+    /// until the light audit (#120).
+    public static let failureText = Color(light: 0xD02B31, dark: 0xC77E7D)
+
+    /// A welcome-screen step not done yet: an empty ring, in the breadcrumb
+    /// slash's ink.
+    public static let stepPending = breadcrumbSlash
+
+    /// The track under a step's turning arc while it works. Light mode does
+    /// not draw it; it takes the raised surface's light value until the light
+    /// audit (#120).
+    public static let stepRingTrack = Color(light: 0xE8EAED, dark: 0x26282C)
+
+    public static let success = Color(nsColor: .systemGreen)
+    public static let warning = Color(nsColor: .systemOrange)
+    public static let danger = Color(nsColor: .systemRed)
+
+    /// The fill behind a selected row. Neutral, not the accent: the design
+    /// marks a selected row by raising it and weighting its title, and keeps
+    /// the accent for what it actually distinguishes.
+    public static let selection = surfaceRaised
+
+    /// The shadow the design puts under a selected tab. It exists in light
+    /// mode only: on white a raised segment needs the lift, on near-black it
+    /// would be a smudge, so the dark side of this token is fully transparent.
+    public static let tabSelectionShadow = Color(
+        light: 0x17191E, dark: 0x000000, lightOpacity: 0.10, darkOpacity: 0)
+
+    /// The fill behind a hovered row. The design does not draw a hover state;
+    /// this is the platform's own whisper until it does.
+    public static let hover = Color.primary.opacity(0.05)
+
+    // MARK: The ⌘K palette
+
+    /// The palette floats over a dimmed window, as the design draws it: its own
+    /// surface and edge, the hairlines inside it, the fill under the result
+    /// the keyboard is on, the strip of key hints at its foot, the label over
+    /// each group, the dim over the window behind it, and its shadow. Light
+    /// mode does not draw the palette; each takes the light value of the
+    /// nearest role the light artboard draws — the document's white, the
+    /// window border, the hairline, the selected row, the sidebar — until the
+    /// light audit (#120).
+    public static let paletteBackground = Color(light: 0xFFFFFF, dark: 0x17181C)
+    public static let paletteBorder = Color(light: 0xE1E3E6, dark: 0x34373C)
+    public static let paletteDivider = Color(light: 0xECEDF0, dark: 0x232529)
+    public static let paletteHighlight = Color(light: 0xE8EAED, dark: 0x23252A)
+    public static let paletteFooter = Color(light: 0xF7F8FA, dark: 0x131418)
+    public static let paletteGroupLabel = Color(light: 0x8A8D92, dark: 0x626569)
+    public static let paletteScrim = Color(light: 0x17191E, dark: 0x060709, lightOpacity: 0.18, darkOpacity: 0.58)
+    public static let paletteShadow = Color(light: 0x17191E, dark: 0x000000, lightOpacity: 0.18, darkOpacity: 0.72)
+
+    /// The island's own palette.
+    ///
+    /// The island is black on every appearance — the design has it poured from
+    /// the bezel, and a bezel does not go light — so these do not follow the
+    /// system. Its fills are white at a percentage rather than a grey, so they
+    /// read the same over the shell and over the wallpaper the flares expose.
+    public enum Island {
+
+        /// The shell, and the ears either side of the cutout.
+        public static let shell = Color.black
+
+        /// The accent, as the island draws it: a gauge's fill and its label,
+        /// the spinner, the hairline of progress along the bottom edge.
+        ///
+        /// Not `EchoColor.accent`. That one darkens in light mode to hold its
+        /// contrast on white, and the island has no white to hold it against —
+        /// on a light Mac it would put the paper-facing cobalt on black. This
+        /// is the value the artboards draw over the shell, in both.
+        public static let accent = Color(hex: 0x3B9CF6)
+
+        /// The recording red, as the island draws it: the blinking dot, the
+        /// glyph on the record capsule, the countdown ring. Pinned for the
+        /// same reason as `accent` — `EchoColor.recording` follows the
+        /// appearance because the sidebar's dot sits on a surface that does.
+        public static let recording = Color(hex: 0xED4A49)
+
+        /// Behind a primary or secondary capsule. Both share it: only the
+        /// weight of the label separates them, so nothing on the island reads
+        /// as a white button.
+        public static let controlFill = Color.white.opacity(0.10)
+
+        /// Behind a value chip or an icon button, a step quieter than a
+        /// capsule.
+        public static let chipFill = Color.white.opacity(0.08)
+
+        /// The label of a primary, secondary or chip control.
+        public static let controlLabel = Color(hex: 0xE4E5E8)
+
+        /// The label of a quiet control, and the chevron of a value chip.
+        public static let quietLabel = Color(hex: 0x83878D)
+
+        /// The glyph inside an icon button.
+        public static let glyph = Color(hex: 0x9DA1A7)
+
+        /// A face's first line.
+        public static let title = Color(hex: 0xF2F3F5)
+
+        /// A face's second line.
+        public static let detail = Color(hex: 0x7E8288)
+
+        /// A word in an ear ("Saved", "Summarizing"), and the outlined glyph
+        /// of a noticed call.
+        public static let earStatus = Color(hex: 0xC9CBD0)
+
+        /// The unspent part of the end-of-call countdown ring.
+        public static let ringTrack = Color.white.opacity(0.16)
+
+        /// The track of the progress hairline along the bottom edge.
+        public static let progressTrack = Color.white.opacity(0.10)
+
+        /// The unfilled part of a level gauge.
+        public static let gaugeTrack = Color.white.opacity(0.13)
+
+        /// The gauge that is not the accent one, fill and label.
+        public static let gaugeNeutral = Color(hex: 0x8A8D93)
+        public static let gaugeNeutralLabel = Color(hex: 0x6E7176)
+    }
+}
+
+extension Color {
+
+    /// One hex value, whatever the appearance. For the surfaces the design
+    /// draws the same in both — the island, which is always black.
+    public nonisolated init(hex: UInt32, opacity: Double = 1) {
+        self.init(nsColor: NSColor(hex: hex, alpha: CGFloat(opacity)))
+    }
+
+    /// A color that follows the appearance, from two hex values and the opacity
+    /// each appearance draws them at.
+    public nonisolated init(
+        light: UInt32,
+        dark: UInt32,
+        lightOpacity: Double = 1,
+        darkOpacity: Double = 1
+    ) {
+        self.init(
+            nsColor: NSColor(name: nil) { appearance in
+                let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                return NSColor(
+                    hex: isDark ? dark : light,
+                    alpha: CGFloat(isDark ? darkOpacity : lightOpacity)
+                )
+            })
+    }
+}
+
+extension NSColor {
+
+    /// `0xRRGGBB` → an sRGB color.
+    public nonisolated convenience init(hex: UInt32, alpha: CGFloat = 1) {
+        self.init(
+            srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
+            green: CGFloat((hex >> 8) & 0xFF) / 255,
+            blue: CGFloat(hex & 0xFF) / 255,
+            alpha: alpha
+        )
+    }
+}

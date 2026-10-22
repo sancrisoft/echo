@@ -10,9 +10,9 @@ Nothing leaves your Mac. Audio, transcripts and notes are plain files in your ho
 
 **Notes that stick to the transcript.** After the meeting, an on-device language model writes a Markdown document: what was discussed, then only the sections the meeting earns — key decisions, an action-items checklist, open questions, risks. Owners and due dates are never invented; if the transcript doesn't say it, it stays blank. The notes come out in the language the meeting was held in.
 
-**A library, not a folder of files.** Every meeting sits in the dashboard with its transcript and notes: search them, export to Markdown or plain text, copy the summary, reveal the files in Finder, or move a meeting to the trash.
+**A library, not a folder of files.** Every meeting sits in Echo's window with its transcript and notes: search every word of them with ⌘K, find inside a transcript with ⌘F, export to Markdown or plain text, copy the summary, reveal the files in Finder, or move a meeting to the Trash.
 
-**It notices your calls.** When Zoom, Microsoft Teams, Slack, Discord, FaceTime, Webex or any browser goes into a call, a small island appears offering to record just that app's audio. It never starts on its own — recording takes a click — and a recording left running after the call ends is stopped for you.
+**It notices your calls.** Echo lives in the menu bar and in a small island at the top of the screen. When Zoom, Microsoft Teams, Slack, Discord, FaceTime, Webex or any browser goes into a call, the island offers to record just that app's audio. It never starts on its own — recording takes a click, or Control-Option-E from anywhere — and a recording left running after the call ends is stopped for you.
 
 ## Status
 
@@ -25,7 +25,7 @@ Echo is a proof of concept that we use for our own meetings, and it is honest ab
 
 ## How it works
 
-- **Capture.** Your microphone goes through `AVAudioEngine`. The system audio goes through Core Audio process taps, not screen recording: no purple indicator in the menu bar, and protected playback elsewhere keeps working. When a recording starts from the call island, the tap is narrowed to that app's own processes where macOS allows it. A WebRTC audio-processing stage removes the meeting's playback from your microphone track, and a guard catches Bluetooth headsets that report one sample rate and deliver another.
+- **Capture.** Your microphone goes through `AVAudioEngine`. The system audio goes through Core Audio process taps, not screen recording: no purple indicator in the menu bar, and protected playback elsewhere keeps working. When a recording starts from a call the island noticed, the tap is narrowed to that app's own processes where macOS allows it. A WebRTC audio-processing stage removes the meeting's playback from your microphone track, and a guard catches Bluetooth headsets that report one sample rate and deliver another.
 - **Transcription.** [Parakeet TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) (NVIDIA, CC-BY-4.0) through [FluidAudio](https://github.com/FluidInference/FluidAudio)'s Core ML port, about 480 MB on disk. Each channel is transcribed once, end to end, after the meeting, and the two are merged by timestamp.
 - **Notes.** [Qwen3.5 4B](https://huggingface.co/mlx-community/Qwen3.5-4B-OptiQ-4bit) (OptiQ 4-bit, 3.3 GB) through [MLX](https://github.com/ml-explore/mlx-swift). Short meetings are summarized in one pass; long ones are split, summarized per part and merged. The weights load when needed and leave memory a minute after the last summary.
 - **Storage.** Plain files under `~/Library/Application Support/Echo`: one folder per meeting in `Meetings/` with `meta.json`, `transcript.json` and `summary.md` (plus the two audio files if you choose to keep recordings), the models in `Models/`, settings in `settings.json`, logs in `Logs/`. Human-readable, yours to back up or delete.
@@ -71,7 +71,7 @@ running it quits it first and reopens it on the new version.
 Install a specific version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --version v0.0.11
+curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --version v0.0.13
 ```
 
 Check what you have and whether it's current, without changing anything:
@@ -83,7 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/instal
 Install from a zip somebody sent you, with no network:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --from ~/Downloads/Echo-0.0.11.zip
+curl -fsSL https://raw.githubusercontent.com/sancrisoft/echo/main/scripts/install.sh | bash -s -- --from ~/Downloads/Echo-0.0.13.zip
 ```
 
 See the plan first — which release, from where, to where, whether Echo would be
@@ -101,10 +101,13 @@ Run `... | bash -s -- --help` for every option.
 
 ### Update
 
-Echo checks GitHub once a day and shows **Update available** in its menu bar
-popover when there is a newer release. Settings › Updates has **Check for
-Updates**, the release notes, and **Update Now**, which quits Echo, runs the
-install script above and reopens Echo on the new version. Running the install
+Echo checks GitHub when it launches and once a day after that. When there is a
+newer release it asks once, when it launches or when you next open its window,
+with **Update** and **Later**; and the menu bar item's menu, where **Check for
+Updates** sits under the version, reads **Update to Echo X.Y.Z** until you do.
+Settings › Updates has **Check for Updates**, the release notes and **Update
+Now**. Updating quits Echo, runs the install script above and reopens Echo on
+the new version; it waits while a recording is running. Running the install
 command yourself does the same thing; if you already have the latest build it
 says so and changes nothing. The daily check can be turned off in Settings ›
 Updates.
@@ -121,18 +124,27 @@ to skip the question, or `--dry-run` to see what it would remove and remove noth
 
 ## First launch
 
-Echo lives in the menu bar; it has no Dock icon. On first use it asks for two
-permissions:
+Echo lives in the menu bar and the island; it has a Dock icon only while its
+window is open. The first time it runs, the window opens on a short welcome
+that sets up the three things Echo needs, once:
 
 - **Microphone** — to transcribe your voice.
 - **System Audio Recording** — to transcribe what other participants say.
+- **The two models**, downloaded from Hugging Face (about 4 GB, once).
 
-It then downloads the two models from Hugging Face (about 4 GB, once). Models
-and all meeting data live in `~/Library/Application Support/Echo`.
+After that, opening Echo from Spotlight, Finder or the menu bar item opens its
+window; when it starts at login (Settings › Launch Echo at login) it stays in
+the menu bar until you ask for it. Models and all meeting data live in
+`~/Library/Application Support/Echo`.
+
+**Coming from 0.0.x?** Your library opens as it is: the data folder and its
+files are the same, and nothing is migrated or downloaded again. macOS asks for
+the two permissions once more, because every ad-hoc signed build is new to it,
+and the welcome shows once.
 
 ## Privacy
 
-Echo is local-first by design. Audio capture, transcription and summarization all run on your Mac; nothing is uploaded anywhere. The only network traffic is downloading the two models from Hugging Face once and, if you leave it on, a once-a-day request to GitHub for the latest release's version number — which says nothing about you or your meetings. Deleting the folder in `~/Library/Application Support/Echo` removes all of it.
+Echo is local-first by design. Audio capture, transcription and summarization all run on your Mac; nothing is uploaded anywhere. The only network traffic is downloading the two models from Hugging Face once and, if you leave it on, a request to GitHub for the latest release's version number at launch and once a day — which says nothing about you or your meetings. Deleting the folder in `~/Library/Application Support/Echo` removes all of it.
 
 ## Open source
 
@@ -142,17 +154,38 @@ Echo stands on other people's work: [FluidAudio](https://github.com/FluidInferen
 
 ## Development
 
-You need an Apple Silicon Mac, Xcode 26.6 or later, and the Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`). Open [Echo.xcodeproj](Echo.xcodeproj) and run the `Echo` scheme. Swift package dependencies resolve automatically; the WebRTC audio-processing library is vendored in [Vendor/webrtc-apm](Vendor/webrtc-apm). The build is arm64-only, because MLX and that vendored library are.
-
-Run the tests with:
+You need an Apple Silicon Mac, Xcode 26.6 or later, and the Metal toolchain once per Xcode install (`xcodebuild -downloadComponent MetalToolchain`), which the summarization engine compiles its kernels with. The build is arm64-only, because MLX and the vendored WebRTC audio-processing library ([Packages/Audio/Vendor](Packages/Audio/Vendor)) are.
 
 ```sh
-xcodebuild test -project Echo.xcodeproj -scheme Echo \
-  -destination 'platform=macOS,arch=arm64' \
-  -skipMacroValidation -skipPackagePluginValidation
+git clone https://github.com/sancrisoft/echo.git
+cd echo
+make build      # Debug build of Echo.app into build/
+make run        # build and launch
 ```
 
-The acceptance suites — the ones that load a model or replay real meeting audio — are off by default: they need `TEST_RUNNER_ECHO_ACCEPTANCE=1` and audio fixtures that are not in the repository, and they skip themselves with a note when either is missing. Tests are hosted in `Echo.app` and share its data folder, so don't run them while your own Echo is recording.
+Or open [Echo.xcodeproj](Echo.xcodeproj) in Xcode and run the `Echo` scheme. Swift package dependencies resolve automatically. To run against a scratch folder instead of your real library:
+
+```sh
+ECHO_DATA_ROOT=/tmp/echo-scratch ECHO_OPEN_WINDOW=1 build/Build/Products/Debug/Echo.app/Contents/MacOS/Echo
+```
+
+### Test
+
+```sh
+make test                  # every package with swift test, then the hosted app tests
+make test-package P=Meetings
+make lint                  # swift-format (strict) + the architecture boundary rules
+make format
+```
+
+Package tests run with `swift test` and never touch your data folder. The few tests that need the real app are hosted in `Echo.app` and stay inert there. The acceptance suites — the ones that load a model or replay real meeting audio — are off by default: they need `ECHO_ACCEPTANCE=1 swift test --package-path Packages/<Name>` and audio fixtures that are not in the repository (see [Fixtures/README.md](Fixtures/README.md)), and they skip themselves with a note when either is missing.
+
+To look at the window without clicking through it, render a scene to a PNG against a copy of your library (it quits a running Echo first):
+
+```sh
+scripts/snapshot.sh                 # build/snapshots/{library,summary,transcript,trash,settings,island}.png
+ECHO_APPEARANCE=light scripts/snapshot.sh summary
+```
 
 The install script has tests of its own, plain bash with no framework, that point it at a scratch folder and never touch a real Echo:
 
@@ -162,14 +195,39 @@ bash scripts/tests/install_test.sh
 
 The [installer workflow](.github/workflows/installer.yml) runs them with shellcheck on every pull request that touches `scripts/`, and installs the latest real release into a scratch destination on a macOS runner to check the script end to end.
 
+### Repository
+
+```
+App/            the macOS app target: composition root, scenes, lifecycle, the menu bar item
+AppTests/       the few tests that need the real app as host
+Packages/       one local Swift package per capability
+  EchoCore/       shared vocabulary: transcript, data root, error trace, settings, launch flags
+  Meetings/       the library on disk and in memory, and its search
+  Audio/          capture, echo cancellation, devices and routes
+  Transcription/  the post-stop pass over each channel
+  Summarization/  the on-device model and the notes
+  ModelDelivery/  resumable model downloads
+  Recording/      the session: start, stop, finalization, summaries
+  CallDetection/  noticing a call
+  Updates/        the release feed, the check and the updater
+  DesignSystem/   tokens and primitives
+  Workspace/      the main window
+  Island/         the island
+docs/architecture/   discovery, architecture, ADRs
+scripts/        install script, boundary check, snapshots
+Makefile        build · run · test · lint · format
+```
+
+Strong boundaries between modules, simple structure within them. Each package owns one product capability, has its own tests and a small public API, and depends only downward: `App → UI packages → Recording → engine packages → EchoCore`. Engine packages never import SwiftUI; UI packages never touch disk, audio or models. State has one owner per kind (a session facade, the library, a window model); side effects start from the composition root, never from initializers, so the test host stays inert. Swift 6 everywhere. [CLAUDE.md](CLAUDE.md) is how to work in this repository, for people and coding agents alike; [docs/architecture](docs/architecture) has the discovery, the architecture and the decisions with real trade-offs.
+
 ### Releasing
 
 Releases are built by CI from version tags:
 
 ```sh
-git tag v0.0.2 && git push origin v0.0.2
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 The [release workflow](.github/workflows/release.yml) builds `Echo.app` (Release, arm64), packages it as `Echo-<version>.zip`, and publishes a GitHub release whose notes carry the install command. The install script and the in-app update check both read these releases, so pushing the tag is the whole release. The app version comes from the tag; nothing needs to change in the Xcode project.
 
-> **Note** — Echo is currently a proof of concept. Builds are ad-hoc signed (not notarized by Apple), which is fine when installed through the script above; downloading the zip manually from the Releases page through a browser will trigger Gatekeeper warnings (`xattr -dr com.apple.quarantine /Applications/Echo.app` clears them). Use the install script.
+> **Note** — Builds are ad-hoc signed (not notarized by Apple), which is fine when installed through the script above; downloading the zip manually from the Releases page through a browser will trigger Gatekeeper warnings (`xattr -dr com.apple.quarantine /Applications/Echo.app` clears them). Use the install script.

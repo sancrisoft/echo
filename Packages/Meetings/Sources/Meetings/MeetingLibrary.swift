@@ -1,0 +1,347 @@
+//
+//  MeetingLibrary.swift
+//  Meetings
+//
+//  The main-actor, observable façade over `MeetingStore` that the UI reads:
+//  the live meetings, the trashed ones, what the library occupies on disk, and
+//  search over their words. Disk is the source of truth; this is a cache that
+//  re-reads after its own mutations.
+//
+//  Reading never writes. `refresh()` lists and measures; the launch-time
+//  housekeeping that deletes or rewrites files — purging expired trash, folding
+//  legacy summaries, backfilling word counts — is explicit, called by the
+//  composition root, never a side effect of loading the list (ADR-003).
+//
+
+import EchoCore
+import Foundation
+import Observation
+
+@Observable
+@MainActor
+public final class MeetingLibrary {
+
+    /// A meeting sits in Trash for this long before it is permanently removed.
+    public static let trashRetention: TimeInterval = 30 * 24 * 60 * 60
+
+    /// The store this library fronts. The pipeline writes through it directly
+    /// and asks the library to `refresh()`.
+    public let store: MeetingStore
+
+    /// Counted into the storage breakdown; `nil` skips the models row.
+    private let modelsDirectory: URL?
+
+    /// Live meetings (not trashed), newest first.
+    public private(set) var metas: [MeetingMeta] = []
+
+    /// Trashed meetings, most recently trashed first.
+    public private(set) var trashedMetas: [MeetingMeta] = []
+
+    /// What the library occupies on disk. `nil` until the first measurement.
+    public private(set) var storage: StorageBreakdown?
+
+    /// Whether search is still reading meetings' words. A query answered
+    /// meanwhile is answered from what has been read, and the surface says
+    /// so rather than pass a partial answer off as the whole one.
+    public private(set) var isReadingForSearch = false
+
+    /// Moves each time the search index takes in what it read, so a query
+    /// asked while it read can be asked again.
+    public private(set) var searchRevision = 0
+
+    private var isBackfilling = false
+
+    private let searchIndexer: MeetingSearchIndexer
+    /// Search reads nothing until it is first asked for; from then on every
+    /// `refresh()` keeps it current.
+    private var searchPrepared = false
+    private var searchPass: Task<Void, Never>?
+    private var searchPassAgain = false
+
+    /// How many meetings a pass reads before the index takes them in. Small
+    /// enough that results arrive while the rest is still being read; a
+    /// choice, not a measurement.
+    private static let searchReadBatch = 8
+
+    /// Builds the library. Performs no I/O: call `refresh()` to load.
+    public init(store: MeetingStore, modelsDirectory: URL? = nil) {
+        self.store = store
+        self.modelsDirectory = modelsDirectory
+        searchIndexer = MeetingSearchIndexer(store: store)
+    }
+
+    /// The library at a data root.
+    public convenience init(dataRoot: DataRoot) {
+        self.init(store: MeetingStore(dataRoot: dataRoot), modelsDirectory: dataRoot.models)
+    }
+
+    // MARK: - Locations
+
+    /// The on-disk folder for a meeting, for Reveal in Finder and export.
+    /// Side-effect free.
+    public nonisolated func directory(for id: UUID) -> URL {
+        store.directory(for: id)
+    }
+
+    // MARK: - Loading
+
+    /// Reloads the meeting headers from disk and re-measures storage. Reads
+    /// only.
+    public func refresh() async {
+        let all = await store.listMetas()
+        metas = all.filter { !$0.isTrashed }
+        trashedMetas =
+            all.filter(\.isTrashed)
+            .sorted { ($0.trashedAt ?? .distantPast) > ($1.trashedAt ?? .distantPast) }
+        measureStorage()
+        syncSearch()
+    }
+
+    /// Permanently deletes meetings that have sat in Trash past the retention
+    /// window, then refreshes. Launch housekeeping, called by the composition
+    /// root.
+    public func purgeExpiredTrash(now: Date = Date()) async {
+        let cutoff = now.addingTimeInterval(-Self.trashRetention)
+        var purged = false
+        for meta in await store.listMetas() {
+            guard let trashedAt = meta.trashedAt, trashedAt < cutoff else { continue }
+            do {
+                try await store.delete(meta.id)
+                purged = true
+            } catch {
+                ErrorTrace.record(
+                    "Purging expired trash failed",
+                    error: error,
+                    category: "MeetingLibrary",
+                    metadata: ["meetingID": meta.id.uuidString]
+                )
+            }
+        }
+        if purged { await refresh() }
+    }
+
+    /// Folds every legacy `summary.json` into `summary.md` (idempotent, non-fatal
+    /// per meeting), then refreshes. Launch housekeeping.
+    public func foldLegacySummaries() async {
+        await store.migrateLegacySummaries()
+        await refresh()
+    }
+
+    /// Fills in `wordCount` for meetings saved before it was denormalized (a
+    /// one-time, self-healing migration). New meetings already carry it, so
+    /// this is usually a no-op. Patches rows in place as it goes.
+    public func backfillWordCounts() async {
+        guard !isBackfilling else { return }
+        let missing = metas.filter { $0.wordCount == nil }.map(\.id)
+        guard !missing.isEmpty else { return }
+        isBackfilling = true
+        defer { isBackfilling = false }
+        for id in missing {
+            guard let record = await loadRecord(id) else { continue }
+            var meta = record.meta
+            meta.wordCount = TranscriptSegment.wordCount(of: record.segments)
+            do {
+                try await store.updateMeta(meta)
+            } catch {
+                ErrorTrace.record(
+                    "Word-count backfill failed",
+                    error: error,
+                    category: "MeetingLibrary",
+                    metadata: ["meetingID": id.uuidString]
+                )
+                continue
+            }
+            if let index = metas.firstIndex(where: { $0.id == id }) {
+                metas[index].wordCount = meta.wordCount
+            }
+        }
+    }
+
+    /// Loads a full meeting for the document view. Returns `nil` (traced) if
+    /// the folder is missing or corrupt, so the UI can show an unavailable
+    /// state instead of crashing.
+    public func loadRecord(_ id: UUID) async -> MeetingRecord? {
+        do {
+            return try await store.loadRecord(id)
+        } catch {
+            ErrorTrace.record(
+                "Loading meeting failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
+            return nil
+        }
+    }
+
+    /// The current meta for an id from whichever list holds it.
+    public func meta(for id: UUID) -> MeetingMeta? {
+        metas.first { $0.id == id } ?? trashedMetas.first { $0.id == id }
+    }
+
+    // MARK: - Mutations
+
+    /// Renames a meeting. Trims whitespace and ignores an empty result — a
+    /// meeting always keeps a title.
+    public func rename(_ id: UUID, to newTitle: String) async {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, var meta = meta(for: id), meta.title != trimmed else { return }
+        meta.title = trimmed
+        await update(meta)
+    }
+
+    /// Moves a meeting to Trash (soft-delete). It keeps all its files and is
+    /// permanently removed once it has sat in Trash past `trashRetention`.
+    public func trash(_ id: UUID) async {
+        guard var meta = meta(for: id), !meta.isTrashed else { return }
+        meta.trashedAt = Date()
+        await update(meta)
+    }
+
+    /// Restores a trashed meeting back into the library.
+    public func restore(_ id: UUID) async {
+        guard var meta = trashedMetas.first(where: { $0.id == id }) else { return }
+        meta.trashedAt = nil
+        await update(meta)
+    }
+
+    /// Permanently deletes a meeting's folder and refreshes.
+    public func deletePermanently(_ id: UUID) async {
+        do {
+            try await store.delete(id)
+            await refresh()
+        } catch {
+            ErrorTrace.record(
+                "Deleting meeting failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": id.uuidString]
+            )
+        }
+    }
+
+    /// Empties the Trash: permanently deletes every trashed meeting.
+    public func emptyTrash() async {
+        for meta in trashedMetas {
+            do {
+                try await store.delete(meta.id)
+            } catch {
+                ErrorTrace.record(
+                    "Emptying trash failed",
+                    error: error,
+                    category: "MeetingLibrary",
+                    metadata: ["meetingID": meta.id.uuidString]
+                )
+            }
+        }
+        await refresh()
+    }
+
+    // MARK: - Preserved recordings
+
+    /// The preserved-audio files in the meeting's folder.
+    public func preservedAudioFiles(for id: UUID) async -> [AudioChannel: URL] {
+        await store.preservedAudioFiles(for: id)
+    }
+
+    /// Whether the meeting keeps its recording after transcription — what
+    /// Re-transcribe reads from and Delete Recording removes.
+    public func hasPreservedAudio(for id: UUID) async -> Bool {
+        await store.hasPreservedAudio(for: id)
+    }
+
+    /// Whether a meeting whose transcription gave up still holds the audio
+    /// the pass needs to run again. A failed meeting without it has no Retry.
+    public func canRetryTranscription(_ id: UUID) async -> Bool {
+        await store.retainedAudioDisposition(for: id) == .terminalFailure
+    }
+
+    /// Deletes exactly the meeting's preserved recording and re-measures.
+    public func deletePreservedAudio(for id: UUID) async {
+        await store.deletePreservedAudio(for: id)
+        measureStorage()
+    }
+
+    /// Deletes every saved recording (the settings page's global action) and
+    /// re-measures so the numbers move with the bytes.
+    public func deleteAllPreservedAudio() async {
+        await store.deleteAllPreservedAudio()
+        measureStorage()
+    }
+
+    // MARK: - Search
+
+    /// Reads every meeting's words for search — the live ones and the
+    /// trashed — and returns once they are read. The first call starts the
+    /// reading; later ones wait for whatever pass is under way.
+    public func prepareSearch() async {
+        searchPrepared = true
+        syncSearch()
+        await searchPass?.value
+    }
+
+    /// The meetings that answer `query`, best first, from what has been read.
+    public func search(_ query: MeetingSearchQuery) async -> [MeetingSearchHit] {
+        await searchIndexer.search(query)
+    }
+
+    /// One pass at a time: a change during a pass asks for another, read from
+    /// the lists as they are then.
+    private func syncSearch() {
+        guard searchPrepared else { return }
+        guard searchPass == nil else {
+            searchPassAgain = true
+            return
+        }
+        searchPass = Task(priority: .utility) {
+            repeat {
+                searchPassAgain = false
+                let (forgot, toRead) = await searchIndexer.reconcile(with: metas + trashedMetas)
+                if forgot { searchRevision += 1 }
+                if !toRead.isEmpty { isReadingForSearch = true }
+                for start in stride(from: 0, to: toRead.count, by: Self.searchReadBatch) {
+                    await searchIndexer.read(Array(toRead[start..<min(start + Self.searchReadBatch, toRead.count)]))
+                    searchRevision += 1
+                }
+            } while searchPassAgain
+            isReadingForSearch = false
+            searchPass = nil
+        }
+    }
+
+    // MARK: - Storage
+
+    /// Measures the breakdown off the main actor (detached, utility priority)
+    /// and publishes it. Called by `refresh()` and after deletions.
+    public func measureStorage() {
+        let root = store.rootDirectory
+        let live = metas.map(\.id)
+        let trashed = trashedMetas.map(\.id)
+        let models = modelsDirectory
+        Task.detached(priority: .utility) { [weak self] in
+            let breakdown = StorageBreakdown.measure(
+                meetingsRoot: root,
+                nonTrashedIDs: live,
+                trashedIDs: trashed,
+                modelsDirectory: models
+            )
+            await MainActor.run { self?.storage = breakdown }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private func update(_ meta: MeetingMeta) async {
+        do {
+            try await store.updateMeta(meta)
+            await refresh()
+        } catch {
+            ErrorTrace.record(
+                "Updating meeting failed",
+                error: error,
+                category: "MeetingLibrary",
+                metadata: ["meetingID": meta.id.uuidString]
+            )
+        }
+    }
+}

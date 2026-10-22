@@ -1,0 +1,74 @@
+//
+//  WindowOpener.swift
+//  Echo
+//
+//  Opens the main window from code that has no SwiftUI `openWindow` of its own:
+//  the app menu's Settings command, the menu bar item and, later, the island.
+//  As an LSUIElement agent, activating and opening the window does not
+//  reliably raise it — the window can appear behind other apps — so it is
+//  forced front on the next run-loop tick, once SwiftUI has created or
+//  surfaced the scene.
+//
+
+import AppKit
+import EchoCore
+import SwiftUI
+
+final class WindowOpener {
+
+    private var open: ((String) -> Void)?
+
+    /// A request that came before the bridge registered — the launch's own,
+    /// when the welcome screen decides to show once the models have answered —
+    /// carried out the moment it does.
+    private var openWhenRegistered = false
+
+    /// Called by the bridge view once SwiftUI hands it `openWindow`.
+    func register(_ open: @escaping (String) -> Void) {
+        self.open = open
+        if openWhenRegistered {
+            openWhenRegistered = false
+            openMainWindow()
+        }
+    }
+
+    /// Opens (or fronts) the main window.
+    func openMainWindow() {
+        guard let open else {
+            openWhenRegistered = true
+            return
+        }
+        // Promote to a Dock/Cmd-Tab app before fronting: the activation
+        // policy's own hook only fires once the window becomes key.
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        open(EchoWindow.main)
+        DispatchQueue.main.async {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows
+                .first { $0.identifier?.rawValue == EchoWindow.main }?
+                .makeKeyAndOrderFront(nil)
+        }
+    }
+}
+
+/// A zero-size view that captures SwiftUI's `openWindow` for the opener. It
+/// sits in the menu bar item's label, the one view an agent app always has.
+///
+/// It is also where the app delegate is told how to answer a reopen: both are
+/// the same errand — handing the AppKit side a way into a SwiftUI scene — and
+/// this is the first moment either is possible, since SwiftUI builds the `App`
+/// before `NSApplication` exists.
+struct WindowOpenerBridge: View {
+    @Environment(\.openWindow) private var openWindow
+    let opener: WindowOpener
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                opener.register { id in openWindow(id: id) }
+                EchoAppDelegate.handleReopen { [opener] in opener.openMainWindow() }
+            }
+    }
+}

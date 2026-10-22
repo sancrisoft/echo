@@ -1,0 +1,61 @@
+Onest and DM Mono — the two typefaces the design specifies
+
+Both are under the SIL Open Font License 1.1. The licence text of each is
+bundled beside the font files, because OFL requires it to travel with every
+copy of the Font Software, and the app ships them inside its resources.
+
+Source:   https://github.com/google/fonts
+Commit:   8e44913e4ff26fc997e6856c1ec40ff4791c98c5  (2026-09-10)
+
+Onest
+  Upstream:  https://github.com/simpals/onest
+  Path:      ofl/onest/Onest[wght].ttf
+  Version:   2.001
+  Axis:      wght 100–900 (default 400) — one variable file covers every
+             weight the design asks for, including the 650 of the headings,
+             which no static instance ships.
+  Renamed:   Onest-VariableFont_wght.ttf — the same file under the name
+             Google Fonts' own download uses. The brackets in the upstream
+             name are awkward in a build script and buy nothing.
+  Copyright: 2021 The Onest Project Authors
+
+DM Mono
+  Upstream:  https://github.com/googlefonts/dm-mono
+  Path:      ofl/dmmono/DMMono-{Light,Regular,Medium}.ttf
+  Version:   1.000
+  Copyright: 2020 The DM Mono Project Authors
+  The three upright weights the design uses (300 / 400 / 500). The six italics
+  upstream ships are not vendored: the design never sets a number in italic.
+
+Vendored artifacts (what the package declares as resources, and what ships
+inside Echo.app under DesignSystem_DesignSystem.bundle):
+
+  ../../Sources/DesignSystem/Resources/Fonts/Onest-VariableFont_wght.ttf
+  ../../Sources/DesignSystem/Resources/Fonts/DMMono-Light.ttf
+  ../../Sources/DesignSystem/Resources/Fonts/DMMono-Regular.ttf
+  ../../Sources/DesignSystem/Resources/Fonts/DMMono-Medium.ttf
+  ../../Sources/DesignSystem/Resources/Fonts/OFL-Onest.txt
+  ../../Sources/DesignSystem/Resources/Fonts/OFL-DMMono.txt
+
+SHA-256 of the files as vendored:
+
+  966c5c29b4755da84b6854d5c21dd4eaa2420225d0e9874de602de176d4a9f31  Onest-VariableFont_wght.ttf
+  c7b3645dc8d28237317b4d017bc47b9ff09a7660758122dacb694a5a82552c24  DMMono-Light.ttf
+  55b4c98f123daebb3ed27947ba47b2af00554fc6284d639a540bcef5e6258ad2  DMMono-Regular.ttf
+  fd327daf461db87b44a87def475d251bf03b997f7c07d9680592d75dbbfaad0b  DMMono-Medium.ttf
+
+Refreshing them, from Packages/DesignSystem/Vendor/fonts/:
+
+  D=../../Sources/DesignSystem/Resources/Fonts
+  R=https://raw.githubusercontent.com/google/fonts/main/ofl
+  curl -fL "$R/onest/Onest%5Bwght%5D.ttf" -o "$D/Onest-VariableFont_wght.ttf"
+  for w in Light Regular Medium; do
+    curl -fL "$R/dmmono/DMMono-$w.ttf" -o "$D/DMMono-$w.ttf"
+  done
+  curl -fL "$R/onest/OFL.txt"  -o "$D/OFL-Onest.txt"
+  curl -fL "$R/dmmono/OFL.txt" -o "$D/OFL-DMMono.txt"
+
+Then update the commit, versions and hashes above, run the DesignSystem tests
+(they render each token and compare it with the family positioned on its own
+axis, so a bad file fails loudly), and check THIRD_PARTY_NOTICES.md still says
+what these files are.

@@ -1,0 +1,277 @@
+//
+//  WorkspaceWindow.swift
+//  Workspace
+//
+//  The main window: a fixed sidebar of meetings and, always to its right, the
+//  document — so switching meetings never loses context. Trash and Settings
+//  take the document's place while they are open.
+//
+//  A plain HStack, not `NavigationSplitView`: on this macOS the split view's
+//  columns carry a rigid fitting height of roughly the screen that no SwiftUI
+//  frame overrides, so a smaller window clips both columns, and a List inside
+//  its sidebar column can render zero rows.
+//
+//  Both panes paint the backdrops the design draws — the document the
+//  window's, the sidebar its own, a step darker — and the window itself takes
+//  the same background, title bar included (`WindowChrome`). That last part is
+//  the whole trick: what banded in the PoC was a flat colour over *part* of a
+//  wallpaper-tinted window, the painted pane meeting the material beside and
+//  above it. With nothing translucent left to meet, the artboard's flat
+//  backdrops are simply what the window is, and the design's hairline — not
+//  the system's separator — draws the line under the title bar.
+//
+
+import DesignSystem
+import EchoCore
+import Meetings
+import Recording
+import SwiftUI
+
+public struct WorkspaceWindow: View {
+    @Environment(MeetingLibrary.self) private var library
+    @Environment(WorkspaceModel.self) private var workspace
+    @Environment(RecordingSession.self) private var session
+    @Environment(AppSettings.self) private var settings
+
+    private let dataRoot: DataRoot
+    private let globalShortcut: String
+    private let startRecording: () async -> Void
+    private let relaunch: () -> Void
+
+    /// - Parameters:
+    ///   - globalShortcut: Record and Stop from anywhere, as the menus write
+    ///     it — the app target's, which the keyboard shortcuts panel lists.
+    ///   - startRecording: New recording. The composition root's, so the
+    ///     window starts the same gated recording, with the same capture, as
+    ///     every other surface (`TitleBar`). It returns once the start has
+    ///     landed, so the window knows whether there is a session to show.
+    ///   - relaunch: quits Echo and reopens it on the welcome screen — the
+    ///     welcome's Quit & Reopen. The app's, since only the app can end
+    ///     its own process.
+    public init(
+        dataRoot: DataRoot, globalShortcut: String, startRecording: @escaping () async -> Void,
+        relaunch: @escaping () -> Void
+    ) {
+        self.dataRoot = dataRoot
+        self.globalShortcut = globalShortcut
+        self.startRecording = startRecording
+        self.relaunch = relaunch
+    }
+
+    public var body: some View {
+        Group {
+            if workspace.showsWelcome {
+                // The welcome screen takes the whole window, title bar
+                // included, as the design draws it: no sidebar, no
+                // hairline, nothing in the toolbar.
+                WelcomeScreen(
+                    dataRoot: dataRoot,
+                    leave: {
+                        settings.noteLeftWelcome()
+                        workspace.leaveWelcome()
+                    },
+                    relaunch: relaunch)
+            } else {
+                workspaceLayout
+            }
+        }
+        .frame(minWidth: EchoLayout.minimumWindow.width, minHeight: EchoLayout.minimumWindow.height)
+        .background(WindowChromeReader(background: EchoColor.windowBackground))
+        .toolbar {
+            if !workspace.showsWelcome {
+                TitleBarToolbar(startRecording: { recordFromTheWindow() })
+            }
+        }
+        .background { windowShortcuts }
+        // Over everything the window shows, the welcome screen included:
+        // the keys are the same wherever the window is.
+        .overlay {
+            if workspace.isShortcutsPresented {
+                ShortcutsPanel(groups: ShortcutsList.groups(globalShortcut: globalShortcut))
+            }
+        }
+        // Going anywhere puts either panel away: a result opened, Settings
+        // reached from the menu, a stop that brings the saved meeting in.
+        .onChange(of: workspace.section) { _, _ in
+            workspace.dismissSearch()
+            workspace.dismissShortcuts()
+        }
+        // Capture ended: if the window was showing the session, it follows
+        // the meeting the stop saved into the library.
+        .onChange(of: session.phase) { _, phase in
+            switch phase {
+            case .recording, .stopping:
+                break
+            case .idle, .finalizing, .summarizing:
+                workspace.liveSessionEnded(savedMeeting: phase.meetingID)
+            }
+        }
+        // A selection the library no longer holds (trashed, deleted, purged)
+        // is dropped so the document never shows a meeting that is gone, and
+        // the library opens on another rather than on nothing.
+        .onChange(of: library.metas.map(\.id)) { _, _ in
+            workspace.reconcileSelection(with: library.metas)
+            settleSelection()
+        }
+        // The window opens on the meeting last open, and remembers each one
+        // it opens for the next launch.
+        .onAppear { settleSelection() }
+        .onChange(of: workspace.selectedMeetingID) { _, id in
+            if let id {
+                settings.noteOpenMeeting(id)
+            } else {
+                settleSelection()
+            }
+        }
+        .onChange(of: library.trashedMetas.map(\.id)) { _, _ in
+            workspace.reconcileTrashSelection(with: library.trashedMetas)
+        }
+    }
+
+    /// The sidebar and, always to its right, the document.
+    private var workspaceLayout: some View {
+        VStack(spacing: 0) {
+            // The hairline under the title bar, drawn at the content's top
+            // edge because that is where the title bar ends.
+            EchoColor.divider
+                .frame(height: EchoLayout.hairline)
+            HStack(spacing: 0) {
+                MeetingSidebar()
+                    .frame(width: EchoLayout.sidebarWidth)
+                    .background(EchoColor.sidebarBackground)
+                EchoColor.divider
+                    .frame(width: EchoLayout.hairline)
+                VStack(spacing: 0) {
+                    // Above the meetings, never above Trash or Settings,
+                    // which take the document's place and are not about the
+                    // meetings at all.
+                    if workspace.section == .meetings || workspace.section == .recording {
+                        ModelsPanel()
+                    }
+                    detail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(EchoColor.windowBackground)
+            }
+        }
+        // Over the sidebar and the document, under the title bar: AppKit
+        // draws the bar above anything the content draws.
+        .overlay {
+            if workspace.isSearchPresented {
+                SearchPalette(startRecording: { recordFromTheWindow() })
+            }
+        }
+    }
+
+    /// ⌘K brings the palette up from anywhere in the window and puts it away
+    /// again; ⌘R is New recording, as the palette's action says, held back
+    /// exactly when the title bar's button is.
+    private var windowShortcuts: some View {
+        ZStack {
+            Button("") { workspace.toggleSearch() }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(workspace.showsWelcome)
+            Button("") {
+                workspace.dismissSearch()
+                recordFromTheWindow()
+            }
+            .keyboardShortcut("r", modifiers: .command)
+            .disabled(
+                workspace.showsWelcome
+                    || TitleBarState.resolve(phase: session.phase, readiness: session.readiness) != .newRecording)
+            // The meeting above or below, from anywhere in the window, in the
+            // sidebar's order — the list's own ↑ ↓ without its focus.
+            Button("") { moveMeeting(.up) }
+                .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+                .disabled(workspace.showsWelcome)
+            Button("") { moveMeeting(.down) }
+                .keyboardShortcut(.downArrow, modifiers: [.option, .command])
+                .disabled(workspace.showsWelcome)
+            // ⌘1 Summary, ⌘2 Transcript, while a document is shown. The
+            // palette reads its own ⌘1–⌘9 first while it is up.
+            ForEach(Array(WorkspaceModel.DocumentTab.allCases.enumerated()), id: \.element) { index, tab in
+                Button("") { workspace.documentTab = tab }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                    .disabled(workspace.showsWelcome || !workspace.showsDocument)
+            }
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0)
+        .accessibilityHidden(true)
+    }
+
+    private func moveMeeting(_ move: MeetingListSelection.Move) {
+        guard workspace.moveSelection(move, in: library.metas) else { return }
+        workspace.section = .meetings
+    }
+
+    private func settleSelection() {
+        workspace.settleSelection(in: library.metas, lastOpen: settings.lastOpenMeeting)
+    }
+
+    /// New recording, from the title bar. The window shows the session only
+    /// once there is one: a refused start, or one whose capture failed, has
+    /// nothing to show, and the window stays where it was.
+    private func recordFromTheWindow() {
+        Task {
+            await startRecording()
+            if session.phase.isRecording {
+                workspace.showLiveSession()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        // Questions, not a copy: `body` runs on every change, and the list of
+        // ids it used to build was an allocation per pass. Only the live
+        // meetings answer — a trashed meeting is one the library no longer
+        // holds, whatever its folder still contains.
+        switch WorkspaceDetail.resolve(
+            section: workspace.section,
+            selection: workspace.selectedMeetingID,
+            hasMeetings: !library.metas.isEmpty,
+            meta: { id in library.metas.first { $0.id == id } },
+            phase: session.phase,
+            openedTrashedID: workspace.openedTrashedID,
+            trashedMeta: { id in library.trashedMetas.first { $0.id == id } })
+        {
+        case .meeting(let meta):
+            MeetingDocumentView(meta: meta, dataRoot: dataRoot)
+                .id(meta.id)
+        case .liveSession(let live):
+            LiveSessionDocument(session: live)
+        case .savingSession:
+            // A moment's blank rather than the meeting that was open before:
+            // the one being saved is about to take its place.
+            Color.clear
+        case .noMeetings:
+            EmptyState(
+                glyph: .waveform, title: "No meetings yet",
+                message:
+                    "Start one from the island in the notch, or right here. Echo also offers on its own when it notices a call."
+            ) {
+                // The title bar's own start, held back the same way and for
+                // the same reasons; the title bar says why beside its button.
+                Button("New recording") { recordFromTheWindow() }
+                    .buttonStyle(.echoControlProminent)
+                    .disabled(
+                        TitleBarState.resolve(phase: session.phase, readiness: session.readiness) != .newRecording)
+            }
+        case .noSelection:
+            // Never shown for long: the window opens on the meeting last open,
+            // or the most recent (product owner, 2026-10-02), and settles on
+            // one the moment the library has any. A blank for that instant,
+            // as while a session is saved.
+            Color.clear
+        case .trash:
+            TrashView()
+        case .trashedMeeting(let meta):
+            MeetingDocumentView(meta: meta, dataRoot: dataRoot)
+                .id(meta.id)
+        case .settings:
+            SettingsScreen(dataRoot: dataRoot)
+        }
+    }
+}

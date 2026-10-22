@@ -1,0 +1,663 @@
+# Echo v2 — Architecture
+
+Status: adopted 2026-09-08 for the v2 rebuild; reviewed after the first
+feature (`review-2026-09-08-first-feature.md`). Companion documents:
+`v2-discovery.md` (what the product is and what the PoC taught us) and the
+ADRs under `adr/` (the decisions with real trade-offs).
+
+The principle: **strong boundaries between modules, simple structure within
+modules.** Modularity lives at the system level, in local Swift packages the
+compiler enforces. Simplicity lives inside each package: flat folders,
+descriptive file names, few abstractions.
+
+---
+
+## 1. Repository layout
+
+```
+Echo/
+├── App/                      the macOS app target: composition, scenes, lifecycle
+│   ├── EchoApp.swift         the scenes: the main window and its commands
+│   ├── AppComposition.swift  builds every service, wires them, starts side effects
+│   ├── MenuBarItem.swift     the NSStatusItem, its two buttons, the openWindow bridge
+│   ├── MenuBarMenu.swift     the island's face as a menu, the way back into the app, Check for Updates
+│   ├── GlobalShortcut.swift  Control + Option + E: Record at rest, Stop while recording
+│   ├── ActivationPolicy.swift · WindowOpener.swift
+│   ├── LaunchOrigin.swift    who asked for a launch: the user, or loginwindow at login
+│   ├── WindowSnapshot.swift  DEBUG: render a scene to a PNG (design review)
+│   ├── Info.plist · Echo.entitlements · Assets.xcassets
+├── AppTests/                 tests that need the real app as host (few)
+├── Packages/                 one local Swift package per capability
+│   ├── EchoCore/
+│   ├── Audio/
+│   ├── Transcription/
+│   ├── Summarization/
+│   ├── ModelDelivery/
+│   ├── Meetings/
+│   ├── Recording/
+│   ├── CallDetection/
+│   ├── Updates/
+│   ├── DesignSystem/
+│   ├── Workspace/
+│   └── Island/
+├── Fixtures/                 real recordings and transcripts, local-only (gitignored)
+├── docs/
+│   └── architecture/         this document, the discovery, adr/
+├── scripts/                  install script, dev scripts, boundary check
+├── .github/                  CI, installer smoke, release
+├── Echo.xcodeproj            the app target + references to the local packages
+├── Makefile                  build · test · lint · format · run
+├── CLAUDE.md                 how to work in this repository
+└── README.md
+```
+
+Every package has the same shape:
+
+```
+Packages/Meetings/
+├── Package.swift
+├── Sources/Meetings/         flat: one file per concept
+└── Tests/MeetingsTests/
+```
+
+Folders inside `Sources/<Package>/` appear only when a package grows past the
+point where a flat listing stops helping navigation. They are never created up
+front, and they are never the layers `Domain/Application/Infrastructure` or the
+roles `Models/Views/ViewModels/Services`.
+
+Packages are created **when their first feature lands**, not ahead of it. The
+foundation ships with `EchoCore`, `Meetings`, `DesignSystem`, `Workspace` and
+`App`; the rest exist in this document as agreed boundaries and are added by
+the ports that fill them (see §11).
+
+---
+
+## 2. Packages and ownership
+
+Each package answers "who owns this?" for one product capability from
+`v2-discovery.md` §1.2.
+
+| Package | Owns | Depends on | External |
+|---|---|---|---|
+| **EchoCore** | The vocabulary every package shares: `TranscriptSegment`, `AudioChannel`, `Speaker`, utterance derivation; the data root and its paths; `ErrorTrace`; `AppSettings` (persisted preferences); `LaunchEnvironment` (debug flags, one reader); `TestHost`; `AppIdentity` (bundle id, log subsystem, version). Plus a `EchoCoreTestSupport` product: fixtures root, acceptance gate, temp roots. | — | — |
+| **Audio** | Both capture sources (mic via `AVAudioEngine`, system via Core Audio process taps, global or scoped), the canonical audio format, downmix and resampling, the sample-rate guard, echo cancellation (the vendored WebRTC AEC3 as a binary target plus its one ObjC++ seam, the mode machine, the switching stage), output-route and input-device monitors, input-health classification, capture-gap accounting, retention encoding to AAC, `CaptureScope`/`ProcessSelector`, `AppBundleIdentity`. | EchoCore | WebRTC APM (vendored xcframework) |
+| **Transcription** | Parakeet: model identity, readiness and download (through FluidAudio), the post-stop batch pass, energy envelopes, segment shaping, echo dedup. Produces `[TranscriptSegment]` from retained audio files. | EchoCore, ModelDelivery | FluidAudio |
+| **Summarization** | Qwen through MLX: the text-generation seam, the model's download/load/unload lifecycle, the pipeline (routing, prompts, streaming, NDJSON facts, deterministic merge), transcript chunking, language detection, the row caption. Produces a Markdown `SummaryDocument`. | EchoCore, ModelDelivery | mlx-swift, mlx-swift-lm, swift-transformers, swift-huggingface |
+| **ModelDelivery** | Getting multi-GB models onto disk honestly: resumable transfer, byte-weighted progress, the one progress clamp, stall watchdog and retry, snapshot manifest and completeness, Hugging Face snapshot download, retired-model cleanup, disk-space floor. | EchoCore | swift-transformers (`Hub`), which pins swift-huggingface 0.9.0 |
+| **Meetings** | The library on disk and in memory: `MeetingStore` (actor, the only thing that touches `Meetings/`), `MeetingMeta`/`MeetingRecord`, the legacy `summary.json` decoder, audio name families and their classification, trash, preserved recordings, storage measurement, `MeetingLibrary` (observable façade), export and copy formatting, search over every meeting's words. | EchoCore | — |
+| **Recording** | The meeting lifecycle behind one observable: `RecordingSession` (phase, live levels, notices, current meeting, start/stop/retry), permission priming, wiring Audio into retention and levels, the finalization machine that schedules transcription passes and gates summaries, the summary scheduler and backfill policy. | EchoCore, Audio, Transcription, Summarization, ModelDelivery, Meetings | — |
+| **CallDetection** | Which apps are on a call: the mic-activity monitor over Core Audio process metadata, the curated app catalog, the installed-browser catalog, the disabled-apps filter, and `CallSessionMachine` (debounce, grace, faces as pure output). Produces `CaptureScope` values. | EchoCore, Audio | — |
+| **Updates** | Version arithmetic (`ReleaseVersion`, and the version this build compares against), the GitHub release feed and the one repository string every user-reachable URL derives from, the daily checker with its shared in-flight request, and the updater that renders the bash handed to `/bin/bash` and hands off to the same install script the README quotes. No UI: the three surfaces a user meets it through are Workspace's settings screen and the app target's menu item and launch prompt. | EchoCore | — |
+| **DesignSystem** | Semantic color tokens for light and dark, the type scale over the two bundled typefaces, spacing, radii and control geometry, the durations and curves the design states (`EchoMotion`), and the primitives every surface repeats: buttons, chips, property rows, tab strips, list rows, status badges, level gauge, empty state. No product logic. | — | — |
+| **Workspace** | The main window: sidebar with meetings grouped by date, the document (summary and transcript), trash, the settings screen, first-run banners, search, the Markdown renderer, `WorkspaceModel` (selection, section, search, sort — the window's single navigation truth), display-state resolution. | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem | — |
+| **Island** | The floating panel: the shell's geometry per screen (`ScreenGeometry`, `IslandMetrics` — the cutout read from the screen, never a constant, or drawn on a screen without one), the shell itself (its outline with the two concave flares, the ears either side of the cutout, the one-row expansion), `IslandController` (the non-activating `NSPanel`, which face the shell wears, where the window goes, and the one report detection needs about the session), the faces, and the capture choice the idle face offers (`ScopeSelection`, ported from the PoC). | EchoCore, Audio, CallDetection, Recording, DesignSystem | — |
+| **App** (target) | Composition root, scenes, activation policy and the reopen that answers a request for an already running app, the launch the user asked for (read from its open-application event, which marks a login item's, so a cold launch opens the window and a login launch stays silent), the menu bar item — an `NSStatusItem` managed by hand, not a `MenuBarExtra` scene, because only that tells a left click from a right one — the update prompt (the one alert Echo raises — at launch, and when the window opens on an update found since, once per version — and the answer to Check for Updates, in the app menu and the menu bar item's menu, where it reads Update to Echo X.Y.Z once one is found), Help › Keyboard Shortcuts (⌘/, the one binding of the panel Workspace draws), File › Close (⌘W; SwiftUI gives a lone `Window` no File menu), launch tasks gated by `TestHost`. Nothing else. | every package it composes | — |
+
+The UI packages are built towards an internal design that is not in the
+repository (see `CLAUDE.md`, "Design"); its written spec is the reference for
+every value, state and copy in `DesignSystem`, `Workspace` and `Island`.
+
+### 2.1 Dependency graph
+
+```
+                         App
+          ┌───────────────┼──────────────┐
+      Workspace         Island        Updates
+          │  \            │  \
+          │   \    CallDetection ── Audio
+          │    \          │           │
+          │     └──── Recording ──────┤
+          │           /   │   \       │
+      Meetings ──────┘    │    \      │
+          │       Transcription  Summarization
+          │            │              │
+          │            └── ModelDelivery
+          │                     │
+          └──────── EchoCore ───┴───────────   DesignSystem (leaf, UI only)
+```
+
+Rules the graph encodes:
+
+- **Downward only.** `App → UI packages → Recording → engine packages → EchoCore`.
+  No package imports a package above it. No cycles. SwiftPM refuses a cycle; the
+  boundary script in `scripts/check_boundaries.sh` refuses `SwiftUI`/`AppKit`
+  imports in engine packages and refuses any package importing `App`.
+- **Engine packages never import SwiftUI or AppKit.** Engine = EchoCore, Audio,
+  Transcription, Summarization, ModelDelivery, Meetings, Recording,
+  CallDetection, Updates. (`AppKit` is allowed in the few engine files that need
+  it for process work — `NSWorkspace`/`NSRunningApplication` for the identity of
+  a running app, opening a URL, leaving the app — and never for drawing; the
+  script allowlists them by path.)
+- **UI packages never touch disk, network, audio or models directly.** They read
+  observable state from the engine and call its methods.
+- **Sibling engine packages do not import each other** except through the
+  explicit edges above (`Transcription`/`Summarization → ModelDelivery`,
+  `CallDetection → Audio`). `Meetings` knows nothing about audio capture,
+  transcription or summarization: it stores what it is given.
+- **`Island → Audio` names values, never capture.** The idle face offers a
+  choice of what to record, and that choice is an `Audio.CaptureScope` built
+  from `Audio.ProcessSelector`s, so the island imports the package that owns
+  those two types. It starts nothing in it: the choice goes to
+  `RecordingSession.start(scope:)` like every other start.
+- **EchoCore is an allowlist, not a bucket.** Something enters it only if at
+  least three packages need it, it has no UI, and it is not a capability of its
+  own. Anything else stays with its owner even if two packages use it.
+- **DesignSystem has no dependencies and no product knowledge.** It does not
+  know what a meeting is.
+
+### 2.2 Why these twelve and not fewer
+
+- `Meetings` is below `Recording` because the pipeline persists into it; the
+  meetings *UI* is above `Recording` because it renders session state. Fusing
+  storage and UI into one "Meetings" package would force the cycle
+  `Meetings → Recording → Meetings`.
+- `ModelDelivery` is its own package because two engines share ~1 000 lines of
+  transport, progress and manifest code with their own tests and their own
+  external dependency, and because "first run: honest model download" is a
+  product surface that spans both models.
+- `CallDetection` is separate from `Island` because one is Core Audio process
+  metadata and a pure machine, the other is an `NSPanel`; they change for
+  different reasons and only the second needs `Recording`.
+- `Recording` is a package, not app code, because the orchestration holds the
+  most delicate invariants in the product and must be testable with fakes and
+  without a host app.
+- `Updates` is a package because it has network and process side effects and
+  its own tests; in the app target those tests would be hosted.
+
+### 2.3 Why not more
+
+There is no `Networking`, `Persistence`, `Logging`, `Utils` or `Models`
+package. Networking exists in exactly two places (`ModelDelivery`, `Updates`)
+and each owns its client. Persistence is `Meetings` for meetings and `EchoCore`
+for `settings.json`. Logging is `ErrorTrace` in `EchoCore`. There is no shared
+"models" package: `TranscriptSegment` is in `EchoCore` because it is the
+product's vocabulary; `MeetingMeta` belongs to `Meetings`; `SummaryDocument`
+belongs to `Summarization`.
+
+---
+
+## 3. Public APIs between packages
+
+Each package exposes a small `public` surface; everything else is `internal`
+(tests use `@testable import`). The surfaces below are the contract; file
+names inside a package are free to change.
+
+**EchoCore**
+- `TranscriptSegment`, `AudioChannel`, `Speaker`, `TranscriptUtterance.derive(from:)`, `TranscriptSegment.wordCount(of:)`.
+- `DataRoot`: `appSupport`, `meetings`, `models`, `logs`, `settingsFile`, `summaryDownloadStateFile`. No accessor creates directories; owners do.
+- `ErrorTrace.record(_:error:category:metadata:)`, `ErrorTraceLog` (prune, reader for tests).
+- `AppSettings` (`@Observable @MainActor`): typed read-only properties plus one mutator per preference. `showsIsland` (on by default) is the island's switch: it takes the panel away and nothing else — detection keeps running and the menu bar item carries the island (DEC-1). `lastOpenMeeting`/`noteOpenMeeting(_:)` keep the meeting the window last showed across a relaunch: navigation rather than a preference, but `settings.json` is the one small file that outlives the process, and v1 ignores a key it does not know. Two one-way flags for first run, for the same reason: `hasRequestedSystemAudio`/`noteRequestedSystemAudio()` (Echo has asked for System Audio Recording, so a check may run without raising the dialog on its own) and `hasLeftWelcome`/`noteLeftWelcome()` (the user left the welcome screen). `recentSearches` (newest first, at most `recentSearchLimit`, five; `noteSearch(_:)` trims and keeps one of any spelling, `forgetSearch(_:)`, `clearRecentSearches()`) is what the ⌘K palette offers while its field is empty — the user's own words, kept in this file on this Mac, for the same reason as `lastOpenMeeting`.
+- `LaunchEnvironment.current`: typed debug flags (`dataRootOverride`, `opensWindowAtLaunch`, `appearanceOverride`, `snapshotPath`, `snapshotScene`, `keepsRetainedAudio`, `installedVersionOverride`), populated only in DEBUG.
+- `TestHost.isActive`.
+- `AppIdentity`: `bundleIdentifier`, `logSubsystem`, `version` (`short`, `build`, `display`).
+
+**Audio**
+- `AudioConstants` (`sampleRate` 16 kHz, `channels` 1, `captureFormat`), `AudioLevelMeter.level(from:)`, `AudioDownmixer.toMono(_:)`, `BufferResampler`. The names are the PoC's, not this document's earlier sketch of `AudioFormat.canonical`: they are what the ported tests and the measured comments refer to. `captureFormat` is an `AVAudioFormat?` rather than a force-unwrapped value, and `AudioConstants.sampleRate` is deliberately a second declaration of the 16 kHz that `TranscriptionPass.sampleRate` also carries — EchoCore takes something only when three packages need it, and today two do. Recording is the third; that is when to lift it.
+- `MicrophoneCapture(onSamples:onLevel:onRawBuffer:)` with `start() async throws` / `stop()` / `requestPermission()`, and `SystemAudioCapture(onSamples:onLevel:)` with `start(scope:) throws` / `stop()` / `primePermission()` / `deliveryStats()` / `DeliveryStats` / `CaptureError`; `MicrophoneCapture.authorization` (`MicrophoneAuthorization`) reads the microphone's permission without asking. The callbacks are constructor parameters, not settable properties: both classes are `Sendable` and their callbacks run on the AVAudioEngine render thread and the Core Audio IO queue, so what those threads read has to be immutable. `SystemAudioCapture.start` is synchronous — the PoC's `async` came from a protocol requirement, and the protocol is gone (see below). `onRawBuffer` is the pre-downmix hook the DEBUG fixture recorder needs.
+- `CaptureScope` (`.everything` | `.app(ProcessSelector)`) with `scopedApp`, `ProcessSelector` (display name + ONE bundle-ID prefix + `scopeable` + `matches(bundleID:appBundleID:)`), `ScopedProcessResolution` (`ProcessEntry`, `includeSet(for:in:)`, `followUpdate(for:current:processes:)`). `ProcessSelector` is the capture-side half of the PoC's `CallApp`, which cannot come down here because `CallDetection` sits above this package; detection maps its catalog onto selectors, and the matcher stays one implementation so detection and scoping cannot disagree about what an app is. One prefix, not a list — the PoC matches on one and so does the catalog. `CaptureScope` has NO `indicatorLabel`: "Everything" / "Zoom only" is copy, `Meetings.CaptureScopeRecord.scopedDisplayLabel` already renders the persisted form, and the live label belongs to whichever surface draws it (ADR-003). The `CaptureScope` → `CaptureScopeRecord` mapping needs both packages, so it belongs to Recording.
+- `AECStage` (the seam: `processMicSamples`, `feedFarEnd`, `reset`), `PassthroughAECStage`, `WebRTCAECStage` (`isHealthy`, `onEngineEvent`, `init(failedEngine:)`), `SwitchingAECStage` (`currentMode`, `setMode(_:)`). `SwitchingAECStage` is what this document earlier called `EchoCanceller`; the protocol is kept because the switching stage genuinely consumes `any AECStage`. Both stages hold their state behind a `Mutex` rather than an actor: the mic path must return its processed samples to the same real-time callback that handed them over, which an actor hop cannot do.
+- `OutputRouteClass`, `EchoHandlingMode`, `EchoModeMachine` (+ `Event`, `Effect`), `EchoDegradationNotice`, `EchoBleedProbe` (+ `Verdict`). The offline echo-cancellation pre-pass is NOT here: it reads `Transcription.EnergyEnvelope` as well as this package's AEC stage, and no package below `Recording` sees both, so putting it here would mean a second copy of a measured type. It is disabled and unfinished in any case.
+- `InputDeviceMonitor(onDefaultInputChange:)` (+ `currentDefaultInputDevice()`, `start()`, `stop()`), `InputDeviceLifecycleMachine` (+ `Event`, `Action`, `DeviceID`), `InputDeviceNotice`; `OutputRouteMonitor(onRouteChange:onDefaultOutputDeviceChange:)` (+ `currentRoute()`, `start()`, `stop()`), `OutputRouteClassifier`. Both monitors register their Core Audio listeners on their own serial queues; the PoC used the main queue and `MainActor.assumeIsolated`, both artefacts of its main-actor default isolation.
+- `InputHealthClassifier` (+ `Event`, `Effect`, the tunable thresholds), `InputHealthTracker(onEffect:)` (+ `beginSession(generation:)`, `endSession()`), `InputHealthNotice`, `FanOutGateDiagnosticsSink`; `GateTerm`, `GateVerdict`, `GateDecisionRecord`, `GateDiagnosticsSink`, `OSLogGateDiagnosticsSink`; `LiveInputMonitor` (actor: `start`, `stop`, `ingest(_:from:)`, `noteCaptureGap(seconds:on:)`), `AudioStats`. The gate-diagnostics types arrive with the monitors because the classifier and the live monitor are both built on them. The classifier emits notices as VALUES and never touches the audio path — structurally, since `Effect` has no case that could. Where a notice is shown was #118's decision, not this package's: the island's recording face and the menu bar's menu (see Island).
+- `CaptureGapTracker` (`beginEpisode(now:)`, `noteDelivery(batchDuration:now:)`), `RetainedAudioWriter` (actor: `append`, `noteGap`, `finish`, `discard`, `currentAccounting`, `isDisabled`), `AppBundleIdentity`. `CaptureGapTracker` was lifted out of the PoC's `RecordingController`, which this rebuild replaces. `RetainedAudioWriter.init(directory:fileName:)` takes the retained file's name as a seam because the audio name families belong to `Meetings`, which sits above this package; Recording passes `MeetingStore.retainedAudioFileName`.
+- `FixtureRecorder` (actor, `#if DEBUG`) with `FixtureScenario`, `FixtureInfo`, `InputDeviceFacts`, `InputDeviceFactsReader`, and both `writeWAV` overloads — the one sanctioned way to record a fixture, with no AEC in its path on purpose. The PoC's `@Observable @MainActor` is gone: phase changes leave through a callback, because an engine package has no views.
+- **Not here, and where each goes.** The capability boundary cuts through several PoC files, and the audio→transcript direction is the common reason: this package may not import a sibling, so anything that needs Audio *and* Transcription belongs to `Recording`, the lowest package that sees both.
+  - The offline echo-cancellation pre-pass → `Recording` (see the echo-handling entry above). `EchoBleedProbe`, its first step, is here.
+  - `AECAcceptanceTests` → `Recording`, under `.acceptance`. It replays fixtures through `SwitchingAECStage` and then asserts on the segments the Parakeet pass produces; strip the transcription and no assertion is left.
+  - `ExternalInputMeasurementTests` → `Recording`. It transcribes fixtures for the same reason.
+  - `MicActivityMonitor` → `CallDetection`, per §2 and the boundary allowlist, even though issue #95 names it with the other monitors. Its process-enumeration technique is duplicated on both sides by necessity, since `Audio` cannot depend on `CallDetection`; both sides say so.
+  - `ScopeSelection` and `ScopeSelectionTests` → `Island` (ported with #104). They derive a selection from `CallDetection`'s state, which is above this package; `CaptureScope` itself stays here.
+  - `WaveformView`, `GlidingLevel` and their tables (`WaveformAmplitudeTests`, `GlidingLevelTests`) → `DesignSystem`, arriving with `Recording`. The level meter is a rendered primitive; this package only produces the numbers, per callback and never pre-averaged, so a consumer can window them in seconds.
+- `SystemAudioAccessProbe.check() async -> SystemAudioAccess` (`granted`, `denied`, `unknown`): whether macOS lets Echo hear the Mac's audio, read the one way measured to work (the #92 spike, 2026-10-19). A denied process tap comes up with `noErr` at every call and identical properties and delivers exact zeros, so silence cannot tell denied from nothing playing, and the private TCC preflight is right only at launch. The probe plays a 1 kHz tone at −80 dBFS and listens with a tap scoped to Echo's own process: granted, every sample it delivers is non-zero; denied, none is. It is also the request — the dialog is raised inside `AudioDeviceCreateIOProcIDWithBlock`, which blocks until answered — so it runs on a queue of its own, and its callers run it only once Echo has asked.
+- No `AudioCaptureSource` protocol. The PoC declared one and nothing ever consumed it polymorphically; its only effect was to force the two capture sources to share a surface they do not share.
+- No `@Observable` and no `@MainActor`. The observable façade over a session is `RecordingSession`, in Recording.
+
+**Transcription**
+- `ParakeetModel` (actor; `state`, `stateChanges()`, `initialize(deferWhile:)`, `readyModelDirectory()`, the identity constants `modelID`/`modelDisplayName`/`modelDisplaySize`/`attribution`, `modelDirectory(in:)` and `resolvedModelDirectory(in:)`). Built with an injected `modelsRoot` plus optional `modelsPresent`/`downloader`/`deferPollInterval` seams, so the lifecycle is testable without a 480 MB download. Since recording waits for this model (Recording, below), its state is followable from outside the actor — `stateChanges()` yields the state now and then each change, keeping only the newest for a slow listener — and a FAILED `initialize` leaves it callable again: the user's Retry, never an automatic loop. A successful one is still final for the launch. The two directory accessors differ on purpose: FluidAudio discards the last component of the directory it is handed and appends its own `Repo.folderName`, so `modelDirectory(in:)` is what the library is passed and `resolvedModelDirectory(in:)` is where the bytes land.
+- `TranscriptionPass.run(retainedFiles:model:shouldYield:onProgress:onEvent:) -> [TranscriptSegment]`, plus the shaping surface the tables exercise (`segments(from:text:duration:channel:silenceStarts:)`, `spanLevels(of:envelopes:)`, `readSamples(at:)`, `canStartSegment`, `carriesAWord`, `wordBoundary`) and the measured constants (`sampleRate`, `segmentGapSeconds`, `silenceSplitSeconds`, `maxSegmentSeconds`, `yieldPollInterval`).
+- `PassProgress` (the one clamped, monotonic fraction), `EnergyEnvelope` (`rms`, `silenceStarts`, `longestDominantRun`, `frameSeconds`, `silenceFloor`), `TranscriptionError`.
+- `PassEvent` — the structured replay sink (`channelDecoded`, `segmentProduced`, `segmentSuppressed`), carrying ids, spans and scores only. It replaces the PoC's `(String) -> Void` diagnostic sink, whose every line contained transcript text by construction; a harness that wants words reads them from the segments it already holds.
+- `EchoDedupPolicy` (also used by tests and diagnostics).
+- **Recorded, not compensated.** Defects the port carried across unchanged, because fixing any of them changes dedup or shaping output and the constants were tuned with them present (ADR-006). Measure with `ECHO_ACCEPTANCE=1 make test-package P=Transcription` before touching one. `spanLevels` measures `own` over the whole segment span but `other` only over what the shorter channel covers, because `EnergyEnvelope.rms` clamps to its own frame count: it breaks the same-window invariant `SpanLevels` documents and can suppress real speech near a shorter channel's end, which is the false deletion the whole policy exists to prevent and the worst of these. A channel under 0.3 s (4 800 samples) throws FluidAudio's `ASRError.invalidAudioData` unmapped, aborting the pass and discarding the other channel's finished transcript; only `samples.isEmpty` is guarded. `readSamples` validates `commonFormat` but never the sample rate, though 16 kHz is hard-coded for envelope framing, silence instants and model input. The block read advances by the requested count rather than `buffer.frameLength`, so a short read shifts the rest of that channel's timeline. Model download reports through one unstructured `Task` per progress callback (~10^4 for 480 MB), nearly all of them discarded by the forward-only guard.
+
+**Summarization**
+- `TextGenerating` (the seam: `stream(system:user:params:) -> AsyncThrowingStream<String, Error>`, raw deltas, and terminating the stream cancels the generation) and `GenerationParams` with its three presets — the NDJSON defaults, `.markdownSummary`, `.caption`. The penalty WINDOW is not on the params: all three penalties run over 64 tokens and that lives in `MLXTextEngine`, because it is a property of the runtime and applies to every generation.
+- `Summarizer(modelName:)` (actor): `generate(from:using:onProgress:) -> AsyncThrowingStream<SummaryDocument, Error>`, `mapChunk(_:engine:language:)`, `mergeMapResults(_:)` (nonisolated), `reduceMarkdown(facts:notes:engine:language:)`, `caption(for:using:) -> String?`, `detectedLanguage(of:)`, `estimatedTokens(of:estimator:)`, `singlePassBudget`. The signature differs from this document's earlier sketch of `generate(from:language:)` on purpose: the language is DETECTED, never supplied, because a caller who can pass one can invent one, and detection across the whole transcript with a 0.6 floor is a defended behavior. It is exposed as `detectedLanguage(of:)` for tests and diagnostics.
+- `SummaryDocument` (markdown, facts snapshot, detected language, model name, `isFinal`) and `SummaryPhase` (`mapping(part:of:)`, `reducing`, `finished`). `isFinal` marks the ONE element a caller may persist; a cancelled or failed generation emits none, and the stream throws instead. Its markdown is never blank on a final document — an empty reduce with grounded facts renders them through `MergedFacts.markdown`, and an empty reduce with no facts throws. Progress is a typed phase rather than a sentence, for the reason `ModelDelivery` reports a phase and a fraction.
+- `SummaryDecision`/`SummaryActionItem`/`SummaryOpenQuestion`/`SummaryRisk`, `ChunkMapResult`, `MergedFacts` (`isEmpty`, `markdown`), `SummaryMerge.merge`, `SummaryDedup`, `SummaryLimits`, `NDJSONLineValidator.isValid` (never throws; wider than any live phase on purpose).
+- `SummaryModel` (actor; `modelID`/`modelDisplayName`/`modelDisplaySize`/`idleTimeout`/`snapshotSpec`, `state`, `stateChanges()`, `refreshState()`, `snapshotExists()`, `partialDownloadBytes()`, `ensureReady()`, `ensureDownloaded()`, `withEngine(_:)`, `acquireEngine()`/`releaseEngine()`, `pauseDownload()`/`resumeDownload()`/`isDownloadPaused`, `unload()`), `SummaryModelState`, `SummaryEngineLoader`/`SummaryModelDownloader`, `IdleReleaseScheduling`/`TaskIdleReleaseScheduler`, `SummaryModelError`. Built with a required `modelsRoot` and `pauseStateFile` plus optional loader, downloader, existence, partial-bytes, scheduler, timeout and pause-store seams, so the lifecycle is testable without a 3.3 GB download, a Metal device or a real clock. `ensureReady` and `ensureDownloaded` differ on the pause and must not be unified: the eager fetch honors a paused intent, a summary the user set in motion does not. `state` owns the paused-versus-failed distinction, keyed on the persisted intent rather than on a `CancellationError` that cannot be told apart at the catch site; `refreshState` resolves `ready > failed > paused > partiallyDownloaded`, so a failure notice outlives a refresh.
+- `SummarizationError` (`emptyTranscript`, `modelUnavailable`, `emptyModelResponse`). No cancelled case, and transport failures arrive as `ModelDeliveryError` unwrapped — the disk floor, the stall and the integrity check are that package's, and so is their copy.
+- `TranscriptChunk`, `ChunkAssembler`, `TranscriptChunker`, `ChunkingConfig`, `TokenEstimating`/`HeuristicTokenEstimator`. Ownership resolved as §2 always had it: chunking is the map route's input stage and its only consumer is the summarizer. The Transcription port landed it there first because issue #87 grouped it with dedup as one shaping layer, and a sibling cannot be imported, so the file moved here when this package opened rather than the graph gaining an edge for one struct. Routing shares this estimator rather than a copy of its arithmetic, so the route boundary and the chunk boundary cannot disagree about what a transcript costs.
+- **Recorded, not compensated.** `ChunkAssembler.runningTokens` counts the seeded overlap head, so `minChunkTokens` and `targetTokens` can be satisfied by mostly duplicate content. It arrived with the chunker from the Transcription port, and changing it reshapes every chunk boundary the routing budget was measured against (ADR-006).
+- No `@Observable` and no `@MainActor`. `SummaryModel.state` is the truth, on the actor; a UI-facing observable over it belongs to whichever package renders it, and must not become a second copy (ADR-003).
+
+**ModelDelivery**
+- `SnapshotDownloader(modelsRoot:spec:diskFloor:)`: `snapshotDirectory`, `manifestFileURL`, `partialDownloadDirectory`, `snapshotExists()`, `partialDownloadBytes()`, `download(progress:)`; `SnapshotSpec` (repo id, weight/config globs, manifest and partial-directory names), `SnapshotDownloadPhase`.
+- `ResumableFileDownload`: `fetch(from:expectedBytes:into:progress:)`, `resumeDecision(partialBytes:expectedBytes:)`, `Resume`, `byteCount(at:)`.
+- `DownloadProgress` (the one clamp), `DownloadRetry.withStallRetry(attempts:stallTimeout:watchdogInterval:onRetry:operation:)`.
+- `SnapshotDownloadBudget`, `SnapshotDownloadTally`, `SnapshotManifest`.
+- `DownloadPauseStore` (protocol) and `FileDownloadPauseStore(fileURL:)`, `RetiredModelCleanup.run(retiredRepoIDs:retiredFileNames:modelsRoot:remove:)`, `DiskSpace`, `ModelDeliveryError`.
+- **Recorded, not compensated.** Three defects inherited from the PoC, left as they stand because fixing them changes behaviour and only a real multi-GB download can measure the change (ADR-006). An uppercase etag would read as corruption — `isSHA256` accepts any hex case, `sha256Hex` emits lowercase, and `commitWeightFile` compares with `==` — so a good weight file would be deleted and fetched again forever; the Hub returns lowercase today, and `SnapshotIntegrityTests` pins the current behaviour with a comment. `SnapshotDownloadTally.noteWeightBytes` keeps a high-water `max`, which discards the legitimate restart from zero after a 416 heal or a 200 answer to a Range request: the fraction freezes until the re-download passes the old mark, and that fraction is also the stall watchdog's heartbeat, so the heal path can be cancelled as a stall. A nil `metadata.size` is absorbed as `0`, so the budget can fall to zero, the fraction never moves, and the already-committed skip can never fire; `missingFileMetadata` would be the honest response.
+- No `@Observable` and no `@MainActor`: progress leaves as a phase and a fraction, and the model's observable state belongs to the package that owns the model. The pause gate and the shared download task live with that owner too.
+
+**Meetings**
+- `MeetingStore` (actor): `save`, `listMetas`, `loadMeta`, `loadRecord`, `updateMeta`, `delete`, `replaceTranscript`, `recordTerminalProvenance`, `attachSummary(markdown:caption:modelName:to:)`, `removeSummaryArtifacts`, `migrateLegacySummaries`, the audio name families and their classification, adoption, preservation, cloning and deletion.
+- `MeetingLibrary` (`@Observable @MainActor`): `metas`, `trashedMetas`, `storage`, `refresh()` (reads only), `foldLegacySummaries()`, `purgeExpiredTrash()`, `backfillWordCounts()`, `loadRecord`, `rename`/`trash`/`restore`/`deletePermanently`/`emptyTrash`, preserved-audio queries and deletions (`hasPreservedAudio(for:)`, and `canRetryTranscription(_:)` for a failed meeting that still holds its audio), `measureStorage()`; `store` for the pipeline.
+- Search, in `MeetingLibrary`: `prepareSearch()` (reads every meeting's words, live and trashed, the first time it is asked, and returns once they are read; from then on each `refresh()` re-reads the meetings whose header changed and forgets the ones gone), `search(_:)`, `isReadingForSearch`, `searchRevision` (moves as the index takes in what it read, so a query asked meanwhile is asked again). `MeetingSearchQuery.parse(_:scope:now:calendar:)` turns a typed line into terms — folded words matched as the start of a word, a single letter as a whole word, quoted phrases — and filters: `you:`/`others:` (the channel), `today`/`yesterday`/`week`/`month`, a month by name and `2026-10`/`2026-10-14`, `app:zoom` (the app a capture was limited to — `CaptureScopeRecord.appName`, so a capture of everything never answers; `app:"google meet"` for a name with a space), `>30m`/`<15min`/`>1.5h`, `has:summary`, `is:failed` (a terminal failure, the sidebar's rule), `in:trash`; quotes take a filter word back. `admits(_:)` is every filter that reads the header alone. `MeetingSearchScope` (`all`, `titles`, `summaries`, `transcripts`). `MeetingSearchHit`: the meta, the title's highlights, and the line under it — the description when every term is in the header, else the summary line or the transcript turn (with its id, speaker and start) holding the most terms, cut to start near the first match. Internally `MeetingSearchIndex` (a value: passages per meeting, which words occur in which passage, which meetings hold each word, and every word sorted so a prefix is a range) behind the `MeetingSearchIndexer` actor, which reads through `MeetingStore`. The index lives in memory only and is rebuilt from disk each launch: a reading of the meetings, not a copy of them (ADR-003), and nothing a v1 that shares the folder could leave stale.
+- `MeetingMeta`, `MeetingRecord` (`summaryMarkdown: String?`), `TranscriptProvenance`, `CaptureScopeRecord`, `LegacyMeetingSummary`, `StorageBreakdown.measure` (with each trashed folder's own bytes for Trash's rows, and each meeting's kept recording for the menus that re-transcribe or delete it), `MeetingExport` (markdown / plain text / standalone summary / standalone transcript, one paragraph per turn), `MeetingListSelection` (pure keyboard rules), `MeetingStoreError`.
+
+**Recording**
+- `RecordingSession` (`@Observable @MainActor`): `phase` (`idle` | `recording(startedAt:scope:)` | `stopping` | `finalizing(meetingID:progress:)` | `summarizing(meetingID:)`), `levels`, `notices`, `currentMeetingID`, `queuedMeetingIDs`, `terminalFailureMeetingIDs`, `start(scope:)`, `stop()`, `retryTranscription(_:)`, `retranscribe(_:)`, `requestSummary(_:)`, plus the two the composition root calls at launch: `resumePendingFinalizations()` and `kickSummaryBackfill()`.
+  - `phase` is COMPOSED, not assigned. Three owners contribute to it — this object drives capture, `FinalizationDriver` publishes the running pass, `SummaryScheduler` publishes the meeting being summarized — and assigning one field from three places is how a phase ends up briefly wrong. The specific wrongness it avoids is a flash of `.idle` between a pass finishing and its summary starting, which is exactly the gap that made "summarizing" invisible in the PoC (issue #94). Capture wins the precedence: whatever post-stop work is in flight, a live recording is what the user is doing. `recording`'s `scope` is the EFFECTIVE coverage, so a scoped tap that failed reads `.everything` and the widening is visible.
+  - `queuedMeetingIDs` and `terminalFailureMeetingIDs` are published by the driver, not re-derived here — the exception ADR-003 allows for state the owner exposes, and what the display resolver needs to offer a Retry.
+  - `levels` is computed at read time, because staleness is a function of *now*: a channel whose device disappeared has to fall to the resting line without a callback arriving to push it there.
+- **The summary as it is written, and why one failed**, for the document's Summary tab: `summaryDraft` (`SummaryDraft`: the meeting and the Markdown the model has produced so far, published by the summary scheduler as each partial document arrives and withdrawn when the generation ends, however it ends — shown, never persisted; only a clean stream's final document is written) and `summaryFailures` (meeting → the reason its generation threw this run: the error's own `errorDescription`, else a plain sentence; a model-level failure blames no meeting and stays the model's state; in-memory like the scheduler's own failure set, and cleared by `requestSummary(_:)`).
+- `RecordingPhase`, `RecordingNotice` (`Kind` declaration order IS render order, so a health notice can never displace an active device-lost one), `CaptureLevels`.
+- **Recording waits for the transcription model** — the product owner's decision of 2026-10-02, reversing a behavior v1 defended ("recording never waits for a model", discovery §7): a meeting captured with nothing on disk to transcribe it is audio the user cannot read. The summary model never gates; the first-run screen's "Record without notes" is a transcript without a summary. Three pieces:
+  - **One door.** `start(scope:)` returns `RecordingRefusal?` (`@discardableResult`): it asks the model itself, from disk (`readyModelDirectory()`, the check the pass makes), and with nothing there starts nothing — no capture, no permission prompt — and says why. `nil` for every other outcome.
+  - **One observable reading.** `readiness` (`RecordingReadiness`: `ready`, `waitingToDownload`, `downloading(fraction)`, `downloadFailed(reason)`) is what the surfaces read to hold Record back and say why; `waitingFor` is that why as the one sentence they all show ("Transcription · " and the models artboard's state, `nil` when ready), kept with the value because the island's faces, its menu and the window's title bar each say it. It is the model's state as the model announces it through `stateChanges()` — published by the owner and only repeated here, the arrangement the finalization snapshot already uses and the exception ADR-003 makes — so there is no second copy, and the door never trusts it. It reads as waiting until the launch starts following the model.
+  - **The launch fetch.** `prepareModels()`, called once from `AppComposition.start()`, follows the model, runs `ParakeetModel.initialize(deferWhile:)` (deferring while capture is live), then the summary model's eager download — `refreshState()` and `ensureDownloaded()`, which honours a pause and never loads weights — and kicks the summary backfill when it lands. Without it a fresh install fetched nothing until a recording's prefetch, which a recording that waits for the model could never reach. `retryTranscriptionModel()` is the menu's Retry after a failed fetch.
+  - **The summary model, published the same way.** `summaryReadiness` (`SummaryReadiness`: `waitingToDownload`, `downloading(fraction)`, `paused`, `incomplete`, `loading`, `ready`, `failed(reason)`) is `SummaryModel.state` as that actor announces it through `stateChanges()`, repeated and never copied, for the models panel and the welcome screen. It gates nothing. Its own vocabulary for the reason `RecordingReadiness` has one: the surfaces that draw it import neither model's package. `prepareModels()` reads the summary model's state from disk before the transcription model's fetch rather than after it, because that fetch can take minutes and a model already on disk must not be drawn as waiting meanwhile; the summary download itself still waits its turn. The panel's verbs are `pauseSummaryModelDownload()` and `resumeSummaryModelDownload()` — the second is Resume, Resume download and Retry alike, because the model treats all three as the user acting on a stopped download — and a pause ends the launch fetch without a trace, since it is the user's choice and not a failure. `OnDeviceModel.transcription` / `.summary` carry each model's display name, size and attribution up from its owner to the packages that draw them.
+- **Capture permissions**, for the welcome screen's rows: `microphoneAccess` and `systemAudioAccess` (`CaptureAccess`: `undecided`, `denied`, `granted`), `refreshCaptureAccess()`, `requestMicrophoneAccess()`, `requestSystemAudioAccess()`, `systemAudioAwaitsRelaunch`. Neither read asks. The microphone's is read from macOS every time. System Audio Recording has no public way to be read, so it is TCC's record, read once a run (`SystemAudioAccessProbe.recordedDecision`, the private preflight, right only on its first call in a process); Allow raises macOS's dialog with a throwaway tap and sets `systemAudioAwaitsRelaunch`, and the welcome's row then says Requested and offers Quit & Reopen (`AppComposition.relaunch()`, which reopens Echo on the welcome with `--welcome`), where the answer is read — macOS's own way with this permission (product owner, 2026-10-22). `AppSettings.hasRequestedSystemAudio` records that Echo has asked; the request sets it, and so does the record gesture's primer. The microphone's read and request, the system-audio request, its record and the probe are seams in `CaptureFactories`. The tone probe (`SystemAudioAccessProbe.check`) is kept for one job: every session runs it once its own tap is up, off the start's path: refused, it raises `RecordingNotice.Kind.systemAudioOff` (ranked with the lost microphone) and goes on with the microphone — for the whole session, because a running tap never picks up a grant made meanwhile.
+- `FinalizationMachine` (pure; exposed for the display resolver and tests), `SummaryBackfillPolicy` (pure).
+- Internal: `FinalizationDriver`, `SummaryScheduler`, `FinalizationPreemptionSignal`, `LevelWindow`/`ChannelFrameCounter`, `CaptureScopeRecord.init(capturing:)`.
+- **The seams live here, not in `Audio`.** `MicCapturing`, `SystemCapturing`, `InputDeviceWatching`, `OutputRouteWatching` and `EchoCancelling` are Recording's protocols over Audio's concrete classes, plus `TranscriptionPassRunning`, `SummaryGenerating`, `CaptionGenerating` and a permission primer, all bundled as init parameters. `Audio` dropped the PoC's `AudioCaptureSource` because nothing consumed it polymorphically; Recording IS that consumer, since no package test may open a microphone, start a process tap, raise a TCC prompt or load a 480 MB model. Two capture protocols rather than one, because the starts genuinely differ (`start()` awaits a permission check; `start(scope:)` is synchronous and takes coverage), and the callbacks are outside the protocols because every one of those classes takes them at `init`.
+- **Ported, not rewritten** (ADR-006): `FinalizationMachine` and `FinalizationPreemptionSignal` (from `FinalizationCoordinator.swift`), `SummaryBackfillPolicy` and `ChannelFrameCounter` (from `RecordingController.swift`), and the level window's two constants and its prune (from `RecordingState.swift`). Isolation is the only change: `nonisolated` goes, and the signal's `NSLock` becomes a `Mutex`, the swap `Audio` made to `CaptureGapTracker`. Their PoC suites came with them and passed unmodified, which is the acceptance criterion.
+- **Rewritten**: everything else. `RecordingController` (1 821 lines) had no injection seams and therefore no tests for any orchestration; `FinalizationCoordinator` (542) had settable `var` seams that no test ever set. What survives is the ORDER of things, because that is where the measurements are. The orderings that are not obvious from the code they call, each with its reason in the source: the AEC reference tap comes up before the scoped tap; `deliveryStats()` is read before `stop()`, which clears the fields it reports from; `LiveInputMonitor.stop()` runs before `InputHealthTracker.endSession()`, or the session's last chunks classify into an inert tracker; a capture callback's gap and samples travel in ONE task; `stop()` is called on any failed tap start, because `SystemAudioCapture`'s global path does not unwind its own half-built topology; and the persist order is finish → save → adopt, because `save` creates the folder that `adopt` moves into.
+- **`RecordingState` is gone.** Its `isRecording`/`startedAt`/`captureScope` described one lifecycle from three angles and became `phase`; its live-transcript half had nothing to hold, since nothing transcribes during a recording.
+- **Staleness** is two named predicates over one `sessionGeneration` — `isCurrentSession` for post-stop work that must outlive the phase, `isCapturing` for anything that may only touch a live session — replacing the PoC's eight inline conjunctions (§6).
+- **`EchoCancellationPrePass` is not ported, and that is closed.** Measured 2026-08-10 across the nine meetings on disk holding a kept audio pair, replayed with the stage on and off: the probe fires on four and correctly skips the five with no speaker path, and where it fires only 75–84 % of the user's own vocabulary survives, against the ≥ 90 % the plan set as its gate — while the bleed it removes runs from most of it, to none, to worse than before. The near-end ratio is not the lever: swept 0.50 → 0.05 over two replays, preservation moved 0.622 → 0.671 and 0.820 → 0.848, so a tenfold change buys five points. The lost words fail the silence floor beneath the guard, not the guard. Losing the user's own words is also the worse failure, because the summary is grounded in the transcript: a word deleted here is gone from the notes, while surviving bleed is only misattributed and the teammate's row still carries it. Reopening this needs a new sweep clearing the gate, and the lead is the floor, not the ratio.
+- **Recorded, not compensated.** Inherited defects Recording must not "fix" without a measurement: summary Markdown is not monotonic (it shrinks across the map→reduce boundary and across the internal retry); the single-pass route yields no facts, so `document.facts` is empty for every short meeting; `SummaryModel.unload()` deliberately leaves `state` at `ready` and `refreshState()` deliberately keeps `.failed` sticky; and `ModelDelivery`'s progress tally can freeze the fraction that is also the stall watchdog's heartbeat, so a healthy from-scratch download can arrive here as `.failed(downloadStalled)` — unmeasured, and not this package's to fix. Compensated on purpose, because it is a reporting gap rather than a measured behavior: the long summary route does not emit `SummaryPhase.finished` on its failure paths, so the scheduler clears its state on stream completion-or-throw and never on `.finished`. Audio's own open items are recorded in its entry above; the two that reach this package's wiring are that a failed tap start must be stopped explicitly, and that the AEC health hook reports transitions only, so a route round trip can leave the engine down with no degradation notice.
+- **One behaviour was fixed rather than carried**, because the scheduler is a rewrite and not a port: the PoC consumed `requestedSummaryID` before asking the policy, so an explicit request whose meeting happened to be ineligible at that instant was silently lost — a user could press Generate and have nothing happen. It now survives to the next trigger.
+- **Left for phase 2**: the display resolver over `phase` + `MeetingMeta` + the machine, the preserved-recording bar, and the level meter in `DesignSystem` (this package produces the numbers, per callback and never pre-averaged, and windows them in seconds). The launch-time model acquisition and both models' observable states are done (above). Meetings left pending by a missing model are not re-queued when the launch fetch completes; they resume at the next launch, as before.
+
+**CallDetection**
+- `CallAppCatalog`: `apps` (the curated table, in attribution order), `match(bundleID:appBundleID:browsers:)`, `matchedApps(from:disabledNames:browsers:)`, `detectableDisplayNames(browsers:)`, `uniqueDisplayNames`. The entries are `Audio.ProcessSelector` values, not a `CallApp` of this package's own: the app the island names is the app a scoped tap narrows to, and one matcher for both is what keeps detection and scoping from disagreeing about what an app is. `matchedApps` is the disabled-apps filter at the single matcher call site — filtered here, so an app the user silenced is invisible to the island, the scope dropdown and auto-scope alike.
+- `BrowserCatalog.installed()`: every browser LaunchServices registers for `https`, deduped, in its order, cached for 60 s behind a `Mutex` (the callers are threads, not actors — `AppBundleIdentity`'s reason). Display names are the bundle's file name, never `CFBundleDisplayName`, because the disabled-apps setting is keyed on that string and it has to survive an OS language change.
+- `MicCaptureClient` (pid + both identities), the vocabulary the monitor produces and the catalog reads. A value type rather than one nested in the monitor, so the pure half of this package is complete without it.
+- `CallSessionMachine` (pure struct: `Phase`, `Event`, `Action`, `handle(_:) -> [Action]`, and the observable-by-tests state `enabled`/`phase`/`currentApp`/`appsThisCall`/`isRecording`/`isHovered`/`dismissedThisCall`/`keptRecordingLatch`/`face`; `appsThisCall` is what lets an app JOINING a call be told from the ones already in it, so a second meeting under an app that never lets the mic go still gets offered), `CallDetectionTiming` (3 s debounce, 30 s grace, one 10 s retract for every face that retracts — the product owner's decision, and `startRetractTimer` carries no interval so the faces cannot drift apart again), `IslandFace` (the PoC's four faces; the redesign's six are the island's work).
+- Two product lines are structural, not review comments: `requestStartRecording` is emitted from exactly one handler, so no sequence of detection or timer events can start capture; and every path out of `endGrace` either stops the recording or is the user's deliberate choice to keep it. Both are swept over every 4-event sequence in the tests.
+- `Action.openDashboardToSavedMeeting` is `openWindowToSavedMeeting` here: v2 has a main window, not a dashboard. That is the only rename the port makes.
+- `MicActivityMonitor(onClientsChanged:)` (`Sendable`): `start()`, `stop()`, `currentClients()`. The thin Core Audio shim — the process-object list plus one wildcard listener per process, 80 ms-coalesced, reported only on a real diff, Echo's own process excluded. The wildcard address is not decoration: registering the exact `isRunningInput` address on a process object succeeds and then never delivers, so the exact address means detection silently never fires. Its listeners run on the monitor's own serial queue, not the main queue as in the PoC. The PoC's `ECHO_MIC_DUMP` probe (a 2 s poll of the whole process table) does NOT come across: it was the instrument for the FaceTime and Safari questions, both answered and now table-tested, and it would cost a `LaunchEnvironment` flag nothing reads. The per-change diff log stays, identifiers only.
+- `CallDetector` (`@Observable @MainActor`): `face`, `graceDeadline`, `appsInCall`, `start()`/`stop()`, the two pieces of news from above (`recordingChanged(_:)`, `hoverChanged(_:)` — the pointer is the island's to see, the retract it suspends is the machine's to decide), and the five taps. It owns the monitor, the machine and the three timers, and holds no policy — every decision arrives as an `Action`.
+- `CallDetectionRequests` (`@MainActor`): `startRecording(CaptureScope)`, `stopRecording() async`, `openSavedMeeting()`. Starting and stopping belong to `Recording` and the panel belongs to `Island`, both ABOVE this package, so detection asks with exactly three verbs and whoever wired it acts. `stopRecording` is `async` because "Meeting saved" must not lie: the actions after a stop request are applied on the far side of it, so the face follows persistence. `recordingChanged(_:)` is pushed in for the same reason — this package cannot observe a session it sits below.
+- Internally three seams the tests drive: the watcher factory (its callback is main-actor isolated, so the hop off the monitor's queue is the live factory's business and a test can deliver a report synchronously), the installed-browser reader, and `TimerArming` — which arms a one-shot timer and returns its cancellation. The tests assert which timer was armed and for how long and fire it by hand; what firing MEANS is the machine's table, tested there. No test sleeps.
+- **Not composed at launch.** `AppComposition` does not build a `CallDetector` yet. Detection with no panel would count down and auto-stop a recording with nothing on screen to say so, which is exactly the surprise the countdown exists to prevent. The island's shell wires it.
+- **Inherited wrinkle, recorded not compensated**: `cancelGraceTimer` clears `graceDeadline` while the `endGrace` face is still up, so for as long as the stop takes to persist, that face has no number to render. The PoC behaves the same way. Whichever surface draws the countdown decides what a deadline-less end-grace face looks like.
+
+**Updates**
+- `ReleaseVersion` (`Comparable`: the numbers behind a `vX.Y.Z` tag, trailing zeros normalised away, a pre-release sorting before the release it precedes) plus `ReleaseVersion.installed` — the version this build claims to be. That last one reads `AppIdentity.version.short` and `LaunchEnvironment.installedVersionOverride` from here rather than living in `EchoCore`, because `EchoCore` sits below this package and may not name a `ReleaseVersion`. `ECHO_INSTALLED_VERSION` is how the "update available" path is exercised from a dev build, whose own 1.0 is ahead of every tag; there is no `#if DEBUG` in this package, because `LaunchEnvironment` already made that decision.
+- `GitHubReleaseFeed`: `repository`, `defaultBranch`, `releasesPageURL`, `latestReleaseAPIURL`, `installScriptURL`, `installCommand`, `latestReleaseRequest(appVersion:)`, `decodeLatest(_:)`. Every URL a user can reach derives from the one repository string, and a test holds the README, `scripts/install.sh` and the release workflow to the same install command — what keeps a rename or a fork from leaving one behind. Plus `LatestRelease` and `UpdateCheckFailure` (`message` is the sentence Settings shows).
+- `UpdateChecker` (`@Observable @MainActor`): `status`, `isChecking`, `lastCheckedAt`, `lastInstallFailure`, `availableRelease`, `check()`, `startAutomaticChecks(initialDelay:interval:isEnabled:)`/`stopAutomaticChecks()`, and the two pure statics `evaluate(installed:latest:)` and `fetchLatest(transport:appVersion:)`. `status` is the last *answer* and survives a re-check — `isChecking` is separate — so "Update available" never flickers off while the daily check is in flight; concurrent callers (the timer and a click) share one request; `isEnabled` is read at every tick, so the preference needs no restart.
+- `UpdateInstaller(dataRoot:)`: `logURL`, `failureReportURL`, `takeFailureReport()`, `updateAndRelaunch()`, and the pure `updaterScript(_:)`/`shellQuoted(_:)` over `UpdaterPlan`. The data root is injected rather than global, so `update.log` and `update-failed.txt` hang off the root this Echo was launched with and a test never touches the real folder. `openReleasePage(_:)` lives here too: it and `updateAndRelaunch()` are process work rather than drawing, which is what the `APPKIT_ALLOWLIST` entry for this file is for. The pasteboard does not — it already has an owner in `Workspace/MeetingActions.swift`.
+
+**DesignSystem**
+- `EchoColor` (semantic tokens for both appearances: surfaces, the two hairlines `divider` and `border`, the text steps, accent and its wash, recording) and `EchoColor.Island` (the island's own palette, pinned in both appearances because the shell is black in both), `EchoFont` (the scale over the two bundled typefaces, and the launch-time registration the composition root calls), `EchoMarkGeometry` (the mark's outline on its grid — CoreGraphics only and self-contained, so `make app-icon` compiles the same file rather than a copy of its numbers) `EchoMark`/`EchoMarkHalf` (the view, with the clear space and the minimum size built in and a seam that never falls under a device pixel) and `EchoMarkImage` (the same outline as an `NSImage`, template or inked, for the menu bar), `EchoClock` (elapsed whole seconds and the two ways the design writes them), `EchoFont.nsMono` (the monospaced face as an `NSFont`), `EchoSpacing`, `EchoRadius`, `EchoLayout` (the window's fixed dimensions), `EchoControl` (the controls' own geometry), `GlyphGrid`/`RecordGlyph` (the artboards' 16 × 16 glyph grid, and the Record dot the island's capsule and the window's New recording share), `EmptyGlyph`/`EmptyGlyphShape` (the six glyphs of the empty and broken screens, on the 24 × 24 grid), the window's primitives (`EchoButtonStyle` roles — the primary with the held-back look the design draws for it, the square quiet one the breadcrumb's "…" takes, the red outlined control and the red quiet button Trash removes things with, and the control with a darker edge that sits inside a list row — `StatusBadge` (the live one with its red dot), `PropertyRow`, `TabStrip`, `EmptyState` (glyph, title, sentence and the one action out, bare and centred), `SelectableRowChrome`) and the island's (`IslandButtonStyle` roles, `IslandIconButtonStyle`, `ValueChip`, `LevelGauge`), `DesignGallery` (DEBUG). The token enums are `nonisolated`. The island's controls are a separate family from the window's while DEC-4 is open.
+
+**Workspace**
+- `WorkspaceWindow(dataRoot:globalShortcut:startRecording:)` (root view; `globalShortcut` is Record and Stop from anywhere as the menus write it, the app target's, which the keyboard shortcuts panel lists; `startRecording` is the composition root's gated start with the shared capture, because the capture choice is the island's and Workspace cannot see it, and it returns once the start has landed so the window shows the session only when there is one), `WorkspaceModel` (`@Observable @MainActor`: `section` — `meetings`, `recording` for the session being recorded, `trash`, `settings` — `selectedMeetingID`, `selectedTrashedID`, `openedTrashedID` (a trashed meeting's document, looked at from Trash with `openTrashed(_:)`, left with `closeTrashed()` or `showTrash()`; `moveTrashSelection(_:in:)` for its arrows), `documentTab`, `sortOrder`, the ⌘K palette's state — `isSearchPresented` (`presentSearch()`/`dismissSearch()`/`toggleSearch()`), `searchText` and `searchScope`, which outlive it, and `open(_:otherTab:findText:)`, which opens a result where its line is and leaves a `TranscriptFindRequest` the document takes once (`takeFindRequest(for:)`) to land find on the turn shown — the selection rules — `settleSelection(in:lastOpen:)` among them: the window never shows nothing selected while there are meetings, and opens on the meeting last open or, when that one is gone, the most recent — and `showLiveSession()`/`liveSessionEnded(savedMeeting:)`: when capture ends while the window shows the session, it opens the meeting the stop saved; a stop made anywhere else moves nothing), `MeetingSortOrder`, `MeetingSort` (the sidebar sorts and never filters: search is the palette's), `MeetingDateGroup`, `MeetingStatus.resolve`, `MarkdownDocument.parse`, `MarkdownRendering`, `MarkdownView`.
+- The Summary tab between Stop and the notes (`SummaryFace`, a pure resolver over the meeting, `phase`, `queuedMeetingIDs`, `summaryReadiness`, `summaryDraft` and `summaryFailures`; drawn by `SummaryFaceView`): the final pass with its real percentage, waiting behind the meeting ahead in the queue (or the one being worked on), the summary model loading, generating, the notes streaming in (`MarkdownView(markdown:showsCursor:)`, with "Writing" beside the tabs), settling — the last of the draft held until the written notes are read back, so the tab never flashes "No summary yet" — and a failed generation with its reason, Generate summary (`requestSummary`) and Copy transcript. With no work under way and no notes, Generate summary is offered as soon as the transcript is in and the summary model is on disk — with automatic summaries off it is the only way to get notes — and not before: without the model a request would start a download this tab has no face for. The Transcript tab wears the pass's two faces while there is no transcript.
+- The keyboard shortcuts panel (`ShortcutsPanel` over `ShortcutsList`, a pure list of everything the keyboard can do in Echo, grouped by where it works — Echo's own shortcuts, the navigation, and what macOS gives every app that holds here too: the menus and how to reach them, text fields, dialogs, an open menu; a hosted test fails when a menu shows a shortcut the panel does not list): over the window, the welcome screen included, on the palette's surface (`PaletteChrome`: `paletteSurface()`, `PaletteGroupLabel`, `PaletteRule`, shared by both panels). It is opened by ⌘/ — bound by the app target's Help › Keyboard Shortcuts — and by the palette's Keyboard shortcuts action; Esc, ⌘/ or a click outside put it away. `WorkspaceModel.isShortcutsPresented` (`presentShortcuts()`/`dismissShortcuts()`/`toggleShortcuts()`); it and the palette are never up together, and any change of section puts both away. While it is up, `ShortcutsPanelKey` (a pure rule, read by a local monitor in its window) closes it on Esc, lets every command through to the menus and the window, and stops every other key at it, so nothing acts on the list beneath. The design does not draw it (product owner, 2026-10-22). With it came the window's navigation: the meeting list has the keyboard whenever the meetings are shown (as it opens, and back from Trash or Settings), its row follows the selection wherever the selection moved from, ⌥⌘↑ ↓ move between meetings from anywhere in the window, and ⌘1 ⌘2 pick Summary or Transcript while a document is shown (`WorkspaceModel.showsDocument`).
+- The ⌘K palette (`SearchPalette` over `SearchPaletteList`, a pure list of the results — fifty drawn, every one counted — then the actions, with the keyboard's walk and ⌘1–⌘9): over the window, opened by ⌘K from anywhere in it and by the sidebar's Search row, put away by any change of section. It reads `MeetingLibrary.search` and asks the library to `prepareSearch()` as it appears. Its keys — ↑ ↓, Return and ⌘Return, Tab and ⇧Tab for the scope, ⌘1–⌘9, ⌘C for the highlighted meeting's summary (unless words in the field are selected), Esc — are read by `PaletteKeyWatcher`, a local monitor in the palette's window, because a focused text field takes every one of them for itself; `PaletteKey.classify` is the pure rule. Start recording is held back exactly when the title bar's New recording is; ⌘R is that start, window-wide. While nothing is typed, the recent searches (`AppSettings.recentSearches`) come first; a search is kept when the user acts on a result from it. ⌘K on a row opens its actions panel, Raycast's way (`PaletteItemAction`): for a meeting what its sidebar row's menu offers — open either tab, Copy Summary as Markdown, Rename, Export, Reveal in Finder — for one in Trash open, Restore, Reveal; for a recent search Search Again, Remove, Clear. ↑ ↓ and Return walk the panel, Esc or ⌘K shut it; on a row with no panel ⌘K is the window's again and puts the palette away.
+- The models panel (`ModelsPanel` over `ModelRow`, a pure resolver from `readiness` and `summaryReadiness`): one card per model while either is not ready, at the top of the document pane above the meetings (never above Trash or Settings), each state's sentence, state and the one action its engine has — the transcription model has no Pause. Its buttons reach the session's verbs through `ModelsPanel.verb(for:on:)`.
+- The welcome screen (`WelcomeScreen` over `WelcomeSteps`, a pure resolver from the two `CaptureAccess` values and the two readiness values): in the window in place of the workspace while `WorkspaceModel.showsWelcome` (`presentWelcome()`/`leaveWelcome()`). `WelcomeGate.showsAtLaunch(firstLaunch:hasLeftWelcome:modelsOnDisk:)` is the rule the composition root applies at launch: the first launch, and any later one while the user has not left it and the models are not both on disk. It reads both permissions again whenever Echo comes to the front, and opens System Settings at the anchors measured to land on each permission's page.
+
+**Island**
+- `ScreenGeometry` (one screen's frame, visible frame, `safeAreaInsets.top`, the
+  two auxiliary top areas and the status bar's thickness, read off `NSScreen`
+  once so the geometry below is a pure function a test can state; plus
+  `forShell(current:hovered:)`, which picks the display the shell belongs on
+  from the ACTIVE screen rather than the pointer, and the pure `choice` behind
+  it: a shell whose display is gone moves, a shell under the pointer waits, and
+  otherwise it follows; `isFullScreen`, read from the window list because
+  nothing on `NSScreen` says so; `cutoutWidth` and `attachedCutoutWidth()`), and
+  `IslandMetrics` (`Shell.notch(cutout:)` or `Shell.drawn(cutout:)`, `cutout`,
+  `drawsCutout`, `isFullScreen`, `centerX`, `topEdge`, `collapsedHeight`,
+  `frame(for:)`). Both `nonisolated` value types. The cutout is derived from
+  the gap the two auxiliary areas leave between them — `safeAreaInsets.top`
+  gives only its height — because it differs by machine: measured 185 × 32 on
+  a 14" M4 Pro. A screen without one gets one DRAWN (DEC-1, product owner
+  2026-10-02, replacing the floating pill): as wide as an attached notched
+  screen's cutout, else `EchoLayout.islandDrawnCutoutWidth`, as tall as that
+  screen's menu bar, centred on its top edge. Everything else about the shell
+  is the notch's.
+- `IslandShellFace` (the six faces the design draws, as silhouettes;
+  `resolve(detection:phase:)` composes detection's face with the session's
+  phase, `expandsOnItsOwn(detection:)` says which open with no pointer on
+  them, and `isOnScreen(on:isOpen:)` hides only the idle face of a drawn
+  cutout under a full-screen app) and `IslandShellGeometry` (shell size, the
+  margin the flares need inside the window, radius, cutout width, and
+  `panelFrame(on:)` — which rounds, because a window origin is whole points and
+  the cutout's centre is not).
+- `IslandShellShape` (square at the top, rounded at the bottom, a concave flare
+  outside each top corner) and `IslandShell` (the chrome: the black, the two
+  ears and the row).
+- `IslandController` (`@Observable @MainActor`: `face`, `isExpanded`,
+  `metrics`, `start()`/`stop()`; built with the detector, the session and an
+  `IslandMeetings` — the newest meeting and one by id, closures the composition
+  root answers from `MeetingLibrary`, because the island may not import it —
+  and an `openMeeting` the root serves with the window, which the island does
+  not have), `IslandPanel`, `IslandMeeting` (title, duration, words when
+  known). `IslandShell` takes an optional `progress`, drawn as the hairline
+  along the open shell's bottom edge and passed only when it is real: the
+  transcription pass's fraction, never the summary's, which has none the
+  island can read. The controller is also the one
+  place detection and the session meet — neither package can observe the other
+  — so it reports `recordingChanged` and `hoverChanged` down, once per change
+  each. It follows the active screen from three notifications (screen
+  parameters, app activation, active Space), letting `NSScreen.main` settle
+  after the last two because it is measurably stale at the instant they
+  arrive.
+- `IslandHoverView` (internal: the `NSTrackingArea` that is the only mechanism
+  by which a panel that never becomes key learns about the pointer — spike #69
+  measured `acceptsMouseMovedEvents` delivering nothing at all) and
+  `HoverGrace` (internal: crossings into presence, with the design's grace on
+  the way out). Hover is crossings only; where the pointer is inside the island
+  is not knowable and nothing is built on it.
+- `IslandWindowTransition` (internal: the window is not part of the spring, so
+  it takes the union of where the shell is and where it is going, and is
+  trimmed when the spring settles — a window cut to the shell would clip the
+  animation at its own edge).
+- The faces (internal, `IslandFaces.swift`): one open row and two ears per face,
+  drawn from values and handing taps back as closures, so the gallery and the
+  tests draw them with fixtures and `IslandRootView` is the one place live
+  sources become words. `FaceText` holds their sentences as pure functions.
+  The idle and call-detected faces read `RecordingSession.readiness`: while
+  the transcription model is missing, the reason takes their information line
+  (`RecordingReadiness.waitingFor`) and Record stays drawn
+  but held back, its label in the quiet grey; the menu holds the same line,
+  and the artboard's Retry after a failed fetch. For VoiceOver (#119) the shell is one container named for the
+  app; each face's two lines read as one element, its controls as their own;
+  glyphs that repeat a line are hidden; and the ears and the open row are each
+  hidden while the other is on screen. The level gauges carry the measured
+  level as their value. While the session has notices up, the recording face's
+  information line carries them in place of the levels — the session's own
+  sentences, in `RecordingNotice.Kind` order, joined on one line so the most
+  important is the one a truncation never reaches — and the levels return the
+  moment they clear; the shell never grows (#118, product owner 2026-10-02).
+  The call-ended face keeps its countdown line: it is the question being
+  asked. The menu lists each notice on its own line under the clock. The menu bar's menu is the full keyboard and
+  VoiceOver path; the island is a second one, not the only one.
+- `IslandGallery` (DEBUG): every face, collapsed and expanded, on one sheet,
+  with the artboards' fixtures.
+- `CaptureChoice` (`@Observable @MainActor`: `current`, `options`, `pick(_:)`,
+  `label(for:)`): the one owner of what Record captures, shared by the idle
+  face's chip and the menu's submenu. Transient — a pick lasts as long as the
+  call that offered it — and built by the composition root over the
+  detector's `appsInCall`.
+- `IslandMenu` (`ears`, `entries(now:)`), `IslandEars` (what the collapsed
+  island says: `text(now:)`, `isRecordingRed`, `ticks`) and `IslandMenuEntry`
+  (a status line, a command, or the capture choice; `takesShortcut`): the
+  island in words, for the menu bar item and its menu. Built from the same
+  sources and `FaceText` as the faces, over an internal `IslandReading` the
+  tests write down, so the bar, the menu and the island cannot disagree. The
+  menu is the same with the island switched on or off — it is the keyboard's
+  and VoiceOver's way to every face's actions (#119); only what the item shows
+  beside the mark follows the switch. `IslandController` takes `settings` and
+  `capture` too: switched off, it keeps resolving the face and reporting to
+  detection, and orders the panel out.
+
+---
+
+## 4. State ownership
+
+One owner per kind of state. Nothing is mirrored.
+
+| State | Owner | Notes |
+|---|---|---|
+| Session (phase, levels, notices, current meeting) | `RecordingSession` (Recording) | The only truth about a session. Window, island and menu bar all read it. Levels come from real capture only. |
+| Library (metas, trash, storage) | `MeetingLibrary` (Meetings) | Disk is the source; the library is a main-actor cache that re-reads after mutations it performs. Reading never writes: trash purge is an explicit `purgeExpiredTrash()` the composition root schedules. |
+| Model readiness (per model) | `ParakeetModel`, `SummaryModel` | The truth lives on each actor, with one clamped fraction. Parakeet's is published to `RecordingSession.readiness` through `stateChanges()` — the owner announces, the façade repeats, nothing else writes it — because recording waits for it and every surface that can start one must say why. |
+| Detection (apps in call, machine state) | `CallDetector` (CallDetection) | `appsInCall` is derived from the machine's attribution; not a second matcher. |
+| Updates | `UpdateChecker` (Updates) | One instance, built by `AppComposition`. Settings, the app menu and the launch prompt all read it; none keeps a copy. The newest version this launch has offered is the prompt's own latch and is not persisted — Later means the next launch asks again, and a newer version found since is offered when the window opens. |
+| Preferences | `AppSettings` (EchoCore) | `settings.json`, key-by-key decode, additive. Consumers read the property at the moment they act. |
+| Capture choice (what Record captures) | `CaptureChoice` (Island) | Transient, never persisted; one pick for the island's chip and the menu's submenu, dropped when the call that offered it ends. |
+| Launch at login | `SMAppService` (read through Workspace's settings screen) | The OS is the source of truth; never mirrored. |
+| Window navigation (section, selection, opened document, tab, search, sort) | `WorkspaceModel` (Workspace) | One object; the PoC's triple-tracked selection and dead `MeetingLibrary.selection` do not return. |
+| Island face, deadline | `CallDetector` (CallDetection), composed by `IslandController` (Island) | Detection's face is the machine's output and its deadline is the real one a countdown renders. The island composes that face with the session's phase into the silhouette it wears — a pure resolver, not a second copy. The menu bar item and its menu read the same resolver through `IslandMenu`, never the controller. |
+| Transient UI (hover, confirmation dialogs, focus) | `@State` in the view | |
+| Derived (a meeting's display status) | Pure resolver in Workspace over `MeetingMeta` + `RecordingSession` + `FinalizationMachine` state | Computed, never stored. |
+
+Persisted state is exactly: the data root's files. There is no `UserDefaults`.
+
+Observation: `@Observable` classes are created by `AppComposition` and injected
+with `.environment(_:)`. Views read what they render inside `body`. Cross-object
+reactions (a stop finishing a summary, a setting turning detection off) are
+methods called by the owner, not observation chains.
+
+---
+
+## 5. Data flow: from a click to notes
+
+```
+click Record (menu bar · window · island · Control + Option + E)
+  → RecordingSession.start(scope:)
+      refuses, with the reason, while the transcription model is not on disk
+      primes permissions (mic, then system) on the first gesture
+      builds SwitchingAECStage, monitors, gap trackers, RetainedAudioWriter (staging dir)
+      MicrophoneCapture / SystemAudioCapture callbacks:
+         levels  → RecordingSession (main actor)
+         mic     → SwitchingAECStage.processMicSamples (sync) → RetainedAudioWriter (actor)
+         system  → RetainedAudioWriter (actor), and a read-only copy to feedFarEnd
+                   (a scoped session runs a second, global tap for that copy alone)
+click Stop
+  → RecordingSession.stop()
+      tears capture down in order; writer.finish()
+      MeetingStore.save(meta only) ; adoptRetainedAudio → Meetings/<id>/retained-*.m4a
+      phase = .finalizing ; returns
+  → FinalizationMachine admits the pass (not recording, no summary in flight)
+      TranscriptionPass.run(retainedFiles) → [TranscriptSegment]
+      MeetingStore.replaceTranscript(+provenance) ; preserve or delete audio
+  → if auto-summaries and SummaryModel is on disk
+      Summarizer.generate(from:) streams SummaryDocument snapshots
+      MeetingStore.attachSummary(markdown, modelName, caption)
+      phase = .idle
+Workspace observes MeetingLibrary + RecordingSession and renders the truth.
+```
+
+Crash at any step: the next launch scans `Meetings/` — retained audio with no
+provenance is pending and resumes; `finalPass` provenance with leftover audio is
+an orphan and is cleaned; `audio-*` is preserved and untouched.
+
+---
+
+## 6. Concurrency model
+
+Adopted in ADR-002. Swift 6 language mode in every package.
+
+- **UI packages** (`DesignSystem`, `Workspace`, `Island`) and `App` use
+  `defaultIsolation(MainActor.self)`. Everything is main-actor unless it says
+  otherwise.
+- **Engine packages** use the default (nonisolated) and state isolation
+  explicitly: `actor` for anything that owns a resource with serialized access
+  (`MeetingStore`, `RetainedAudioWriter`, `ParakeetModel`, `SummaryModel`,
+  `Summarizer`, `ErrorTraceLog`), `@MainActor` only for the observable façades
+  the UI reads (`RecordingSession`, `MeetingLibrary`, `CallDetector`,
+  `UpdateChecker`, `AppSettings`), and value types otherwise.
+- **Audio threads are first-class.** A capture source is a `Sendable` final
+  class whose callbacks are `@Sendable`; state touched from the render thread or
+  the IO queue lives behind a lock (`Mutex` from Synchronization) or is confined
+  to that queue by construction. The IO-queue invariant is upheld: mutations of
+  the tap format and resampler happen on the IO queue, and the main actor reads
+  snapshots. No class is implicitly main-actor while running on an audio thread.
+- **Hand-offs from audio to actors** batch samples per callback into one task
+  per callback with gap + samples together, exactly as measured in the PoC;
+  never one task per operation.
+- **Cancellation and staleness** are structural: `RecordingSession` holds one
+  `sessionGeneration`; every continuation after an `await` checks it once in a
+  helper, not eight times inline.
+- **No manual locks where an actor works;** locks only on real-time paths where
+  an actor hop is not acceptable (AEC frame processing, level tallies).
+- **No `Task.detached`** except the launch-time cleanups the composition root
+  fires at utility priority, and the summary backfill that must outlive a window.
+
+---
+
+## 7. Error handling
+
+Adopted conventions, not a framework:
+
+- Every package defines its own error enums (`CaptureError`,
+  `TranscriptionError`, `SummarizationError`, `ModelDeliveryError`,
+  `MeetingStoreError`, `UpdateError`), `LocalizedError` where the text can reach
+  a user.
+- **Three tiers, decided per site:**
+  1. *Subordinate side effects* (retention, diagnostics, caches) never fail the
+     operation they attach to: they disable themselves, trace, and continue.
+  2. *Expected failures* become state on the owning observable
+     (`SummaryModel.state = .failed(message)`, `RecordingSession.notices`), with
+     copy the UI can show and an action where one exists (Retry, Resume).
+  3. *Unexpected failures* are traced with `ErrorTrace.record` and surface as a
+     generic failed state; they never crash the app and never print.
+- `ErrorTrace.record(message, error:, category:, metadata:)` is the only way an
+  error is logged. It mirrors to `os.Logger` (one subsystem, one category per
+  file) and appends NDJSON under `Logs/`. `catch { print(error) }` and empty
+  `catch {}` do not exist in v2.
+- Errors that carry user data (transcript text) never reach the log; only the
+  diagnostics sink a test explicitly passes.
+- Progress and completion are never inferred from an error: pause is a state
+  recorded before cancellation, not a `CancellationError` read back.
+
+---
+
+## 8. Configuration
+
+- **Paths**: `EchoCore.DataRoot`. One root, `~/Library/Application Support/Echo`,
+  injectable for tests. Owners create their own directories.
+- **Identity**: `EchoCore.AppIdentity` (bundle id `com.sancrisoft.Echo`, log
+  subsystem, version from the bundle; CI injects `MARKETING_VERSION` and
+  `CURRENT_PROJECT_VERSION` from the tag).
+- **Preferences**: `EchoCore.AppSettings` from `settings.json`.
+- **Debug flags**: `EchoCore.LaunchEnvironment` is the single reader of `ECHO_*`
+  environment variables, compiled out of release builds. No other file reads
+  `ProcessInfo.processInfo.environment` (the boundary script checks).
+- **Model identity**: `static let` contracts in their packages
+  (`ParakeetModel.modelID`, `SummaryModel.modelID`), never display strings.
+- **Measured constants**: `static let` next to the code they tune, each with the
+  comment that records the measurement. They are not configuration.
+- **Secrets**: none exist. Hugging Face and GitHub are accessed anonymously; the
+  boundary script rejects `hf_`/`ghp_` patterns.
+
+---
+
+## 9. Testing strategy
+
+Adopted in ADR-004.
+
+- **Swift Testing everywhere.**
+- **Package tests run without a host** (`swift test --package-path
+  Packages/<Name>`, `make test`). They cover pure logic (tables), integration
+  against temp roots (stores, writers, downloads against a local server), and
+  gated acceptance (real models and fixtures). Because no app hosts them, they
+  cannot touch the real data folder unless a test deliberately does — and the
+  only tests allowed to are the acceptance suites that already needed a
+  downloaded model.
+- **`EchoCoreTestSupport`** (a product of `EchoCore`) gives every test target
+  the fixtures root (`Fixtures/` at the repo root, resolved from `#filePath`),
+  the `.acceptance` trait (`ECHO_ACCEPTANCE=1`, also `TEST_RUNNER_` prefixed
+  under `xcodebuild`), temp-root helpers, and the rule that missing fixtures
+  skip with instructions rather than fail.
+- **App tests (`AppTests`)** are hosted and exist only for what needs the host:
+  the `TestHost` tripwire and launch smoke. Inits across the codebase are
+  side-effect free; `AppComposition.start()` is the one door side effects go
+  through and it checks `TestHost.isActive` once.
+- **UI tests**: none by default. Design review uses a DEBUG gallery in
+  `DesignSystem` and the `LaunchEnvironment` snapshot flags; correctness of view
+  logic is tested through the pure resolvers and `WorkspaceModel`.
+- **End-to-end**: the acceptance suites replay real fixtures through the real
+  pass and the real model; a parity check opens a v1 library and asserts every
+  meeting loads unchanged.
+- **What a test may not do**: write into the source tree, read
+  `~/Library/Application Support/Echo` outside an acceptance suite, sleep for
+  timing, or depend on wall-clock performance on a shared runner.
+
+---
+
+## 10. Tooling
+
+- `make build` — `xcodebuild` the `Echo` scheme (Debug, arm64, ad-hoc).
+- `make test` — `swift test` for every package, then the hosted `AppTests`.
+- `make test-package P=Meetings` — one package.
+- `make test-packages-shared` — `swift test` for every package through one
+  scratch path (`build/spm`), so a dependency several packages share compiles
+  once, and without debug info. It needs the packages' pins to agree. Faster,
+  but a shared build can lend a module to a package that never declared it, so
+  it does not replace the isolated runs.
+- `make lint` — `swift format lint --strict --recursive` (the toolchain's
+  formatter, configured in `.swift-format`) plus `scripts/check_boundaries.sh`.
+- `make format` — `swift format --in-place --recursive`.
+- `make run` — build and open the app.
+- `make app-icon` — compile `scripts/generate_app_icon.swift` together with
+  `EchoMarkGeometry.swift` and render every slot of `AppIcon.appiconset` from
+  the mark's geometry. Rerun it when the mark changes; the PNGs are output,
+  never edited by hand.
+- `scripts/snapshot.sh [scene…]` — render the main window's scenes to PNGs
+  against a copy of the real library (`ECHO_SNAPSHOT_PATH`,
+  `ECHO_SNAPSHOT_SCENE`), the design-review tool; pixels cannot be captured from
+  outside a window on this macOS.
+- CI (`.github/workflows/ci.yml`): lint, package tests, app build and hosted
+  tests, on Xcode 26.6 (`macos-26`, the "Build and test" check) and on Xcode
+  27.0 (the `xcode-27` runner): code that compiles on one need not compile on
+  the other. A Linux Scope job decides what a run builds. A pull request builds
+  on 26.6 only, since development happens on 27, and only when no open pull
+  request is stacked on its branch: the top of a stack covers every layer
+  below it. It builds the packages once, shared (`make test-packages-shared`).
+  Pushes to `main` and `v2`, and a manual run, build on both toolchains with
+  each package on its own (`make test-packages`), which is what proves each
+  package's declared dependencies. Release
+  and installer workflows are unchanged: the app target is still named `Echo`,
+  and releases build on 26.6.
+
+---
+
+## 11. Transition from the PoC
+
+v2 does not carry the PoC sources. The PoC's last release is the tag `v0.0.13`
+(`68632af`, the commit the discovery was written from), and
+`git show v0.0.13:Echo/<File>.swift` is how a port reads the original — a tag,
+which neither drifts in a local clone nor goes away when v2 replaces the PoC on
+`main`.
+
+Order of work after the foundation (each item creates its package and brings the
+PoC's tests for that module with it):
+
+1. **Foundation + first feature**: `EchoCore`, `Meetings`, `DesignSystem`,
+   `Workspace`, `App`. The library opens the existing data folder.
+2. `ModelDelivery`, then `Transcription` and `Summarization` (engine ports;
+   pure machines and measured constants carried as-is, isolation fixed).
+3. `Audio` (the vendored WebRTC library moves from `Vendor/webrtc-apm` into
+   `Packages/Audio/Vendor/WebRTCAPM.xcframework`, declared as a binary target;
+   the one ObjC++ seam becomes the `WebRTCAECBridge` C target, which reads both
+   upstream header roots from inside the xcframework so the repository carries
+   one copy of the headers and one of the archive. `Vendor/webrtc-apm` keeps
+   `VERSION` and `licenses/`, and the root `Vendor/` directory is deleted).
+4. `Recording` — the session facade; at this point the app records,
+   transcribes and summarizes.
+5. `CallDetection`, `Updates`, `Island`.
+6. Workspace surfaces from the redesign (document, search, first run), then the
+   close-out parity checklist.
+
+`THIRD_PARTY_NOTICES.md` names exactly what v2 bundles: the packages the PoC
+pulled in through swift-nio and v2 does not were dropped before the merge, and
+`ThirdPartyNoticesTests` (Updates) now fails in both directions — a pinned
+package with no entry, and an entry whose package is no longer pinned.
+
+---
+
+## 12. Principles, restated as rules
+
+1. Code lives with its owner. Ask "who owns this?", never "what kind of file is
+   this?".
+2. A package is a capability with its own tests and a small public API. No
+   package is created for a single type or a utility.
+3. Start flat. Add a folder when the listing stops helping.
+4. Abstractions appear to isolate an external dependency, to make something
+   testable, or to separate a public API from an implementation. Not before.
+5. Side effects are easy to find: they live in actors and in `start()`-style
+   methods, never in initializers or views.
+6. One owner per state; derived state is computed.
+7. Errors are typed, traced once, and shown as state.
+8. Measured constants travel with their reasons.
+9. The compiler enforces the boundaries; the script catches what it cannot.
+10. An agent should be able to open `Packages/<Name>/` and change that
+    capability without reading the rest of the app.

@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "5CDE08DC2FEA41D600DFAFA7"
+               BlueprintIdentifier = "E2A00000000000000000E001"
                BuildableName = "Echo.app"
                BlueprintName = "Echo"
                ReferencedContainer = "container:Echo.xcodeproj">
@@ -32,9 +32,9 @@
             skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "5CE570012FF5000000000001"
-               BuildableName = "EchoTests.xctest"
-               BlueprintName = "EchoTests"
+               BlueprintIdentifier = "E2A00000000000000000E002"
+               BuildableName = "AppTests.xctest"
+               BlueprintName = "AppTests"
                ReferencedContainer = "container:Echo.xcodeproj">
             </BuildableReference>
          </TestableReference>
@@ -54,7 +54,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "5CDE08DC2FEA41D600DFAFA7"
+            BlueprintIdentifier = "E2A00000000000000000E001"
             BuildableName = "Echo.app"
             BlueprintName = "Echo"
             ReferencedContainer = "container:Echo.xcodeproj">
@@ -71,7 +71,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "5CDE08DC2FEA41D600DFAFA7"
+            BlueprintIdentifier = "E2A00000000000000000E001"
             BuildableName = "Echo.app"
             BlueprintName = "Echo"
             ReferencedContainer = "container:Echo.xcodeproj">

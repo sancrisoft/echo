@@ -4,16 +4,25 @@ description: >-
   toolchain that mlx-swift needs to compile its shaders. Shared by the CI
   and Release workflows so the toolchain is pinned in one place.
 
+inputs:
+  xcode:
+    description: >-
+      The Xcode to select. The default is the oldest one the README promises
+      to build with, which is also what releases are built with; CI adds the
+      newest one on the runner that carries it.
+    required: false
+    default: /Applications/Xcode_26.6.app
+
 runs:
   using: composite
   steps:
-    # Same Xcode build (17F113) as the local development machine.
-    - name: Select Xcode 26.6
+    - name: Select Xcode
       shell: bash
-      run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      run: sudo xcode-select -s "${{ inputs.xcode }}" && xcodebuild -version
 
     # mlx-swift compiles Metal shaders; the Metal toolchain is a separate
-    # download in Xcode 26 and is not preinstalled on the runner image.
+    # download since Xcode 26, once per Xcode, and is not preinstalled on the
+    # runner image.
     - name: Install Metal toolchain
       shell: bash
       run: sudo xcodebuild -downloadComponent MetalToolchain

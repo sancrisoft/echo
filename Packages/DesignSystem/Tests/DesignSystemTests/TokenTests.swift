@@ -1,0 +1,530 @@
+//
+//  TokenTests.swift
+//  DesignSystemTests
+//
+//  The palette is checked the only way that means anything: every token is
+//  resolved inside a real appearance and its sRGB channels are compared with
+//  the hex the design draws. A token that silently keeps its light value in
+//  dark mode passes any test that only reads it once.
+//
+
+import AppKit
+import DesignSystem
+import SwiftUI
+import Testing
+
+// MARK: - Resolving a token in one appearance
+
+/// One appearance's worth of a token: the hex the design draws and the opacity
+/// it draws it at.
+nonisolated struct Appearance: Sendable {
+    let name: NSAppearance.Name
+    let hex: UInt32
+    let opacity: Double
+}
+
+/// A token and what the design says it is in each appearance.
+nonisolated struct Token: Sendable, CustomTestStringConvertible {
+    let name: String
+    let color: Color
+    let light: UInt32
+    let dark: UInt32
+    let lightOpacity: Double
+    let darkOpacity: Double
+
+    init(
+        _ name: String,
+        _ color: Color,
+        light: UInt32,
+        dark: UInt32,
+        lightOpacity: Double = 1,
+        darkOpacity: Double = 1
+    ) {
+        self.name = name
+        self.color = color
+        self.light = light
+        self.dark = dark
+        self.lightOpacity = lightOpacity
+        self.darkOpacity = darkOpacity
+    }
+
+    var appearances: [Appearance] {
+        [
+            Appearance(name: .aqua, hex: light, opacity: lightOpacity),
+            Appearance(name: .darkAqua, hex: dark, opacity: darkOpacity),
+        ]
+    }
+
+    var testDescription: String { name }
+}
+
+/// The channels a token resolves to. `NSColor(Color)` reads the dynamic
+/// provider, so it has to be asked inside the appearance being tested.
+nonisolated struct Channels {
+    let red: Double
+    let green: Double
+    let blue: Double
+    let alpha: Double
+}
+
+@MainActor
+func resolve(_ color: Color, in name: NSAppearance.Name) throws -> Channels {
+    let appearance = try #require(NSAppearance(named: name), "no such appearance: \(name.rawValue)")
+    var resolved: NSColor?
+    appearance.performAsCurrentDrawingAppearance {
+        resolved = NSColor(color).usingColorSpace(.sRGB)
+    }
+    let color = try #require(resolved, "the token did not resolve to an sRGB color")
+    return Channels(
+        red: color.redComponent,
+        green: color.greenComponent,
+        blue: color.blueComponent,
+        alpha: color.alphaComponent
+    )
+}
+
+nonisolated func channels(of hex: UInt32, opacity: Double) -> Channels {
+    Channels(
+        red: Double((hex >> 16) & 0xFF) / 255,
+        green: Double((hex >> 8) & 0xFF) / 255,
+        blue: Double(hex & 0xFF) / 255,
+        alpha: opacity
+    )
+}
+
+/// sRGB is stored as floats; a round trip through `NSColor` costs less than a
+/// step of an 8-bit channel.
+nonisolated let tolerance = 0.001
+
+// MARK: - The palette
+
+/// Every token in `EchoColor` that names a value, with the value the design
+/// draws for it in each appearance. Anything added to the palette belongs here
+/// too — a token nothing pins can drift back to a guess.
+nonisolated let palette: [Token] = [
+    .init("windowBackground", EchoColor.windowBackground, light: 0xFFFFFF, dark: 0x0D0E11),
+    .init("sidebarBackground", EchoColor.sidebarBackground, light: 0xF7F8FA, dark: 0x0B0C0E),
+    .init("surface", EchoColor.surface, light: 0xF0F1F4, dark: 0x16171A),
+    .init("surfaceRaised", EchoColor.surfaceRaised, light: 0xE8EAED, dark: 0x1F2024),
+    .init("surfaceSelected", EchoColor.surfaceSelected, light: 0xFFFFFF, dark: 0x292B2F),
+    .init("divider", EchoColor.divider, light: 0xECEDF0, dark: 0x1D1E21),
+    .init("border", EchoColor.border, light: 0xE1E3E6, dark: 0x292B2F),
+    .init("inertBorder", EchoColor.inertBorder, light: 0xE1E3E6, dark: 0x2F3237),
+    .init("textPrimary", EchoColor.textPrimary, light: 0x18191C, dark: 0xF2F3F5),
+    .init("textProse", EchoColor.textProse, light: 0x35383D, dark: 0xD2D4D8),
+    .init("textValue", EchoColor.textValue, light: 0x2B2D31, dark: 0xE4E5E8),
+    .init("textSecondary", EchoColor.textSecondary, light: 0x626569, dark: 0xA7A9AE),
+    .init("textTertiary", EchoColor.textTertiary, light: 0x8A8D92, dark: 0x74767B),
+    .init("textQuaternary", EchoColor.textQuaternary, light: 0xA2A5AA, dark: 0x54575B),
+    .init("textFaint", EchoColor.textFaint, light: 0xB2B5BA, dark: 0x45484C),
+    .init("breadcrumbSlash", EchoColor.breadcrumbSlash, light: 0xC4C7CB, dark: 0x3A3D41),
+    .init("accent", EchoColor.accent, light: 0x1673C0, dark: 0x3B9CF6),
+    .init(
+        "accentWash", EchoColor.accentWash, light: 0x1673C0, dark: 0x3B9CF6,
+        lightOpacity: 0.13, darkOpacity: 0.15),
+    // Not drawn: the current find match, chosen by the product owner.
+    .init(
+        "findCurrentMatch", EchoColor.findCurrentMatch, light: 0x1673C0, dark: 0x3B9CF6,
+        lightOpacity: 0.32, darkOpacity: 0.40),
+    .init("recording", EchoColor.recording, light: 0xD02B31, dark: 0xED4A49),
+    .init(
+        "recordingWash", EchoColor.recordingWash, light: 0xD02B31, dark: 0xED4A49,
+        lightOpacity: 0.12, darkOpacity: 0.12),
+    .init(
+        "recordingWashEdge", EchoColor.recordingWashEdge, light: 0xD02B31, dark: 0xED4A49,
+        lightOpacity: 0.28, darkOpacity: 0.28),
+    .init("recordingTimer", EchoColor.recordingTimer, light: 0xD02B31, dark: 0xF0908F),
+    .init(
+        "recordingPillWash", EchoColor.recordingPillWash, light: 0xD02B31, dark: 0xED4A49,
+        lightOpacity: 0.14, darkOpacity: 0.14),
+    .init("placeholderGlyph", EchoColor.placeholderGlyph, light: 0xC4C7CB, dark: 0x3A3D41),
+    .init("speakerSplitOthers", EchoColor.speakerSplitOthers, light: 0xC4C7CB, dark: 0x3A3D41),
+    .init("failureGlyph", EchoColor.failureGlyph, light: 0xD02B31, dark: 0xED4A49),
+    .init("destructiveText", EchoColor.destructiveText, light: 0xD02B31, dark: 0xED4A49),
+    .init("controlEdgeInRow", EchoColor.controlEdgeInRow, light: 0xC4C7CB, dark: 0x3A3D41),
+    .init("levelOthers", EchoColor.levelOthers, light: 0x8A8D92, dark: 0x616469),
+    .init("selection", EchoColor.selection, light: 0xE8EAED, dark: 0x1F2024),
+    // The models panel. Light values borrowed until #120.
+    .init("card", EchoColor.card, light: 0xF7F8FA, dark: 0x101114),
+    .init(
+        "failureEdge", EchoColor.failureEdge, light: 0xD02B31, dark: 0x3A2426,
+        lightOpacity: 0.28, darkOpacity: 1),
+    .init("failureText", EchoColor.failureText, light: 0xD02B31, dark: 0xC77E7D),
+    // The welcome screen. Light values borrowed until #120.
+    .init("stepPending", EchoColor.stepPending, light: 0xC4C7CB, dark: 0x3A3D41),
+    .init("stepRingTrack", EchoColor.stepRingTrack, light: 0xE8EAED, dark: 0x26282C),
+    // The ⌘K palette. Light values borrowed until #120.
+    .init("paletteBackground", EchoColor.paletteBackground, light: 0xFFFFFF, dark: 0x17181C),
+    .init("paletteBorder", EchoColor.paletteBorder, light: 0xE1E3E6, dark: 0x34373C),
+    .init("paletteDivider", EchoColor.paletteDivider, light: 0xECEDF0, dark: 0x232529),
+    .init("paletteHighlight", EchoColor.paletteHighlight, light: 0xE8EAED, dark: 0x23252A),
+    .init("paletteFooter", EchoColor.paletteFooter, light: 0xF7F8FA, dark: 0x131418),
+    .init("paletteGroupLabel", EchoColor.paletteGroupLabel, light: 0x8A8D92, dark: 0x626569),
+    .init(
+        "paletteScrim", EchoColor.paletteScrim, light: 0x17191E, dark: 0x060709,
+        lightOpacity: 0.18, darkOpacity: 0.58),
+    .init(
+        "paletteShadow", EchoColor.paletteShadow, light: 0x17191E, dark: 0x000000,
+        lightOpacity: 0.18, darkOpacity: 0.72),
+]
+
+@Suite("The palette")
+struct PaletteTests {
+
+    @Test("every token draws the design's value in both appearances", arguments: palette)
+    func tokenMatchesTheDesign(token: Token) throws {
+        for appearance in token.appearances {
+            let drawn = try resolve(token.color, in: appearance.name)
+            let expected = channels(of: appearance.hex, opacity: appearance.opacity)
+            let context = "\(token.name) in \(appearance.name.rawValue)"
+            #expect(abs(drawn.red - expected.red) < tolerance, "red channel of \(context)")
+            #expect(abs(drawn.green - expected.green) < tolerance, "green channel of \(context)")
+            #expect(abs(drawn.blue - expected.blue) < tolerance, "blue channel of \(context)")
+            #expect(abs(drawn.alpha - expected.alpha) < tolerance, "opacity of \(context)")
+        }
+    }
+
+    @Test("a token that follows the appearance is not the same color twice")
+    func appearancesDiffer() throws {
+        for token in palette {
+            let light = try resolve(token.color, in: .aqua)
+            let dark = try resolve(token.color, in: .darkAqua)
+            let identical =
+                abs(light.red - dark.red) < tolerance && abs(light.green - dark.green) < tolerance
+                && abs(light.blue - dark.blue) < tolerance
+            #expect(!identical || token.light == token.dark, "\(token.name) ignores the appearance")
+        }
+    }
+
+    @Test("the two hairlines are two colors, in both appearances")
+    func hairlinesAreDistinct() throws {
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let divider = try resolve(EchoColor.divider, in: appearance)
+            let border = try resolve(EchoColor.border, in: appearance)
+            #expect(
+                abs(divider.red - border.red) > tolerance,
+                "divider and border collapsed into one hairline in \(appearance.rawValue)")
+        }
+    }
+
+    @Test("hex decodes channel by channel")
+    func hexDecoding() throws {
+        let color = try #require(NSColor(hex: 0x3B9CF6).usingColorSpace(.sRGB))
+        #expect(abs(color.redComponent - 0x3B / 255.0) < tolerance)
+        #expect(abs(color.greenComponent - 0x9C / 255.0) < tolerance)
+        #expect(abs(color.blueComponent - 0xF6 / 255.0) < tolerance)
+        #expect(abs(color.alphaComponent - 1) < tolerance)
+    }
+}
+
+// MARK: - Metrics
+
+@Suite("Layout and radii")
+struct MetricTests {
+
+    /// The numbers the workspace artboard draws. They change when the design
+    /// changes, never because a view would rather have another value.
+    @Test("the fixed dimensions are the artboard's")
+    func dimensionsMatchTheArtboard() {
+        #expect(EchoLayout.hairline == 1)
+        #expect(EchoLayout.sidebarWidth == 256)
+        #expect(EchoLayout.appRowHeight == 34)
+        #expect(EchoLayout.sidebarRowHeight == 29)
+        #expect(EchoLayout.sidebarRowInset == 9)
+        #expect(EchoLayout.sectionLabelHeight == 30)
+        #expect(EchoLayout.groupHeaderHeight == 22)
+        #expect(EchoLayout.breadcrumbHeight == 40)
+        #expect(EchoLayout.breadcrumbInset == 18)
+        #expect(EchoLayout.toolbarButtonHeight == 26)
+        #expect(EchoLayout.readingWidth == 720)
+        #expect(EchoLayout.readingTopInset == 26)
+        #expect(EchoLayout.propertyRowHeight == 30)
+        #expect(EchoLayout.propertyLabelWidth == 104)
+        #expect(EchoLayout.documentFadeHeight == 76)
+    }
+
+    /// A summary under the tabs, as the workspace artboard sets its sections,
+    /// lists and inline code.
+    @Test("the summary's measures are the artboard's")
+    func summaryMatchesTheArtboard() {
+        #expect(EchoLayout.summaryTopGap == 24)
+        #expect(EchoLayout.summaryHeadingTop == 26)
+        #expect(EchoLayout.summaryHeadingBottom == 9)
+        #expect(EchoLayout.summaryBlockGap == 9)
+        #expect(EchoLayout.listMarkerGap == 11)
+        #expect(EchoControl.bulletSize == 4.5)
+        #expect(EchoControl.checkboxSize == 15)
+        #expect(EchoControl.inlineCodeInset == CGSize(width: 5, height: 1.5))
+        #expect(EchoRadius.inlineCode == 4)
+    }
+
+    /// A transcript under the tabs, as the transcript artboard sets its turns.
+    @Test("the transcript's measures are the artboard's")
+    func transcriptMatchesTheArtboard() {
+        #expect(EchoLayout.transcriptTopGap == 26)
+        #expect(EchoLayout.turnGap == 21)
+        #expect(EchoLayout.turnLabelGap == 9)
+        #expect(EchoLayout.turnTextGap == 5)
+        #expect(EchoLayout.findFieldWidth == 208)
+        #expect(EchoControl.findFieldHeight == 28)
+        #expect(EchoControl.findFieldInset == 11)
+        #expect(EchoControl.findFieldGap == 8)
+        #expect(EchoControl.findGlyphSize == 13)
+        #expect(EchoControl.findMatchInset == CGSize(width: 3, height: 1))
+        #expect(EchoRadius.findMatch == 3)
+        #expect(EchoLayout.speakerSplitWidth == 180)
+        #expect(EchoControl.speakerSplitHeight == 4)
+        #expect(EchoControl.speakerSplitGap == 2)
+        #expect(EchoControl.speakerSplitLabelGap == 12)
+        #expect(EchoControl.provenanceGap == 8)
+        #expect(EchoRadius.speakerSplit == 2)
+    }
+
+    /// An empty or broken screen, as the empty-states artboard draws it.
+    @Test("the empty states' measures are the artboard's")
+    func emptyStatesMatchTheArtboard() {
+        #expect(EchoLayout.processingBarWidth == 232)
+        #expect(EchoControl.emptyGlyphSize == 30)
+        #expect(EchoLayout.emptyStateGap == 13)
+        #expect(EchoLayout.emptyStateMessageWidth == 280)
+        #expect(EchoLayout.emptyStateActionGap == 8)
+        #expect(EchoLayout.emptyStateInset == 24)
+    }
+
+    /// Trash, as its artboard draws the list that takes the document's place.
+    @Test("the list's measures are the artboard's")
+    func listMatchesTheArtboard() {
+        #expect(EchoLayout.listHeaderHeight == 62)
+        #expect(EchoLayout.listHeaderLeadingInset == 24)
+        #expect(EchoLayout.listHeaderTrailingInset == 20)
+        #expect(EchoLayout.listHeaderGap == 11)
+        #expect(EchoLayout.listNoteBottom == 14)
+        #expect(EchoLayout.listInset == 12)
+        #expect(EchoLayout.listRowSpacing == 3)
+        #expect(EchoLayout.listRowHeight == 58)
+        #expect(EchoLayout.listRowInset == 13)
+        #expect(EchoLayout.listRowGap == 13)
+        #expect(EchoLayout.listDaysWidth == 108)
+        #expect(EchoLayout.listActionsWidth == 176)
+        #expect(EchoLayout.listFooterHeight == 44)
+        #expect(EchoLayout.listFooterGap == 16)
+        #expect(EchoLayout.keyHintGap == 6)
+        #expect(EchoControl.listCountInset == CGSize(width: 8, height: 2))
+        #expect(EchoControl.keycapInset == CGSize(width: 5, height: 1))
+        #expect(EchoControl.listRowGlyphSize == 16)
+        #expect(EchoControl.listRowActionGap == 6)
+        #expect(EchoRadius.listRow == 8)
+        #expect(EchoRadius.keycap == 4)
+    }
+
+    @Test("the palette's measures are the artboard's")
+    func paletteMatchesTheArtboard() {
+        #expect(EchoLayout.paletteWidth == 620)
+        // 122 from the window's top on the artboard, less its 44-point title bar.
+        #expect(EchoLayout.paletteTopInset == 78)
+        #expect(EchoLayout.paletteFieldHeight == 52)
+        #expect(EchoLayout.paletteFieldInset == 16)
+        #expect(EchoLayout.paletteFieldGap == 11)
+        #expect(EchoLayout.paletteListInset == 8)
+        #expect(EchoLayout.paletteGroupLabelHeight == 26)
+        #expect(EchoLayout.paletteResultHeight == 44)
+        #expect(EchoLayout.paletteActionHeight == 38)
+        #expect(EchoLayout.paletteRowInset == 10)
+        #expect(EchoLayout.paletteRowGap == 11)
+        #expect(EchoLayout.paletteRuleInset == CGSize(width: 10, height: 8))
+        #expect(EchoLayout.paletteFooterHeight == 38)
+        #expect(EchoLayout.paletteFooterGap == 16)
+        // The artboard's 80-point blur, as SwiftUI's radius of half that.
+        #expect(EchoLayout.paletteShadowRadius == 40)
+        #expect(EchoLayout.paletteShadowOffset == 32)
+        // The actions panel is not drawn; half the palette's shadow.
+        #expect(EchoLayout.palettePanelShadowRadius == EchoLayout.paletteShadowRadius / 2)
+        #expect(EchoLayout.palettePanelShadowOffset == EchoLayout.paletteShadowOffset / 2)
+        #expect(EchoControl.paletteSearchGlyphSize == 17)
+        #expect(EchoControl.paletteRowGlyphSize == 15)
+        #expect(EchoControl.paletteGlyphStroke == 1.4)
+        #expect(EchoControl.paletteMatchInset == CGSize(width: 2, height: 0))
+        #expect(EchoControl.keycapInsetStandalone == CGSize(width: 6, height: 2))
+        #expect(EchoRadius.palette == 12)
+        #expect(EchoRadius.paletteRow == 7)
+    }
+
+    @Test("the radii are the artboard's, largest to smallest")
+    func radiiMatchTheArtboard() {
+        #expect(EchoRadius.window == 11)
+        #expect(EchoRadius.card == 10)
+        #expect(EchoRadius.well == 8)
+        #expect(EchoRadius.control == 7)
+        #expect(EchoRadius.row == 6)
+        #expect(EchoRadius.pill == 5)
+        let ordered = [
+            EchoRadius.window, EchoRadius.card, EchoRadius.well, EchoRadius.control, EchoRadius.row, EchoRadius.pill,
+        ]
+        #expect(ordered == ordered.sorted().reversed())
+    }
+
+    /// The models panel's card and what sits in it, as the design
+    /// draws them; and the control button its rows and the welcome screen's
+    /// share.
+    @Test("the models panel's measures are the artboard's")
+    func modelsPanelMatchesTheArtboard() {
+        #expect(EchoLayout.modelCardInset == CGSize(width: 16, height: 14))
+        #expect(EchoLayout.modelPanelGap == 12)
+        #expect(EchoControl.modelGlyphSize == 19)
+        #expect(EchoControl.modelGlyphGap == 13)
+        #expect(EchoControl.modelBarWidth == 150)
+        #expect(EchoControl.modelBarHeight == 4)
+        #expect(EchoControl.modelPercentWidth == 34)
+        #expect(EchoControl.modelTrailingGap == 11)
+        #expect(EchoControl.modelSpinnerSize == 14)
+        #expect(EchoControl.modelLoadingGap == 9)
+        #expect(EchoControl.readyCheckSize == 11)
+        #expect(EchoControl.controlButtonHeight == 28)
+        #expect(EchoControl.controlButtonInset == 12)
+        #expect(EchoControl.controlButtonHeight < EchoControl.primaryButtonHeight)
+    }
+
+    /// The welcome screen's column and what is in it, as the design
+    /// draws them.
+    @Test("the welcome screen's measures are the artboard's")
+    func welcomeMatchesTheArtboard() {
+        #expect(EchoLayout.welcomeColumnWidth == 560)
+        #expect(EchoLayout.welcomeMarkGap == 26)
+        #expect(EchoLayout.welcomeTitleGap == 12)
+        #expect(EchoLayout.welcomeIntroGap == 34)
+        #expect(EchoLayout.welcomeSectionGap == 10)
+        #expect(EchoLayout.welcomeStepHeight == 52)
+        #expect(EchoLayout.welcomeStepGap == 14)
+        #expect(EchoLayout.welcomeModelsInset == 14)
+        #expect(EchoLayout.welcomeModelsGlyphDrop == 2)
+        #expect(EchoLayout.welcomeModelsGap == 10)
+        #expect(EchoLayout.welcomeModelLineGap == 9)
+        #expect(EchoLayout.welcomeModelItemGap == 10)
+        #expect(EchoLayout.welcomeStepsBottomGap == 4)
+        #expect(EchoLayout.welcomeActionsTopGap == 26)
+        #expect(EchoLayout.welcomeActionsGap == 12)
+        #expect(EchoLayout.welcomeFooterTopGap == 30)
+        #expect(EchoLayout.welcomeFooterGap == 7)
+        #expect(EchoControl.welcomeMarkSize == 38)
+        #expect(EchoControl.stepGlyphSize == 19)
+        #expect(EchoControl.welcomeModelNameWidth == 132)
+        #expect(EchoControl.welcomeModelValueWidth == 62)
+        #expect(EchoControl.welcomeShieldSize == 13)
+        #expect(EchoControl.prominentButtonHeight == 34)
+        #expect(EchoControl.prominentButtonInset == 18)
+        #expect(EchoLayout.welcomeColumnWidth <= EchoLayout.minimumWindow.width)
+    }
+
+    @Test("the minimum window fits the sidebar and a reading column")
+    func layoutFits() {
+        #expect(EchoLayout.sidebarWidth + EchoLayout.readingWidth <= EchoLayout.defaultWindow.width)
+        #expect(EchoLayout.sidebarWidth + 400 <= EchoLayout.minimumWindow.width)
+        #expect(EchoLayout.defaultWindow.width >= EchoLayout.minimumWindow.width)
+    }
+
+    @Test("spacing steps grow monotonically")
+    func spacingSteps() {
+        let steps = [
+            EchoSpacing.xxs, EchoSpacing.xs, EchoSpacing.s, EchoSpacing.m, EchoSpacing.l, EchoSpacing.xl,
+            EchoSpacing.xxl,
+        ]
+        #expect(steps == steps.sorted())
+        #expect(Set(steps).count == steps.count)
+    }
+}
+
+// MARK: - The island
+
+@Suite("The island's palette")
+struct IslandPaletteTests {
+
+    /// The island is black on every appearance, so these tokens are checked
+    /// once per appearance and expected to be the same both times.
+    ///
+    /// This list is what the enum *declares*. It cannot tell you what a
+    /// control actually draws: a primitive that reaches past this namespace
+    /// for a token that does follow the appearance passes here and still puts
+    /// a light-mode colour on a black shell. What the island draws is covered
+    /// by rendering it — "nothing the island draws changes with the system
+    /// appearance" in `PrimitiveTests`. Add a token here; add the control that
+    /// uses it there.
+    @Test("the island's own tokens do not follow the appearance")
+    func islandIsAlwaysDark() throws {
+        let tokens: [(String, Color)] = [
+            ("shell", EchoColor.Island.shell),
+            ("accent", EchoColor.Island.accent),
+            ("recording", EchoColor.Island.recording),
+            ("controlFill", EchoColor.Island.controlFill),
+            ("chipFill", EchoColor.Island.chipFill),
+            ("controlLabel", EchoColor.Island.controlLabel),
+            ("quietLabel", EchoColor.Island.quietLabel),
+            ("glyph", EchoColor.Island.glyph),
+            ("title", EchoColor.Island.title),
+            ("detail", EchoColor.Island.detail),
+            ("gaugeTrack", EchoColor.Island.gaugeTrack),
+            ("gaugeNeutral", EchoColor.Island.gaugeNeutral),
+            ("gaugeNeutralLabel", EchoColor.Island.gaugeNeutralLabel),
+        ]
+        for (name, color) in tokens {
+            let light = try resolve(color, in: .aqua)
+            let dark = try resolve(color, in: .darkAqua)
+            #expect(abs(light.red - dark.red) < tolerance, "\(name) changes with the appearance")
+            #expect(abs(light.alpha - dark.alpha) < tolerance, "\(name) changes with the appearance")
+        }
+    }
+
+    @Test("the opaque island tokens draw the design's value")
+    func islandValues() throws {
+        let tokens: [(String, Color, UInt32)] = [
+            ("accent", EchoColor.Island.accent, 0x3B9CF6),
+            ("recording", EchoColor.Island.recording, 0xED4A49),
+            ("controlLabel", EchoColor.Island.controlLabel, 0xE4E5E8),
+            ("quietLabel", EchoColor.Island.quietLabel, 0x83878D),
+            ("glyph", EchoColor.Island.glyph, 0x9DA1A7),
+            ("title", EchoColor.Island.title, 0xF2F3F5),
+            ("detail", EchoColor.Island.detail, 0x7E8288),
+            ("gaugeNeutral", EchoColor.Island.gaugeNeutral, 0x8A8D93),
+            ("gaugeNeutralLabel", EchoColor.Island.gaugeNeutralLabel, 0x6E7176),
+        ]
+        for (name, color, hex) in tokens {
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                let drawn = try resolve(color, in: appearance)
+                let expected = channels(of: hex, opacity: 1)
+                let context = "\(name) in \(appearance.rawValue)"
+                #expect(abs(drawn.red - expected.red) < tolerance, "red channel of \(context)")
+                #expect(abs(drawn.green - expected.green) < tolerance, "green channel of \(context)")
+                #expect(abs(drawn.blue - expected.blue) < tolerance, "blue channel of \(context)")
+            }
+        }
+    }
+
+    @Test("the island's fills are white at the percentage the design gives them")
+    func islandFills() throws {
+        let fills: [(String, Color, Double)] = [
+            ("controlFill", EchoColor.Island.controlFill, 0.10),
+            ("chipFill", EchoColor.Island.chipFill, 0.08),
+            ("gaugeTrack", EchoColor.Island.gaugeTrack, 0.13),
+        ]
+        for (name, color, opacity) in fills {
+            let drawn = try resolve(color, in: .darkAqua)
+            #expect(abs(drawn.red - 1) < tolerance, "\(name) is not white")
+            #expect(abs(drawn.green - 1) < tolerance, "\(name) is not white")
+            #expect(abs(drawn.blue - 1) < tolerance, "\(name) is not white")
+            #expect(abs(drawn.alpha - opacity) < tolerance, "\(name) is at the wrong percentage")
+        }
+        // A primary capsule is a step brighter than a chip, and the gauge's
+        // track brighter still: the order is the design's, not an accident.
+        #expect(
+            try resolve(EchoColor.Island.chipFill, in: .darkAqua).alpha
+                < resolve(EchoColor.Island.controlFill, in: .darkAqua).alpha)
+        #expect(
+            try resolve(EchoColor.Island.controlFill, in: .darkAqua).alpha
+                < resolve(EchoColor.Island.gaugeTrack, in: .darkAqua).alpha)
+    }
+
+    @Test("the tab's shadow exists in light mode only")
+    func tabShadowIsLightOnly() throws {
+        #expect(try resolve(EchoColor.tabSelectionShadow, in: .aqua).alpha > 0)
+        #expect(try resolve(EchoColor.tabSelectionShadow, in: .darkAqua).alpha == 0)
+    }
+}

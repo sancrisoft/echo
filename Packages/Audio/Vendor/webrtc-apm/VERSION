@@ -1,0 +1,47 @@
+webrtc-audio-processing (standalone WebRTC Audio Processing Module, AEC3)
+
+Source:   https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing.git
+Tag:      v2.1
+Commit:   846fe90a289f58b7c9303a635142aa2c7caa93e5
+Subproject: abseil-cpp 20240722.0 (meson wrap, statically bundled into the archive)
+
+Build (macOS arm64, static, release):
+  export MACOSX_DEPLOYMENT_TARGET=15.6
+  meson setup build -Ddefault_library=static --buildtype=release
+  ninja -C build
+  meson install -C build --destdir=<staging>
+
+Vendored artifacts:
+  ../WebRTCAPM.xcframework  — the static archive plus both header roots, which
+                              is what Packages/Audio declares as a binaryTarget
+  licenses/                 — upstream BSD-3 (WebRTC) and Apache-2.0 (abseil)
+
+The archive is self-contained (APM + rtc_base + common_audio + abseil). The
+staging tree the build above installs has this shape:
+
+  lib/libwebrtc-audio-processing-2.a
+  include/webrtc-audio-processing-2/   public headers (installed set)
+  include/absl/                       abseil headers the public headers include
+
+Only the xcframework is checked in, so the repository carries one copy of the
+archive and one copy of the headers rather than two.
+
+Regenerating the xcframework from a fresh build of the staging tree above,
+from Packages/Audio/Vendor/:
+
+  xcodebuild -create-xcframework \
+    -library <staging>/lib/libwebrtc-audio-processing-2.a \
+    -headers <staging>/include \
+    -output WebRTCAPM.xcframework
+
+`-headers` takes the include root, NOT include/webrtc-audio-processing-2:
+-create-xcframework accepts only one headers directory per library, and both
+roots are needed on the search path, so the parent is packaged and the target
+puts both it and its webrtc-audio-processing-2 subdirectory on the path (see
+the header search paths in Packages/Audio/Package.swift).
+
+Consumer cflags (per upstream pkg-config): -DWEBRTC_POSIX
+
+The xcframework carries a single macos-arm64 slice, matching Echo's
+Apple-Silicon-only platform floor. Adding a slice means changing the
+Package's header search paths, which name that slice directly.
