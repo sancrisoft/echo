@@ -13,13 +13,13 @@ whole pipeline: **microphone = You, system audio = Others**. Speaker attribution
 is the channel, never diarization. Everything stays on the Mac under one data
 folder, `~/Library/Application Support/Echo`, which v1 and v2 share unchanged.
 
-The v2 rebuild lives on this branch. The shipping PoC (v1) lives on `main`; read
-its code with `git fetch origin main && git show origin/main:Echo/<File>.swift`
-when porting, never copy it blindly. Always the remote ref, never the local
-`main`: `git show` resolves a ref offline, so a local `main` left a few commits
-behind hands you stale sources and says nothing — you find out when the port
-disagrees with production. `docs/architecture/v2-discovery.md` §7 lists the
-behaviors and measured constants a port must preserve, with their reasons.
+v2 is a rebuild of the PoC (v1), whose last release is the tag `v0.0.13`; read
+its code with `git show v0.0.13:Echo/<File>.swift` when porting, never copy it
+blindly. The tag, never a branch: once v2 is merged into `main` no branch
+carries the PoC's sources, and a branch ref can be stale in a local clone
+without saying so, while a tag cannot move. `docs/architecture/v2-discovery.md`
+§7 lists the behaviors and measured constants a port must preserve, with their
+reasons.
 
 ## Repository map
 
@@ -28,11 +28,12 @@ App/                 composition root + scenes. Nothing else.
   EchoApp.swift        scenes: the main window, ⌘, and the app menu's commands
   AppComposition.swift builds every long-lived object; start() runs all launch side effects
   ActivationPolicy.swift · WindowOpener.swift · UpdatePrompt.swift
+  LaunchOrigin.swift   who asked for a launch: a user's opens the window, a login item's does not
   WindowSnapshot.swift (DEBUG)
   MenuBarItem.swift    the NSStatusItem: left click opens the window, right click
                        the menu; with the island off it says what the island's
                        ears would; it also carries the openWindow bridge
-  MenuBarMenu.swift    what that menu contains: the island's face, then the way back
+  MenuBarMenu.swift    what that menu contains: the island's face, the way back, Check for Updates
   GlobalShortcut.swift Control + Option + E, registered with Carbon (no permission)
 AppTests/            hosted tests only for what needs the real app (TestHost tripwire)
 Packages/<Name>/     one local Swift package per capability
@@ -64,7 +65,7 @@ Makefile             the commands
 | `EchoCore` | `TranscriptSegment`/`Speaker`/`AudioChannel`, `TranscriptUtterance`, `DataRoot`, `ErrorTrace`, `AppSettings`, `LaunchEnvironment`, `TestHost`, `AppIdentity`; `EchoCoreTestSupport` (fixtures root, `.acceptance` trait, `TemporaryDirectory`) | — |
 | `Meetings` | `MeetingStore` (the only thing that touches `Meetings/`), `MeetingLibrary` (search included: `prepareSearch`/`search`, over an index held in memory only), `MeetingMeta`/`MeetingRecord`, `LegacyMeetingSummary`, `StorageBreakdown`, `MeetingExport`, `MeetingListSelection`, `MeetingSearchQuery` (words, phrases, `you:`/`others:`, dates by name, `app:`, `>30m`/`<15m`, `has:summary`, `is:failed`, `in:trash`, the scope)/`MeetingSearchHit`; internally `MeetingSearchIndex`/`MeetingSearchIndexer`, `SearchText` | EchoCore |
 | `DesignSystem` | `EchoColor` (+ `EchoColor.Island`), `EchoFont` (the scale over the bundled Onest and DM Mono, and their launch-time registration), `EchoMark`/`EchoMarkGeometry`/`EchoMarkImage` (the mark: its outline in one CoreGraphics-only file the icon script compiles too, the view with its clear space and minimum size, and the image AppKit hosts take), `EchoClock` (how a running clock is written), `GlyphGrid`/`RecordGlyph`/`EmptyGlyph` (the glyph grid, the Record dot two surfaces draw, and the empty states' glyphs), `EchoSpacing`/`EchoRadius`/`EchoLayout`/`EchoControl`/`EchoMotion`, the window's primitives (`EchoButtonStyle`, `StatusBadge`, `PropertyRow`, `TabStrip`, `EmptyState`, `SelectableRowChrome`) and the island's (`IslandButtonStyle`, `IslandIconButtonStyle`, `ValueChip`, `LevelGauge`), `DesignGallery` | — |
-| `Workspace` | the main window: `WorkspaceWindow`, `WorkspaceModel`, the title bar (`TitleBar`: New recording, the clock and Stop), sidebar, document, the session being recorded (`LiveSessionDocument`, and `LiveSessionFooter`'s meter of real levels), the Summary tab between Stop and the notes (`SummaryFace`/`SummaryFaceView`), the models panel (`ModelsPanel`/`ModelRow`), the welcome screen (`WelcomeScreen`/`WelcomeSteps`/`WelcomeGate`), trash, settings screen, the ⌘K palette (`SearchPalette` over `SearchPaletteList` and `PaletteItemAction`, its keys read first by `PaletteKeyWatcher`), `MarkdownDocument`/`MarkdownView`, `MeetingGrouping`, `MeetingStatus`, `MeetingActions` (panels, pasteboard, Finder) | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem |
+| `Workspace` | the main window: `WorkspaceWindow`, `WorkspaceModel`, the title bar (`TitleBar`: New recording, the clock and Stop), sidebar, document, the session being recorded (`LiveSessionDocument`, and `LiveSessionFooter`'s meter of real levels), the Summary tab between Stop and the notes (`SummaryFace`/`SummaryFaceView`), the models panel (`ModelsPanel`/`ModelRow`), the welcome screen (`WelcomeScreen`/`WelcomeSteps`/`WelcomeGate`), trash, settings screen, the ⌘K palette (`SearchPalette` over `SearchPaletteList` and `PaletteItemAction`, its keys read first by `PaletteKeyWatcher`), the keyboard shortcuts panel (`ShortcutsPanel` over `ShortcutsList`, on the palette's `PaletteChrome`), `MarkdownDocument`/`MarkdownView`, `MeetingGrouping`, `MeetingStatus`, `MeetingActions` (panels, pasteboard, Finder) | EchoCore, Meetings, Recording, ModelDelivery, Updates, CallDetection, DesignSystem |
 | `Audio` | `MicrophoneCapture`/`SystemAudioCapture` (`Sendable` classes, callbacks at init), `AudioConstants`/`AudioLevelMeter`/`AudioDownmixer`/`BufferResampler`, `CaptureRateGuard`, `CaptureGapTracker`, `CaptureScope`/`ProcessSelector`/`ScopedProcessResolution`, `AppBundleIdentity`, `RetainedAudioWriter` (actor, file naming injected), `AECStage`/`PassthroughAECStage`/`WebRTCAECStage`/`SwitchingAECStage`, `OutputRouteClass`/`EchoHandlingMode`/`EchoModeMachine`/`EchoDegradationNotice`, `EchoBleedProbe`, `InputDeviceMonitor`/`InputDeviceLifecycleMachine`/`InputDeviceNotice`, `OutputRouteMonitor`/`OutputRouteClassifier`, `InputHealthClassifier`/`InputHealthTracker`/`InputHealthNotice`/`FanOutGateDiagnosticsSink`, `SystemAudioAccessProbe`/`SystemAudioAccess` (System Audio Recording, read by a tone of Echo's own), `MicrophoneAuthorization`, `GateTerm`/`GateVerdict`/`GateDecisionRecord`/`GateDiagnosticsSink`, `LiveInputMonitor`/`AudioStats`, `FixtureRecorder` (DEBUG); vendored WebRTC APM | EchoCore |
 | `ModelDelivery` | `SnapshotDownloader`/`SnapshotSpec`, `ResumableFileDownload`, `DownloadProgress` (the one clamp), `DownloadRetry`, `SnapshotDownloadTally`/`SnapshotDownloadBudget`, `SnapshotManifest`, `DownloadPauseStore`, `RetiredModelCleanup`, `DiskSpace` | EchoCore, swift-transformers (`Hub`) |
 | `Transcription` | `ParakeetModel` (identity, readiness, download), `TranscriptionPass` (the post-stop batch pass, segment shaping, `spanLevels`), `EnergyEnvelope`, `PassProgress`, `PassEvent`, `TranscriptionError`, `EchoDedupPolicy` | EchoCore, ModelDelivery, FluidAudio |

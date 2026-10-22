@@ -4,7 +4,7 @@
 //
 //  The welcome screen: when it shows at launch, what each of its three steps
 //  says and offers, when the user can go on and why not yet — the product
-//  owner's answers of 2026-10-19 for everything `FirstRun.dc.html` does not
+//  owner's answers of 2026-10-19 for everything the design does not
 //  draw — and the screen itself, rendered for the eye in both appearances.
 //
 

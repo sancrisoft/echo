@@ -10,7 +10,10 @@
 //  island is switched on or off: switched off, it is how the island's actions
 //  are reached at all, and switched on, it is still the keyboard's and
 //  VoiceOver's way to every one of them (#119, DEC-1, product owner
-//  2026-10-02). The bottom part never changes.
+//  2026-10-02). The bottom part never changes, but for Check for Updates
+//  under the version, which names the update once a check has found one: an
+//  Echo that runs for weeks needs somewhere to say so between launches
+//  (product owner, 2026-10-22).
 //
 //  An `NSMenu` and not SwiftUI's, because the item it hangs from is an
 //  `NSStatusItem`: `MenuBarExtra` opens its menu on either mouse button and
@@ -23,20 +26,33 @@ import Island
 
 final class MenuBarMenu: NSObject {
 
-    /// The two things the bottom of the menu asks of the rest of the app.
+    /// What the bottom of the menu asks of the rest of the app.
     struct Requests {
         let openEcho: () -> Void
         let openSettings: () -> Void
+        /// Check for Updates: a check that answers whatever it finds.
+        let checkForUpdates: () -> Void
+        /// Update to Echo X.Y.Z: the update the last check found.
+        let update: () -> Void
     }
 
     private let island: (Date) -> [IslandMenuEntry]
+    private let availableUpdate: () -> String?
     private let requests: Requests
 
-    /// - Parameter island: the island's part of the menu at an instant. Asked
-    ///   each time the menu is built or refreshed and never held, so what the
-    ///   menu offers is what the island offers at that moment.
-    init(island: @escaping (Date) -> [IslandMenuEntry], requests: Requests) {
+    /// - Parameters:
+    ///   - island: the island's part of the menu at an instant. Asked each
+    ///     time the menu is built or refreshed and never held, so what the
+    ///     menu offers is what the island offers at that moment.
+    ///   - availableUpdate: the version the last check found newer than this
+    ///     one, `nil` while there is none. Asked each time the menu is built.
+    init(
+        island: @escaping (Date) -> [IslandMenuEntry],
+        availableUpdate: @escaping () -> String? = { nil },
+        requests: Requests
+    ) {
         self.island = island
+        self.availableUpdate = availableUpdate
         self.requests = requests
     }
 
@@ -52,6 +68,11 @@ final class MenuBarMenu: NSObject {
         menu.addItem(.separator())
         // No action, so `autoenablesItems` draws it as the label it is.
         menu.addItem(NSMenuItem(title: AppIdentity.version.display, action: nil, keyEquivalent: ""))
+        if let version = availableUpdate() {
+            menu.addItem(button(Self.updateTitle(version), #selector(update)))
+        } else {
+            menu.addItem(button("Check for Updates", #selector(checkForUpdates)))
+        }
         menu.addItem(.separator())
         let quit = button("Quit Echo", #selector(quit))
         quit.keyEquivalent = "q"
@@ -119,8 +140,14 @@ final class MenuBarMenu: NSObject {
         return item
     }
 
+    static func updateTitle(_ version: String) -> String {
+        "Update to Echo \(version)"
+    }
+
     @objc private func openEcho() { requests.openEcho() }
     @objc private func openSettings() { requests.openSettings() }
+    @objc private func checkForUpdates() { requests.checkForUpdates() }
+    @objc private func update() { requests.update() }
     @objc private func quit() { NSApp.terminate(nil) }
 }
 

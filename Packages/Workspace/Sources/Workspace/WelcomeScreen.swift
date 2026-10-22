@@ -2,7 +2,7 @@
 //  WelcomeScreen.swift
 //  Workspace
 //
-//  The welcome screen of `FirstRun.dc.html`, in the main window in place of
+//  The design's welcome screen, in the main window in place of
 //  the workspace: the mark, what Echo does, the three things to set up once
 //  — the microphone, System Audio Recording and the two models — each with
 //  its reason beside it, and the way on.

@@ -28,12 +28,13 @@ struct SummaryFaceTests {
         modelLoading: Bool = false,
         draft: String? = nil,
         failure: String? = nil,
-        transcriptReadable: Bool = true
+        transcriptReadable: Bool = true,
+        summaryModelOnDisk: Bool = false
     ) -> SummaryFace {
         SummaryFace.resolve(
             meetingID: meeting, hasLoadedSummary: hasLoadedSummary, metaHasSummary: metaHasSummary, phase: phase,
             queued: queued, aheadTitle: aheadTitle, modelLoading: modelLoading, draft: draft, failure: failure,
-            transcriptReadable: transcriptReadable)
+            transcriptReadable: transcriptReadable, summaryModelOnDisk: summaryModelOnDisk)
     }
 
     @Test("written notes win over everything")
@@ -87,6 +88,23 @@ struct SummaryFaceTests {
     func notYet() {
         #expect(face() == .notYet(transcriptReadable: true))
         #expect(face(transcriptReadable: false) == .notYet(transcriptReadable: false))
+    }
+
+    @Test("with the transcript in and the model on disk, the way out is Generate summary")
+    func canGenerate() {
+        #expect(face(summaryModelOnDisk: true) == .canGenerate)
+        // Nothing to ground notes in yet.
+        #expect(face(transcriptReadable: false, summaryModelOnDisk: true) == .notYet(transcriptReadable: false))
+        // Another meeting's summary running does not hold this one's request back.
+        #expect(face(phase: .summarizing(meetingID: other), summaryModelOnDisk: true) == .canGenerate)
+    }
+
+    @Test("the work under way, a failure or written notes always come before the button")
+    func workBeforeTheButton() {
+        #expect(face(failure: "Out of memory", summaryModelOnDisk: true) == .failed(reason: "Out of memory"))
+        #expect(face(metaHasSummary: true, summaryModelOnDisk: true) == .settling(markdown: nil))
+        #expect(face(phase: .summarizing(meetingID: meeting), summaryModelOnDisk: true) == .generating)
+        #expect(face(queued: [meeting], summaryModelOnDisk: true) == .waitingToFinalize(behind: nil))
     }
 
     @Test("the Transcript tab wears the pass's faces, and nothing else")

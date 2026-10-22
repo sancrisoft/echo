@@ -11,7 +11,7 @@
 //
 //  The delegate is also where a reopen arrives — asking for an app that is
 //  already running — which for an agent app is the only place the window can
-//  be put back from.
+//  be put back from; and where a launch says who asked for it (`LaunchOrigin`).
 //
 
 import AppKit
@@ -28,10 +28,20 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
     /// `App` — and with it runs `AppComposition.start()` — before it creates
     /// `NSApplication`, so `NSApp` is nil there and a status item cannot be
     /// made yet. The composition root leaves the work here and the delegate
-    /// runs it the moment the app is up.
-    private static var launchWork: (() -> Void)?
+    /// runs it the moment the app is up, with who asked for the launch.
+    private static var launchWork: ((LaunchOrigin) -> Void)?
+
+    /// Run each time the main window comes up on an app that had none.
+    private static var mainWindowOpened: (() -> Void)?
+
+    /// Whether the main window was up when the policy last settled — the
+    /// edge `mainWindowOpened` fires on.
+    private static var mainWindowIsUp = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // First: the launch's open-application event is the current one only
+        // for the length of this call.
+        let origin = LaunchOrigin.of(NSAppleEventManager.shared().currentAppleEvent)
         let center = NotificationCenter.default
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { _ in
@@ -42,7 +52,7 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         Self.sync()
-        Self.launchWork?()
+        Self.launchWork?(origin)
     }
 
     /// The menu bar item is the app, not the window: closing the window must
@@ -56,9 +66,8 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
     /// this a reopen brings the app to the front with nothing to look at,
     /// which is worse than nothing happening.
     ///
-    /// This does not reverse "the window opens on demand, never at launch on
-    /// its own": a reopen is not a launch, it is the user asking for the app
-    /// by name.
+    /// It is the running app's half of what a launch the user asked for does
+    /// (`LaunchOrigin.user`): the same gesture, aimed at an Echo already up.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         // `hasVisibleWindows` is AppKit's answer about every window the app
         // owns; the question here is only ever about the main one, minimized
@@ -83,8 +92,16 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Runs `work` once the app has finished launching — see `launchWork`.
-    static func whenLaunched(run work: @escaping () -> Void) {
+    static func whenLaunched(run work: @escaping (LaunchOrigin) -> Void) {
         launchWork = work
+    }
+
+    /// Runs `work` each time the main window comes up on an app that had
+    /// none, however it was opened. Read off the window itself rather than
+    /// the activation policy: `WindowOpener` promotes the app before the
+    /// window exists, so the policy's change would be missed.
+    static func whenMainWindowOpens(run work: @escaping () -> Void) {
+        mainWindowOpened = work
     }
 
     /// The main window, while the app still has one. Minimized counts, and has
@@ -102,6 +119,13 @@ final class EchoAppDelegate: NSObject, NSApplicationDelegate {
     /// Promotes to `.regular` iff the app has a main window; demotes otherwise.
     private static func sync() {
         let mainWindow = Self.mainWindow
+        let opened = mainWindow != nil && !mainWindowIsUp
+        mainWindowIsUp = mainWindow != nil
+        if opened {
+            // A tick later, so the window is up before anything is put in
+            // front of it.
+            DispatchQueue.main.async { Self.mainWindowOpened?() }
+        }
         let wanted: NSApplication.ActivationPolicy = mainWindow == nil ? .accessory : .regular
         guard NSApp.activationPolicy() != wanted else { return }
         NSApp.setActivationPolicy(wanted)

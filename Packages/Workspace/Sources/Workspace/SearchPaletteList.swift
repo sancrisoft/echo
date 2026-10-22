@@ -14,17 +14,20 @@
 import Foundation
 import Meetings
 
-/// One of the palette's actions, as `Search.dc.html` lists them.
+/// One of the palette's actions: the design's three, then the keyboard
+/// shortcuts panel (product owner, 2026-10-22).
 enum PaletteAction: Hashable, CaseIterable, Sendable {
     case startRecording
     case openSettings
     case openTrash
+    case showShortcuts
 
     var title: String {
         switch self {
         case .startRecording: return "Start recording"
         case .openSettings: return "Open settings"
         case .openTrash: return "Open Trash"
+        case .showShortcuts: return "Keyboard shortcuts"
         }
     }
 
@@ -35,6 +38,7 @@ enum PaletteAction: Hashable, CaseIterable, Sendable {
         case .startRecording: return "⌘R"
         case .openSettings: return "⌘,"
         case .openTrash: return nil
+        case .showShortcuts: return ShortcutsList.toggleKeys
         }
     }
 

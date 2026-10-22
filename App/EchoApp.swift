@@ -7,6 +7,7 @@
 //  `AppComposition.start()`, once, from here.
 //
 
+import AppKit
 import DesignSystem
 import EchoCore
 import Recording
@@ -39,18 +40,23 @@ struct EchoApp: App {
         // tell a left click from a right one and the two mean different things.
         //
         // The main window opens on demand — from the menu bar, ⌘, a reopen,
-        // or a debug flag — and at launch only on the first launch this Mac
-        // ever gives Echo, which is the one that would otherwise leave a new
-        // user with nothing on screen to find.
+        // or a debug flag — and at launch when the user asked for the launch,
+        // never when loginwindow did (`LaunchOrigin`). The first launch this
+        // Mac ever gives Echo presents it here, as the scene is built, which
+        // is the one that would otherwise leave a new user with nothing on
+        // screen to find.
         Window("Echo", id: EchoWindow.main) {
-            WorkspaceWindow(dataRoot: composition.dataRoot, startRecording: composition.startRecording)
-                .environment(composition.library)
-                .environment(composition.settings)
-                .environment(composition.workspace)
-                .environment(composition.session)
-                .environment(composition.updates)
-                .preferredColorScheme(colorSchemeOverride)
-                .snapshotIfRequested(composition)
+            WorkspaceWindow(
+                dataRoot: composition.dataRoot, globalShortcut: GlobalShortcut.display,
+                startRecording: composition.startRecording
+            )
+            .environment(composition.library)
+            .environment(composition.settings)
+            .environment(composition.workspace)
+            .environment(composition.session)
+            .environment(composition.updates)
+            .preferredColorScheme(colorSchemeOverride)
+            .snapshotIfRequested(composition)
         }
         .defaultLaunchBehavior(composition.opensWindowAtLaunch ? .presented : .suppressed)
         // No state restoration: the window opens on demand, and restoring it
@@ -69,14 +75,30 @@ struct EchoApp: App {
         // was the worse of two hosts for the same screen.
         .commands {
             // Where every Mac app puts it: under the app menu, beside
-            // Settings. Not the menu bar item — the design draws that menu
-            // with four items and this is not one of them.
+            // Settings. The menu bar item's menu has it too, under the
+            // version, where it names an update once one is found (product
+            // owner, 2026-10-22).
+            // SwiftUI gives a lone `Window` scene no File menu, and with it no
+            // Close: ⌘W had nothing to run (read from the app's own menu,
+            // 2026-10-22). Closing the window never quits Echo.
+            CommandGroup(replacing: .newItem) {
+                Button("Close") { NSApp.keyWindow?.performClose(nil) }
+                    .keyboardShortcut("w", modifiers: .command)
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates") { composition.checkForUpdates() }
             }
             CommandGroup(replacing: .appSettings) {
                 Button("Settings") { composition.openSettings() }
                     .keyboardShortcut(",", modifiers: .command)
+            }
+            // Where a Mac user looks for help, in place of the system's
+            // "Help isn't available" item: every shortcut, over the window
+            // (product owner, 2026-10-22). ⌘/ is bound here and nowhere
+            // else; the window only writes it.
+            CommandGroup(replacing: .help) {
+                Button("Keyboard Shortcuts") { composition.toggleShortcuts() }
+                    .keyboardShortcut("/", modifiers: .command)
             }
         }
     }

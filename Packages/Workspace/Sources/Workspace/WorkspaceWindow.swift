@@ -34,14 +34,19 @@ public struct WorkspaceWindow: View {
     @Environment(AppSettings.self) private var settings
 
     private let dataRoot: DataRoot
+    private let globalShortcut: String
     private let startRecording: () async -> Void
 
-    /// - Parameter startRecording: New recording. The composition root's, so
-    ///   the window starts the same gated recording, with the same capture, as
-    ///   every other surface (`TitleBar`). It returns once the start has
-    ///   landed, so the window knows whether there is a session to show.
-    public init(dataRoot: DataRoot, startRecording: @escaping () async -> Void) {
+    /// - Parameters:
+    ///   - globalShortcut: Record and Stop from anywhere, as the menus write
+    ///     it — the app target's, which the keyboard shortcuts panel lists.
+    ///   - startRecording: New recording. The composition root's, so the
+    ///     window starts the same gated recording, with the same capture, as
+    ///     every other surface (`TitleBar`). It returns once the start has
+    ///     landed, so the window knows whether there is a session to show.
+    public init(dataRoot: DataRoot, globalShortcut: String, startRecording: @escaping () async -> Void) {
         self.dataRoot = dataRoot
+        self.globalShortcut = globalShortcut
         self.startRecording = startRecording
     }
 
@@ -49,7 +54,7 @@ public struct WorkspaceWindow: View {
         Group {
             if workspace.showsWelcome {
                 // The welcome screen takes the whole window, title bar
-                // included, as `FirstRun.dc.html` draws it: no sidebar, no
+                // included, as the design draws it: no sidebar, no
                 // hairline, nothing in the toolbar.
                 WelcomeScreen(dataRoot: dataRoot) {
                     settings.noteLeftWelcome()
@@ -67,9 +72,19 @@ public struct WorkspaceWindow: View {
             }
         }
         .background { windowShortcuts }
-        // Going anywhere puts the palette away: a result opened, Settings
+        // Over everything the window shows, the welcome screen included:
+        // the keys are the same wherever the window is.
+        .overlay {
+            if workspace.isShortcutsPresented {
+                ShortcutsPanel(groups: ShortcutsList.groups(globalShortcut: globalShortcut))
+            }
+        }
+        // Going anywhere puts either panel away: a result opened, Settings
         // reached from the menu, a stop that brings the saved meeting in.
-        .onChange(of: workspace.section) { _, _ in workspace.dismissSearch() }
+        .onChange(of: workspace.section) { _, _ in
+            workspace.dismissSearch()
+            workspace.dismissShortcuts()
+        }
         // Capture ended: if the window was showing the session, it follows
         // the meeting the stop saved into the library.
         .onChange(of: session.phase) { _, phase in
@@ -154,10 +169,30 @@ public struct WorkspaceWindow: View {
             .disabled(
                 workspace.showsWelcome
                     || TitleBarState.resolve(phase: session.phase, readiness: session.readiness) != .newRecording)
+            // The meeting above or below, from anywhere in the window, in the
+            // sidebar's order — the list's own ↑ ↓ without its focus.
+            Button("") { moveMeeting(.up) }
+                .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+                .disabled(workspace.showsWelcome)
+            Button("") { moveMeeting(.down) }
+                .keyboardShortcut(.downArrow, modifiers: [.option, .command])
+                .disabled(workspace.showsWelcome)
+            // ⌘1 Summary, ⌘2 Transcript, while a document is shown. The
+            // palette reads its own ⌘1–⌘9 first while it is up.
+            ForEach(Array(WorkspaceModel.DocumentTab.allCases.enumerated()), id: \.element) { index, tab in
+                Button("") { workspace.documentTab = tab }
+                    .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                    .disabled(workspace.showsWelcome || !workspace.showsDocument)
+            }
         }
         .frame(width: 0, height: 0)
         .opacity(0)
         .accessibilityHidden(true)
+    }
+
+    private func moveMeeting(_ move: MeetingListSelection.Move) {
+        guard workspace.moveSelection(move, in: library.metas) else { return }
+        workspace.section = .meetings
     }
 
     private func settleSelection() {

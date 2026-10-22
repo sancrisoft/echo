@@ -163,7 +163,7 @@ public struct MarkdownView: View {
     private let showsCursor: Bool
 
     /// - Parameter showsCursor: the summary is still being written: its last
-    ///   words end in the accent's cursor, as `Processing.dc.html` draws the
+    ///   words end in the accent's cursor, as the design draws the
     ///   notes streaming in.
     public init(markdown: String, showsCursor: Bool = false) {
         self.markdown = markdown

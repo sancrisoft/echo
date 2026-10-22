@@ -2,7 +2,7 @@
 //  ModelRow.swift
 //  Workspace
 //
-//  One on-device model's row, as `Models.dc.html` draws it: what the model is,
+//  One on-device model's row, as the design draws it: what the model is,
 //  one honest sentence about what it is doing, its state on the right, and
 //  the one action that state offers. A value resolved from the session's two
 //  readings and nothing else, so every state can be checked without a window

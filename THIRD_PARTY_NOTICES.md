@@ -13,8 +13,9 @@ which also holds the exact versions. Licenses and copyright lines were copied
 from each package's own LICENSE file at the pinned revision; where a LICENSE
 leaves the Apache boilerplate copyright line unfilled, the line comes from the
 package's NOTICE file or its source headers, and says so. A test
-(`EchoTests/ThirdPartyNoticesTests.swift`) fails when a package appears in
-`Package.resolved` without an entry here.
+(`Packages/Updates/Tests/UpdatesTests/ThirdPartyNoticesTests.swift`) fails when
+a package appears in `Package.resolved` without an entry here, or keeps an
+entry after it has gone.
 
 - [Swift packages](#swift-packages)
 - [Vendored libraries](#vendored-libraries)
@@ -86,50 +87,6 @@ Apache License 2.0 · <https://github.com/huggingface/swift-jinja>
 Copyright 2022 Hugging Face SAS. Renders chat templates, pulled in by
 swift-transformers.
 
-### swift-nio
-
-Apache License 2.0 · <https://github.com/apple/swift-nio>
-
-Copyright 2017, 2018 The SwiftNIO Project (from the package's NOTICE.txt);
-source headers read "Copyright (c) 2014-2026 Apple Inc. and the SwiftNIO
-project authors". Pulled in by EventSource. It bundles:
-
-- **llhttp**, MIT License. Copyright Fedor Indutny, 2018.
-  <https://github.com/nodejs/llhttp>
-
-Its NOTICE.txt also carries these attributions, reproduced as the Apache
-License asks:
-
-> This product is heavily influenced by Netty (Apache License 2.0,
-> <https://netty.io>).
->
-> This product contains NodeJS's llhttp (MIT, <https://github.com/nodejs/llhttp>).
->
-> This product contains "cpp_magic.h" from Thomas Nixon & Jonathan Heathcote's
-> uSHET (MIT, <https://github.com/18sg/uSHET>).
->
-> This product contains "sha1.c" and "sha1.h" from FreeBSD (Copyright (C) 1995,
-> 1996, 1997, and 1998 WIDE Project) (BSD-3,
-> <https://github.com/freebsd/freebsd-src>).
->
-> This product contains a derivation of Fabian Fett's 'Base64.swift' (Apache
-> License 2.0, <https://github.com/fabianfett/swift-base64-kit>).
->
-> This product contains a derivation of "XCTest+AsyncAwait.swift" &
-> "StructuredConcurrencyHelpers" from AsyncHTTPClient (Apache License 2.0,
-> <https://github.com/swift-server/async-http-client>).
->
-> This product contains a derivation of "_TinyArray.swift" from
-> SwiftCertificates (Apache License 2.0,
-> <https://github.com/apple/swift-certificates>).
->
-> This product contains a derivation of the mocking infrastructure from Swift
-> System (Apache License 2.0, <https://github.com/apple/swift-system>).
->
-> This product contains a derivation of "TokenBucket.swift" from Swift Package
-> Manager (Apache License 2.0,
-> <https://github.com/swiftlang/swift-package-manager>).
-
 ### swift-crypto
 
 Apache License 2.0 · <https://github.com/apple/swift-crypto>
@@ -173,7 +130,7 @@ Apache License 2.0 with Runtime Library Exception ·
 <https://github.com/apple/swift-collections>
 
 Copyright (c) 2019-2026 Apple Inc. and the Swift project authors (source
-headers). Pulled in by swift-nio, swift-jinja and swift-transformers.
+headers). Pulled in by swift-jinja and swift-transformers.
 
 ### swift-numerics
 
@@ -182,22 +139,6 @@ Apache License 2.0 with Runtime Library Exception ·
 
 Copyright (c) 2017-2025 Apple Inc. and the Swift Numerics project authors
 (source headers). Pulled in by mlx-swift.
-
-### swift-atomics
-
-Apache License 2.0 with Runtime Library Exception ·
-<https://github.com/apple/swift-atomics>
-
-Copyright (c) 2020-2025 Apple Inc. and the Swift project authors (source
-headers). Pulled in by swift-nio.
-
-### swift-system
-
-Apache License 2.0 with Runtime Library Exception ·
-<https://github.com/apple/swift-system>
-
-Copyright (c) 2020-2026 Apple Inc. and the Swift System project authors
-(source headers). Pulled in by swift-nio.
 
 ### swift-argument-parser
 

@@ -2,7 +2,7 @@
 //  ModelsPanelTests.swift
 //  WorkspaceTests
 //
-//  The models panel says, per model, what `Models.dc.html` draws for each
+//  The models panel says, per model, what the design draws for each
 //  state — its sentence, its state on the right and the one action the state
 //  offers — and is gone once both models are ready. Each action reaches the
 //  verb its model's owner has, and the transcription model, which has no

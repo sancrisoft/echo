@@ -31,6 +31,15 @@ final class GlobalShortcut {
     static let keyEquivalent = "e"
     static let modifiers: NSEvent.ModifierFlags = [.control, .option]
 
+    /// The same in words a view can draw, the modifiers in the order menus
+    /// put them: what the keyboard shortcuts panel lists.
+    static var display: String {
+        let glyphs: [(NSEvent.ModifierFlags, String)] = [
+            (.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘"),
+        ]
+        return glyphs.filter { modifiers.contains($0.0) }.map(\.1).joined() + keyEquivalent.uppercased()
+    }
+
     /// The same, as Carbon names it: the physical key (so a keyboard layout
     /// that moves the letter moves nothing), and its modifier bits.
     private static let keyCode = UInt32(kVK_ANSI_E)

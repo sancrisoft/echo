@@ -50,7 +50,7 @@ struct WindowChromeTests {
         let library = MeetingLibrary(dataRoot: dataRoot)
         let settings = AppSettings(dataRoot: dataRoot)
         let hosting = NSHostingView(
-            rootView: WorkspaceWindow(dataRoot: dataRoot, startRecording: {})
+            rootView: WorkspaceWindow(dataRoot: dataRoot, globalShortcut: "⌃⌥E", startRecording: {})
                 .environment(library)
                 .environment(WorkspaceModel())
                 .environment(settings)

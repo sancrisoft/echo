@@ -2,7 +2,7 @@
 //  MeetingDocumentView.swift
 //  Workspace
 //
-//  One meeting as a document, as `Main.dc.html` draws it: the breadcrumb bar
+//  One meeting as a document, as the design draws it: the breadcrumb bar
 //  with Copy, Export and the "…" at its end, then a reading column — title,
 //  the facts under it as property rows, a rule, the two tabs (Summary first,
 //  because it is what the user opens a meeting for) and what the open tab
@@ -536,7 +536,8 @@ struct MeetingDocumentView: View {
             modelLoading: session.summaryReadiness == .loading,
             draft: live ?? heldDraft,
             failure: session.summaryFailures[meta.id],
-            transcriptReadable: status.isTranscriptReadable)
+            transcriptReadable: status.isTranscriptReadable,
+            summaryModelOnDisk: session.summaryReadiness == .ready || session.summaryReadiness == .loading)
     }
 
     /// The meeting this one waits behind for its pass, by name.

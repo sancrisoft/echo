@@ -422,8 +422,8 @@ public nonisolated enum EchoLayout {
     public static let emptyStateMessageWidth: CGFloat = 280
     public static let emptyStateActionGap: CGFloat = 8
     public static let emptyStateInset: CGFloat = 24
-    /// The final pass's bar on the Summary tab while a meeting is finalized
-    /// (`Processing.dc.html`).
+    /// The final pass's bar on the Summary tab while a meeting is finalized,
+    /// as the design draws it.
     public static let processingBarWidth: CGFloat = 232
     /// A list that takes the document's place, as Trash does: its header's
     /// height, insets and gap; the note under it; the list's inset and the
@@ -445,7 +445,7 @@ public nonisolated enum EchoLayout {
     public static let listFooterHeight: CGFloat = 44
     public static let listFooterGap: CGFloat = 16
     public static let keyHintGap: CGFloat = 6
-    /// The ⌘K palette (`Search.dc.html`): its width, and how far below the
+    /// The ⌘K palette: its width, and how far below the
     /// title bar it floats — the artboard's 122 from the window's top, less
     /// its 44-point title bar; the query's row, its inset and gap; the room
     /// around the lists; a group's label; a result's and an action's height,
@@ -513,7 +513,7 @@ public nonisolated enum EchoLayout {
     public static let modelCardInset = CGSize(width: 16, height: 14)
     public static let modelPanelGap: CGFloat = 12
 
-    // The welcome screen (`FirstRun.dc.html`): one column, centred.
+    // The welcome screen: one column, centred.
 
     public static let welcomeColumnWidth: CGFloat = 560
     /// Under the mark, under the title, and under the paragraph.

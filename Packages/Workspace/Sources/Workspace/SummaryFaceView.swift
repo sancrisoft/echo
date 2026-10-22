@@ -53,11 +53,16 @@ struct SummaryFaceView: View {
         case .notYet(let transcriptReadable):
             EmptyState(
                 glyph: .lines,
-                title: "No summary yet",
+                title: SummaryFace.notYetTitle,
                 message: transcriptReadable
                     ? "The transcript is in. Notes are written once the summary model is available."
                     : "Notes are written from the transcript, once there is one."
             )
+        case .canGenerate:
+            EmptyState(glyph: .lines, title: SummaryFace.notYetTitle, message: SummaryFace.canGenerateMessage) {
+                Button("Generate summary", action: generate)
+                    .buttonStyle(.echoControlProminent)
+            }
         }
     }
 }

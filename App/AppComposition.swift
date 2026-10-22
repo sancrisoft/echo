@@ -85,7 +85,8 @@ final class AppComposition {
     /// Whether the main window is on screen as soon as the scene is built.
     /// True for `ECHO_OPEN_WINDOW`, and for the one launch that finds this Mac
     /// has never run Echo before. Read by the scene, which SwiftUI builds only
-    /// after `start()` has had its say.
+    /// after `start()` has had its say. Any other launch the user asked for
+    /// opens the window later, once it can say so.
     private(set) var opensWindowAtLaunch: Bool
 
     private let errorLog: ErrorTraceLog
@@ -176,12 +177,17 @@ final class AppComposition {
         updatePrompt = UpdatePrompt(checker: updates, installer: updateInstaller, session: session)
 
         let settings = settings
+        let updates = updates
+        let updatePrompt = updatePrompt
         menuBarItem = MenuBarItem(
             contents: MenuBarMenu(
                 island: { now in islandMenu.entries(now: now) },
+                availableUpdate: { updates.availableRelease.map { "\($0.version)" } },
                 requests: MenuBarMenu.Requests(
                     openEcho: { windowOpener.openMainWindow() },
-                    openSettings: showSettings
+                    openSettings: showSettings,
+                    checkForUpdates: { Task { await updatePrompt.checkAndReport() } },
+                    update: { updatePrompt.updateNow() }
                 )
             ),
             windowOpener: windowOpener,
@@ -336,9 +342,21 @@ final class AppComposition {
         // moment there is an app to install it into — and claims the global
         // shortcut then too, whose presses arrive through the event loop that
         // app runs.
-        EchoAppDelegate.whenLaunched { [menuBarItem, globalShortcut] in
+        //
+        // That is also the first moment a launch says who asked for it, so it
+        // is where a launch the user asked for opens the window: Spotlight or
+        // Finder aimed at an Echo that is not running should land where the
+        // same gesture lands on one that is. A login launch stays as silent as
+        // every launch was before (#208): Echo can be a login item, and a
+        // window at every startup would sit in front of whatever the user
+        // logged in to do.
+        EchoAppDelegate.whenLaunched {
+            [menuBarItem, globalShortcut, windowOpener, presented = opensWindowAtLaunch] origin in
             menuBarItem.install()
             globalShortcut.register()
+            if origin == .user && !presented {
+                windowOpener.openMainWindow()
+            }
         }
 
         // A failed Update Now reopened the Echo that was there and left a
@@ -369,6 +387,15 @@ final class AppComposition {
                 isEnabled: { settings.checkForUpdatesAutomatically }
             )
         }
+
+        // The window opening is the other moment an offer is worth making: an
+        // Echo running as a login item finds its update days after the launch
+        // that would have offered it (product owner, 2026-10-22). Once per
+        // version, so the launch's own offer is not made twice.
+        EchoAppDelegate.whenMainWindowOpens { [updatePrompt, environment] in
+            guard environment.snapshotPath == nil else { return }
+            updatePrompt.offerIfAvailable()
+        }
     }
 
     /// The app menu's Check for Updates: a check the user asked for, which
@@ -380,5 +407,14 @@ final class AppComposition {
     /// Shows the settings section in the main window.
     func openSettings() {
         showSettings()
+    }
+
+    /// Help › Keyboard Shortcuts (⌘/): the panel over the main window, put
+    /// up or away. The window comes forward with it.
+    func toggleShortcuts() {
+        workspace.toggleShortcuts()
+        if workspace.isShortcutsPresented {
+            windowOpener.openMainWindow()
+        }
     }
 }

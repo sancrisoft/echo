@@ -144,16 +144,16 @@ nonisolated let palette: [Token] = [
     .init("controlEdgeInRow", EchoColor.controlEdgeInRow, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("levelOthers", EchoColor.levelOthers, light: 0x8A8D92, dark: 0x616469),
     .init("selection", EchoColor.selection, light: 0xE8EAED, dark: 0x1F2024),
-    // The models panel (`Models.dc.html`). Light values borrowed until #120.
+    // The models panel. Light values borrowed until #120.
     .init("card", EchoColor.card, light: 0xF7F8FA, dark: 0x101114),
     .init(
         "failureEdge", EchoColor.failureEdge, light: 0xD02B31, dark: 0x3A2426,
         lightOpacity: 0.28, darkOpacity: 1),
     .init("failureText", EchoColor.failureText, light: 0xD02B31, dark: 0xC77E7D),
-    // The welcome screen (`FirstRun.dc.html`). Light values borrowed until #120.
+    // The welcome screen. Light values borrowed until #120.
     .init("stepPending", EchoColor.stepPending, light: 0xC4C7CB, dark: 0x3A3D41),
     .init("stepRingTrack", EchoColor.stepRingTrack, light: 0xE8EAED, dark: 0x26282C),
-    // The ⌘K palette (`Search.dc.html`). Light values borrowed until #120.
+    // The ⌘K palette. Light values borrowed until #120.
     .init("paletteBackground", EchoColor.paletteBackground, light: 0xFFFFFF, dark: 0x17181C),
     .init("paletteBorder", EchoColor.paletteBorder, light: 0xE1E3E6, dark: 0x34373C),
     .init("paletteDivider", EchoColor.paletteDivider, light: 0xECEDF0, dark: 0x232529),
@@ -363,7 +363,7 @@ struct MetricTests {
         #expect(ordered == ordered.sorted().reversed())
     }
 
-    /// The models panel's card and what sits in it, as `Models.dc.html`
+    /// The models panel's card and what sits in it, as the design
     /// draws them; and the control button its rows and the welcome screen's
     /// share.
     @Test("the models panel's measures are the artboard's")
@@ -384,7 +384,7 @@ struct MetricTests {
         #expect(EchoControl.controlButtonHeight < EchoControl.primaryButtonHeight)
     }
 
-    /// The welcome screen's column and what is in it, as `FirstRun.dc.html`
+    /// The welcome screen's column and what is in it, as the design
     /// draws them.
     @Test("the welcome screen's measures are the artboard's")
     func welcomeMatchesTheArtboard() {
