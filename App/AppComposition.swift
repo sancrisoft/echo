@@ -424,12 +424,18 @@ final class AppComposition {
     /// then opens the same bundle through LaunchServices. That makes the new
     /// Echo responsible for itself in TCC's eyes and a launch the user asked
     /// for (`LaunchOrigin`), so its window opens.
+    ///
+    /// `open -n`, because LaunchServices outlives the process by a moment:
+    /// in the QA of 2026-10-22 the old Echo exited at .335 s and launchd
+    /// removed it at .382 s, and a plain `open` at .350 s found it still
+    /// listed, asked it to reopen and launched nothing. `-n` cannot make two
+    /// Echos here — the old one is already gone.
     func relaunch() {
         let waiter = Process()
         waiter.executableURL = URL(filePath: "/bin/sh")
         waiter.arguments = [
             "-c",
-            #"trap '' HUP; while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open "$2" --args "$3""#,
+            #"trap '' HUP; while /bin/kill -0 "$1" 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open -n "$2" --args "$3""#,
             "echo-relaunch", String(getpid()), Bundle.main.bundleURL.path, Self.welcomeArgument,
         ]
         do {
