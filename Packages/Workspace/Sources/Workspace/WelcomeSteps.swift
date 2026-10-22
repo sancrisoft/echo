@@ -2,7 +2,7 @@
 //  WelcomeSteps.swift
 //  Workspace
 //
-//  The welcome screen of `FirstRun.dc.html`, as values: the three steps and
+//  The design's welcome screen, as values: the three steps and
 //  where each one stands, what each row offers, whether the user can go on,
 //  and why not yet. Resolved from the session's four readings and nothing
 //  else, so every state is checkable without a window.

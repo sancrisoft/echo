@@ -210,7 +210,7 @@ public nonisolated enum EchoColor {
 
     // MARK: The ⌘K palette
 
-    /// The palette floats over a dimmed window (`Search.dc.html`): its own
+    /// The palette floats over a dimmed window, as the design draws it: its own
     /// surface and edge, the hairlines inside it, the fill under the result
     /// the keyboard is on, the strip of key hints at its foot, the label over
     /// each group, the dim over the window behind it, and its shadow. Light

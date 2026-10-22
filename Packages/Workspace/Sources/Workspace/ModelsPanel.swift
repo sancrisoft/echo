@@ -2,7 +2,7 @@
 //  ModelsPanel.swift
 //  Workspace
 //
-//  The models panel of `Models.dc.html`: one card per model while either is
+//  The design's models panel: one card per model while either is
 //  not ready, gone entirely once both are. It sits at the top of the document
 //  pane, at the pane's full width, with the cards exactly as drawn — the
 //  sidebar the artboard calls "the meetings list" is too narrow for a drawn

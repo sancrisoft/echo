@@ -3,7 +3,7 @@
 //  Workspace
 //
 //  What a meeting's Summary tab says between Stop and its notes: one face per
-//  step of the work, as `Processing.dc.html` draws them — the final pass and
+//  step of the work, as the design draws them — the final pass and
 //  its real percentage, waiting behind another meeting's pass, the summary
 //  model coming into memory, the generation, the notes streaming in, and a
 //  generation that failed. Each names the work Echo is doing rather than one

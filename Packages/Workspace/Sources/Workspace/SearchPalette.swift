@@ -2,7 +2,7 @@
 //  SearchPalette.swift
 //  Workspace
 //
-//  The ⌘K palette, as `Search.dc.html` draws it: a panel over the dimmed
+//  The ⌘K palette, as the design draws it: a panel over the dimmed
 //  window — the query and `esc`; the meetings found under a label that counts
 //  them, each with its title, a line under it and its day, `↵` on the one the
 //  keyboard is on; the actions with their shortcuts; and a strip of key hints

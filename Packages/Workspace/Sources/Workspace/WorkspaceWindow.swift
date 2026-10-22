@@ -49,7 +49,7 @@ public struct WorkspaceWindow: View {
         Group {
             if workspace.showsWelcome {
                 // The welcome screen takes the whole window, title bar
-                // included, as `FirstRun.dc.html` draws it: no sidebar, no
+                // included, as the design draws it: no sidebar, no
                 // hairline, nothing in the toolbar.
                 WelcomeScreen(dataRoot: dataRoot) {
                     settings.noteLeftWelcome()

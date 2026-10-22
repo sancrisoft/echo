@@ -611,10 +611,11 @@ Adopted in ADR-004.
 
 ## 11. Transition from the PoC
 
-The v2 branch does not carry the PoC sources. `main` keeps shipping and receiving
-hotfixes; `git fetch origin main && git show origin/main:Echo/<File>.swift` is how
-a port reads the original — the remote ref, so a stale local `main` cannot
-silently feed a port the wrong sources.
+v2 does not carry the PoC sources. The PoC's last release is the tag `v0.0.13`
+(`68632af`, the commit the discovery was written from), and
+`git show v0.0.13:Echo/<File>.swift` is how a port reads the original — a tag,
+which neither drifts in a local clone nor goes away when v2 replaces the PoC on
+`main`.
 
 Order of work after the foundation (each item creates its package and brings the
 PoC's tests for that module with it):
@@ -635,8 +636,10 @@ PoC's tests for that module with it):
 6. Workspace surfaces from the redesign (document, search, first run), then the
    close-out parity checklist.
 
-Until the corresponding package lands, `THIRD_PARTY_NOTICES.md` describes more
-than v2 bundles; it is updated at the merge, together with `NOTICE`.
+`THIRD_PARTY_NOTICES.md` names exactly what v2 bundles: the packages the PoC
+pulled in through swift-nio and v2 does not were dropped before the merge, and
+`ThirdPartyNoticesTests` (Updates) now fails in both directions — a pinned
+package with no entry, and an entry whose package is no longer pinned.
 
 ---
 

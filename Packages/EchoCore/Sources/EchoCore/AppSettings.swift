@@ -90,8 +90,8 @@ public final class AppSettings {
     public private(set) var privacyBannerDismissed: Bool
 
     /// Whether Echo offers to record when it detects a call. Off means off:
-    /// the mic-activity monitor is stopped, the island is hidden and every
-    /// pending timer is cancelled.
+    /// the mic-activity monitor is stopped and every pending timer is
+    /// cancelled. The island stays: hiding it is `showsIsland`'s (DEC-1).
     public private(set) var callDetectionEnabled: Bool
 
     /// Whether a successful transcription pass keeps the meeting's audio in its

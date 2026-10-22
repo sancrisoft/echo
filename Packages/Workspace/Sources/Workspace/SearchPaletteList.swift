@@ -14,7 +14,7 @@
 import Foundation
 import Meetings
 
-/// One of the palette's actions, as `Search.dc.html` lists them.
+/// One of the palette's actions, as the design lists them.
 enum PaletteAction: Hashable, CaseIterable, Sendable {
     case startRecording
     case openSettings

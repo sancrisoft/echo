@@ -13,13 +13,13 @@ whole pipeline: **microphone = You, system audio = Others**. Speaker attribution
 is the channel, never diarization. Everything stays on the Mac under one data
 folder, `~/Library/Application Support/Echo`, which v1 and v2 share unchanged.
 
-The v2 rebuild lives on this branch. The shipping PoC (v1) lives on `main`; read
-its code with `git fetch origin main && git show origin/main:Echo/<File>.swift`
-when porting, never copy it blindly. Always the remote ref, never the local
-`main`: `git show` resolves a ref offline, so a local `main` left a few commits
-behind hands you stale sources and says nothing — you find out when the port
-disagrees with production. `docs/architecture/v2-discovery.md` §7 lists the
-behaviors and measured constants a port must preserve, with their reasons.
+v2 is a rebuild of the PoC (v1), whose last release is the tag `v0.0.13`; read
+its code with `git show v0.0.13:Echo/<File>.swift` when porting, never copy it
+blindly. The tag, never a branch: once v2 is merged into `main` no branch
+carries the PoC's sources, and a branch ref can be stale in a local clone
+without saying so, while a tag cannot move. `docs/architecture/v2-discovery.md`
+§7 lists the behaviors and measured constants a port must preserve, with their
+reasons.
 
 ## Repository map
 
